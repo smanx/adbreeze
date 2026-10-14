@@ -426,7 +426,16 @@ function setupAudio(opusHead) {
 function pushAudio(audioData) {
   const n = audioData.numberOfFrames, ch = audioData.numberOfChannels;
   const planes = [];
-  if (audioData.format === 'f32-planar') {
+  if (audioData.copyTo) {
+    // 新版 Chrome 移除了 AudioData.data，统一用 copyTo 请求 f32-planar
+    // （浏览器自动完成交错→平面转换与格式归一）
+    for (let c = 0; c < ch; c++) {
+      const size = audioData.allocationSize({ planeIndex: c, format: 'f32-planar' });
+      const p = new Float32Array(size >> 2);
+      audioData.copyTo(p, { planeIndex: c, format: 'f32-planar' });
+      planes.push(p);
+    }
+  } else if (audioData.format === 'f32-planar') {
     const src = new Float32Array(audioData.data);
     for (let c = 0; c < ch; c++) {
       planes.push(src.slice(c * n, (c + 1) * n));
