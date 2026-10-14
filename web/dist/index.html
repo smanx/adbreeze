@@ -426,14 +426,30 @@ function setupAudio(opusHead) {
 function pushAudio(audioData) {
   const n = audioData.numberOfFrames, ch = audioData.numberOfChannels;
   const planes = [];
-  if (audioData.format !== 'f32-planar') {
+  if (audioData.format === 'f32-planar') {
+    const src = new Float32Array(audioData.data);
+    for (let c = 0; c < ch; c++) {
+      planes.push(src.slice(c * n, (c + 1) * n));
+    }
+  } else if (audioData.format === 'f32') {
+    // 交错排列 [L0,R0,L1,R1,...] → 去交错为 planar
+    const src = new Float32Array(audioData.data);
+    for (let c = 0; c < ch; c++) {
+      const p = new Float32Array(n);
+      for (let j = 0; j < n; j++) p[j] = src[j * ch + c];
+      planes.push(p);
+    }
+  } else if (audioData.format === 's16') {
+    const src = new Int16Array(audioData.data);
+    for (let c = 0; c < ch; c++) {
+      const p = new Float32Array(n);
+      for (let j = 0; j < n; j++) p[j] = src[j * ch + c] / 32768;
+      planes.push(p);
+    }
+  } else {
     if (!pushAudio.warned) { showMsg('音频格式不支持: ' + audioData.format); pushAudio.warned = true; }
     audioData.close();
     return;
-  }
-  const src = new Float32Array(audioData.data); // f32-planar
-  for (let c = 0; c < ch; c++) {
-    planes.push(src.slice(c * n, (c + 1) * n));
   }
   audioData.close();
   if (audioNode) audioNode.port.postMessage(planes, planes.map(p => p.buffer));
