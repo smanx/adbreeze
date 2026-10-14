@@ -368,42 +368,142 @@ function setupAudio(opusHead) {
     description: opusHead.slice(),
   });
 
-  // AudioWorklet：环形缓冲 + 稳定拉取，抗网络抖动
+  // AudioWorklet：移植 ya-webadb（Tango）pcm-player 的实现
+  // （https://github.com/yume-chan/ya-webadb libraries/pcm-player/worker/worker.ts）：
+  //   1. 预缓冲 0.1s 起播，消除开头断续
+  //   2. 积压 > 0.25s 时以 0.9×（WSOLA 加窗重叠）压缩播放，追到 0.15s 恢复正常
+  //   3. 积压 > 0.35s 直接丢弃最旧数据
+  // 三者配合把延迟稳定约束在 100~350ms，网络抖动不会永久抬升延迟。
   const workletCode = `
+    const INPUT_HOP_SIZE = 3000;
+    const SCALE = 0.9;
+    const OUTPUT_HOP_SIZE = (INPUT_HOP_SIZE * SCALE) | 0;
+    const WINDOW_SIZE = 6000;
+    const WINDOW_WEIGHT_TABLE = new Float32Array(WINDOW_SIZE);
+    for (let i = 0; i < WINDOW_SIZE / 2; i++) {
+      WINDOW_WEIGHT_TABLE[i] = Math.sin((i / WINDOW_SIZE) * Math.PI);
+      WINDOW_WEIGHT_TABLE[WINDOW_SIZE - i - 1] = WINDOW_WEIGHT_TABLE[i];
+    }
+
     class ADBreezePlayer extends AudioWorkletProcessor {
-      constructor() {
+      constructor(options) {
         super();
-        this.cap = 32768;
-        this.ring = [new Float32Array(this.cap), new Float32Array(this.cap)];
-        this.w = 0; this.r = 0; this.count = 0;
+        this.channelCount = options.outputChannelCount[0];
+        this.chunks = [];      // 各音频块的 planar 通道数组
+        this.chunkCounts = []; // 每块帧数
+        this.total = 0;        // 当前缓冲总帧数
+        this.starting = true;
+        this.speedUp = false;
+        this.readOffset = 0;
+        this.inputOffset = 0;
+        this.outputOffset = 0;
+        this.readBuf = new Float32Array(this.channelCount);
         this.port.onmessage = e => {
-          const planes = e.data;
+          while (this.total > 0.35 * 48000) { // 超限丢帧
+            this.total -= this.chunkCounts.shift();
+            this.chunks.shift();
+          }
+          const planes = e.data.map(b => new Float32Array(b));
+          this.chunks.push(planes);
           const n = planes[0].length;
-          for (let j = 0; j < n; j++) {
-            for (let c = 0; c < planes.length && c < this.ring.length; c++) {
-              this.ring[c][this.w] = planes[c][j];
-            }
-            this.w = (this.w + 1) % this.cap;
-            if (this.count < this.cap) this.count++;
+          this.chunkCounts.push(n);
+          this.total += n;
+          if (!this.speedUp && this.total > 0.25 * 48000) {
+            this.speedUp = true;
+            this.readOffset = 0;
+            this.inputOffset = 0;
+            this.outputOffset = 0;
           }
         };
       }
       process(inputs, outputs) {
         const out = outputs[0];
         const frames = out[0].length;
-        for (let j = 0; j < frames; j++) {
-          for (let c = 0; c < out.length && c < this.ring.length; c++) {
-            if (this.count > 0) { out[c][j] = this.ring[c][this.r]; this.r = (this.r + 1) % this.cap; }
-            else out[c][j] = 0;
-          }
-          if (this.count > 0) this.count--;
+        if (this.starting) {
+          if (this.total < 0.1 * 48000) return true; // 预缓冲
+          this.starting = false;
         }
+        if (this.speedUp && this.total < 0.15 * 48000) {
+          this.speedUp = false;
+          this.starting = true;
+        }
+        if (this.speedUp) this.renderSpeedUp(out, frames);
+        else this.renderPlain(out, frames);
         return true;
+      }
+      // 正常播放：按序拷贝
+      renderPlain(out, frames) {
+        let i = 0;
+        while (this.chunks.length > 0 && i < frames) {
+          const planes = this.chunks[0];
+          const avail = planes[0].length;
+          let src = 0;
+          while (src < avail && i < frames) {
+            for (let c = 0; c < out.length && c < planes.length; c++) out[c][i] = planes[c][src];
+            src++; i++;
+          }
+          if (src < avail) { // 输出满，切片保留剩余
+            for (let c = 0; c < planes.length; c++) this.chunks[0][c] = planes[c].subarray(src);
+            this.chunkCounts[0] -= src;
+            this.total -= src;
+            return;
+          }
+          this.total -= src;
+          this.chunks.shift();
+          this.chunkCounts.shift();
+        }
+      }
+      // 读取跨块的第 offset 帧（相对缓冲窗口起点）
+      readSample(offset) {
+        for (let i = 0; i < this.chunks.length; i++) {
+          const len = this.chunkCounts[i];
+          if (offset < len) {
+            const planes = this.chunks[i];
+            for (let c = 0; c < this.readBuf.length && c < planes.length; c++) this.readBuf[c] = planes[c][offset];
+            return;
+          }
+          offset -= len;
+        }
+        this.readBuf.fill(0);
+      }
+      // 追帧模式：WSOLA 加窗重叠，输入消费速度 1/0.9
+      renderSpeedUp(out, frames) {
+        for (let i = 0; i < frames; i++) {
+          let weightSum = 0;
+          const firstWindow = Math.max(0, Math.floor((this.outputOffset - WINDOW_SIZE) / OUTPUT_HOP_SIZE) + 1);
+          let inWindowIndex = this.outputOffset - firstWindow * OUTPUT_HOP_SIZE;
+          let inputIndex = firstWindow * INPUT_HOP_SIZE + inWindowIndex;
+          while (inputIndex > 0 && inWindowIndex >= 0) {
+            this.readSample(inputIndex - this.readOffset);
+            const weight = WINDOW_WEIGHT_TABLE[inWindowIndex];
+            for (let c = 0; c < out.length && c < this.readBuf.length; c++) out[c][i] += this.readBuf[c] * weight;
+            weightSum += weight;
+            inputIndex += INPUT_HOP_SIZE - OUTPUT_HOP_SIZE;
+            inWindowIndex -= OUTPUT_HOP_SIZE;
+          }
+          if (weightSum > 0) {
+            for (let c = 0; c < out.length && c < this.readBuf.length; c++) out[c][i] /= weightSum;
+          }
+          this.outputOffset += 1;
+          if (firstWindow > 0) {
+            this.outputOffset -= OUTPUT_HOP_SIZE;
+            this.readOffset -= INPUT_HOP_SIZE;
+            this.inputOffset += (1 - SCALE) * INPUT_HOP_SIZE;
+          }
+        }
+        this.inputOffset += frames;
+        if (this.chunks.length > 0 && this.inputOffset >= this.chunkCounts[0]) {
+          this.total -= this.chunkCounts[0];
+          this.readOffset += this.chunkCounts[0];
+          this.inputOffset -= this.chunkCounts[0];
+          this.chunks.shift();
+          this.chunkCounts.shift();
+        }
       }
     }
     registerProcessor('adbreeze-player', ADBreezePlayer);
   `;
-  audioCtx = new AudioContext({ sampleRate });
+  audioCtx = new AudioContext({ latencyHint: 'interactive', sampleRate });
   // 自动播放策略可能挂起 Context：挂在 canvas 点击上恢复
   const resumeAudio = () => {
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
@@ -417,7 +517,11 @@ function setupAudio(opusHead) {
   audioCtx.resume().catch(() => {});
   const blob = new Blob([workletCode], { type: 'application/javascript' });
   audioCtx.audioWorklet.addModule(URL.createObjectURL(blob)).then(() => {
-    audioNode = new AudioWorkletNode(audioCtx, 'adbreeze-player', { outputChannelCount: [channels] });
+    audioNode = new AudioWorkletNode(audioCtx, 'adbreeze-player', {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [channels],
+    });
     audioGain = audioCtx.createGain();
     audioNode.connect(audioGain).connect(audioCtx.destination);
   }).catch(e => showMsg('音频播放初始化失败: ' + e.message));
@@ -461,7 +565,9 @@ function pushAudio(audioData) {
     return;
   }
   audioData.close();
-  if (audioNode) audioNode.port.postMessage(planes, planes.map(p => p.buffer));
+  // 传输通道 buffer（worklet 端 new Float32Array(b) 重建 planar 视图）
+  const buffers = planes.map(p => p.buffer);
+  if (audioNode) audioNode.port.postMessage(buffers, buffers);
 }
 
 function closeAudio() {
