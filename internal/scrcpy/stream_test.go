@@ -265,6 +265,44 @@ func TestAudioStream(t *testing.T) {
 	}
 }
 
+func TestHubSlowSubscriberKeepsReceiving(t *testing.T) {
+	h := NewHub()
+	sub, cancel, _ := h.Add()
+	defer cancel()
+
+	// 灌满订阅通道（128）后继续广播：应丢最旧保最新，而不是剔除订阅者
+	for i := 0; i < 200; i++ {
+		h.Broadcast(Packet{PTS: uint64(i), Data: []byte{byte(i)}})
+	}
+
+	select {
+	case _, ok := <-sub.Chan():
+		if !ok {
+			t.Fatal("订阅通道被关闭（订阅者被剔除），应仅丢帧保活")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("通道应有积压数据")
+	}
+
+	// 排空通道后，最新一帧（PTS=199）必须可达
+	var last uint64 = ^uint64(0)
+	drained := false
+	for !drained {
+		select {
+		case p, ok := <-sub.Chan():
+			if !ok {
+				t.Fatal("订阅通道被关闭")
+			}
+			last = p.PTS
+		case <-time.After(200 * time.Millisecond):
+			drained = true
+		}
+	}
+	if last != 199 {
+		t.Errorf("最新帧 PTS = %d, want 199", last)
+	}
+}
+
 func TestHubLateSubscriberGetsCachedConfig(t *testing.T) {
 	h := NewHub()
 	h.Broadcast(Packet{Config: true, Data: []byte("spspps")})

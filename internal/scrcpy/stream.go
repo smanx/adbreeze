@@ -487,6 +487,9 @@ func (s *Stream) launchServer(deps streamDeps, scid uint32, serverVersion string
 // Info 返回流元信息。
 func (s *Stream) Info() StreamInfo { return s.info }
 
+// Viewers 返回当前视频观看者数量（每个观看页占一个订阅）。
+func (s *Stream) Viewers() int { return s.hub.Count() }
+
 // Subscribe 注册一个视频订阅者，返回订阅者、取消函数与缓存的配置包。
 func (s *Stream) Subscribe() (*Subscriber, func(), []byte) {
 	return s.hub.Add()

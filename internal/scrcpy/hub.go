@@ -25,6 +25,13 @@ type Subscriber struct {
 // Chan 返回订阅通道，通道关闭表示流结束。
 func (s *Subscriber) Chan() <-chan Packet { return s.ch }
 
+// Count 返回当前订阅者数量（用于多观众判断）。
+func (h *Hub) Count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.subs)
+}
+
 // Hub 把一路设备流扇出给多个订阅者，并缓存最近一个配置包
 // （新订阅者先补发配置包，再等第一个关键帧开始解码）。
 type Hub struct {
@@ -64,7 +71,9 @@ func (h *Hub) remove(s *Subscriber) {
 	}
 }
 
-// Broadcast 广播一帧；消费过慢的订阅者直接剔除（其前端会重连并对齐关键帧）。
+// Broadcast 广播一帧。消费过慢的订阅者不再整体剔除（后台标签页被浏览器节流时
+// 会被误踢，表现为「另一路投屏莫名断开」），而是丢最旧保最新：视频 P 帧丢失
+// 最多造成短暂花屏，i-frame-interval=2 下 2 秒内由下一个关键帧自愈。
 func (h *Hub) Broadcast(p Packet) {
 	h.mu.Lock()
 	if h.closed {
@@ -84,7 +93,17 @@ func (h *Hub) Broadcast(p Packet) {
 		select {
 		case s.ch <- p:
 		default:
-			h.remove(s)
+			// 通道已满：丢弃最旧的一帧腾位，保住最新帧
+			select {
+			case <-s.ch:
+			default:
+			}
+			select {
+			case s.ch <- p:
+			default:
+				// 通道被并发关闭等极端情况：仅此订阅者剔除
+				h.remove(s)
+			}
 		}
 	}
 }

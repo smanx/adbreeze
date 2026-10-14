@@ -327,17 +327,34 @@ let webrtcMode = false, webrtcPC = null;
 let videoW = 720, videoH = 1280;
 
 window.startMirror = async function (serial) {
-  if (!('VideoDecoder' in window)) { alert('当前浏览器不支持 WebCodecs，请使用 Chrome / Edge 94+'); return; }
-  mirrorSerial = serial;
   const s = loadMirrorSettings(serial);
+  // 能力探测：WebCodecs 不可用时自动降级 WebRTC，两者都不可用才报错
+  const hasCodecs = 'VideoDecoder' in window && 'EncodedVideoChunk' in window;
+  const hasRTC = 'RTCPeerConnection' in window;
+  if (!hasCodecs && !hasRTC) {
+    alert('当前浏览器不支持 WebCodecs 与 WebRTC，无法投屏。请使用 Chrome / Edge 94+ 或较新的 Safari');
+    return;
+  }
+  // 一个标签页只投一台：切换设备前先干净结束当前会话（不删服务端流，仅断开
+  // 本页观看通道），避免全局状态被新设备覆盖后旧会话悬挂、互相干扰
+  if (mirrorSerial) stopMirror(false);
+  mirrorSerial = serial;
   deviceAudio = s.audioMode === 'device';
   audioDup = s.audioMode === 'both';
   videoW = 720; videoH = 1280;
-  webrtcMode = (s.mode || 'codecs') === 'webrtc';
+  let mode = s.mode || 'codecs';
+  if (mode === 'codecs' && !hasCodecs) {
+    mode = 'webrtc';
+    showMsg('当前浏览器不支持 WebCodecs，已自动改用 WebRTC 投屏');
+  } else if (mode === 'webrtc' && !hasRTC) {
+    mode = 'codecs';
+    showMsg('当前浏览器不支持 WebRTC，已自动改用 WebCodecs 投屏');
+  }
+  webrtcMode = mode === 'webrtc';
   $('mirror').hidden = false;
   $('mTitle').textContent = serial + ' — 连接中…';
   $('mStats').textContent = '';
-  showMsg('');
+  if (mode === (s.mode || 'codecs')) showMsg('');
   $('mCanvas').focus();
   try {
     await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`, loadMirrorSettings(serial));
@@ -369,6 +386,11 @@ function savedQualityJSON() {
 }
 function fillMirrorSettingsUI() {
   const s = loadMirrorSettings();
+  // 浏览器不支持 WebCodecs 时禁用该选项（启动时会自动降级 WebRTC）
+  const hasCodecs = 'VideoDecoder' in window && 'EncodedVideoChunk' in window;
+  const codecsOpt = $('sMode').querySelector('option[value="codecs"]');
+  codecsOpt.disabled = !hasCodecs;
+  codecsOpt.textContent = hasCodecs ? 'WebCodecs（WS 直推）' : 'WebCodecs（浏览器不支持）';
   $('sMode').value = s.mode || 'codecs';
   $('sDevAudio').value = s.audioMode || 'both';
   $('sBitrate').value = s.bitrateMbps || 8;
@@ -749,7 +771,21 @@ function closeAudio() {
   audioNode = null; audioGain = null; audioPackets = 0; audioOn = false;
 }
 
-$('mStop').onclick = () => stopMirror(true);
+// 「停止」观众感知：还有其他页面/用户在看同一条流时，仅断开本页（不停止推流）；
+// 只剩自己时才真正停止设备端投屏
+$('mStop').onclick = async () => {
+  if (mirrorSerial) {
+    try {
+      const info = await api('GET', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`);
+      if ((info.viewers ?? 1) > 1) {
+        stopMirror(false);
+        alert('其他页面仍在观看该设备，已仅断开本页（设备端投屏流保持运行）');
+        return;
+      }
+    } catch (_) { /* 查询失败按原行为停止 */ }
+  }
+  stopMirror(true);
+};
 
 // 页面静音：只控制本页是否出声（WS 路径走 audioGain，WebRTC 路径走 mAudio.muted），
 // 不影响服务端是否推送音频流
@@ -895,10 +931,12 @@ function closeWebrtcViewer() {
 }
 
 // WebRTC 音频自动播放被浏览器策略拦截时，点击画面恢复
-$('mCanvas').addEventListener('click', () => {
+// （iOS 的 touchstart preventDefault 会吞掉合成 click，触摸路径里也会显式调用）
+function resumeAudioIfPaused() {
   const a = $('mAudio');
   if (webrtcMode && a.srcObject && a.paused) a.play().catch(() => {});
-});
+}
+$('mCanvas').addEventListener('click', resumeAudioIfPaused);
 
 function stopMirror(callApi) {
   if (mirrorWS) { mirrorWS.onclose = null; mirrorWS.close(); mirrorWS = null; }
@@ -1009,31 +1047,90 @@ function videoCoords(e) {
     y: Math.max(0, Math.min(videoH - 1, Math.round((e.clientY - rect.top) * videoH / rect.height))),
   };
 }
-canvas.addEventListener('pointerdown', e => {
-  canvas.setPointerCapture(e.pointerId);
-  const p = videoCoords(e);
-  wsSend({ type: 'touch', action: 'down', x: p.x, y: p.y, pid: e.pointerId });
-});
-canvas.addEventListener('pointermove', e => {
-  if (e.buttons || (e.pressure && e.pressure > 0)) {
-    const p = videoCoords(e);
-    wsSend({ type: 'touch', action: 'move', x: p.x, y: p.y, pid: e.pointerId });
+// 触控按下状态自维护，不依赖 e.buttons/e.pressure（iOS Safari 触摸的 pointermove
+// 会把它们上报为 0，且部分版本画布上 pointer 事件对触摸支持不稳定）。
+// iOS/iPadOS 一律走原生 touch 事件（Safari 最稳的路径），其余平台用 PointerEvent。
+const isAppleTouch = /iP(hone|ad|od)/i.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS 桌面 UA
+const activePointers = new Set();
+function sendTouch(action, x, y, pid) {
+  const p = videoCoords({ clientX: x, clientY: y });
+  const ok = mirrorWS && mirrorWS.readyState === 1;
+  if (window.__touchDebug) {
+    __touchDebug('SEND ' + action + ' xy=' + p.x + ',' + p.y + ' pid=' + pid
+      + ' videoWH=' + videoW + 'x' + videoH + ' wsReady=' + (ok ? 1 : 0));
   }
-});
-canvas.addEventListener('pointerup', e => {
-  const p = videoCoords(e);
-  wsSend({ type: 'touch', action: 'up', x: p.x, y: p.y, pid: e.pointerId });
-});
-canvas.addEventListener('pointercancel', e => {
-  const p = videoCoords(e);
-  wsSend({ type: 'touch', action: 'up', x: p.x, y: p.y, pid: e.pointerId });
-});
+  wsSend({ type: 'touch', action, x: p.x, y: p.y, pid });
+}
+if (window.PointerEvent && !isAppleTouch) {
+  canvas.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    activePointers.add(e.pointerId);
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    sendTouch('down', e.clientX, e.clientY, e.pointerId);
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!activePointers.has(e.pointerId)) return;
+    sendTouch('move', e.clientX, e.clientY, e.pointerId);
+  });
+  const pointerEnd = e => {
+    if (!activePointers.delete(e.pointerId)) return;
+    sendTouch('up', e.clientX, e.clientY, e.pointerId);
+  };
+  canvas.addEventListener('pointerup', pointerEnd);
+  canvas.addEventListener('pointercancel', pointerEnd);
+} else {
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    resumeAudioIfPaused(); // preventDefault 会吞掉合成 click，这里显式恢复音频
+    for (const t of e.changedTouches) {
+      activePointers.add(t.identifier);
+      sendTouch('down', t.clientX, t.clientY, t.identifier);
+    }
+  }, { passive: false });
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (activePointers.has(t.identifier)) sendTouch('move', t.clientX, t.clientY, t.identifier);
+    }
+  }, { passive: false });
+  const touchEnd = e => {
+    for (const t of e.changedTouches) {
+      if (activePointers.delete(t.identifier)) sendTouch('up', t.clientX, t.clientY, t.identifier);
+    }
+  };
+  canvas.addEventListener('touchend', touchEnd);
+  canvas.addEventListener('touchcancel', touchEnd);
+}
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
   const p = videoCoords(e);
   wsSend({ type: 'scroll', x: p.x, y: p.y, dx: Math.sign(e.deltaX), dy: Math.sign(e.deltaY) });
 }, { passive: false });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// TEMP 触摸诊断浮层：URL 带 ?touchdebug=1 启用，用于远程定位第三方 iOS 浏览器
+// 无法操控的问题（事件是否到达、走哪个分支、消息是否发出）。定位后移除。
+if (location.search.includes('touchdebug')) {
+  const dbg = document.createElement('pre');
+  dbg.style.cssText = 'position:fixed;left:4px;top:4px;z-index:99999;background:#000c;color:#0f0;'
+    + 'font-size:11px;line-height:1.3;padding:6px;pointer-events:none;max-width:96%;max-height:70%;'
+    + 'overflow:hidden;white-space:pre-wrap;word-break:break-all;margin:0;';
+  document.body.appendChild(dbg);
+  let dbgN = 0;
+  window.__touchDebug = m => {
+    dbg.textContent = (++dbgN) + ' ' + m + '\n' + dbg.textContent.slice(0, 1600);
+  };
+  __touchDebug('UA=' + navigator.userAgent);
+  __touchDebug('branch: appleTouch=' + isAppleTouch + ' PointerEvent=' + !!window.PointerEvent
+    + ' hasCodecs=' + ('VideoDecoder' in window) + ' hasRTC=' + ('RTCPeerConnection' in window)
+    + ' maxTouchPoints=' + navigator.maxTouchPoints);
+  ['touchstart', 'touchmove', 'touchend', 'pointerdown', 'pointermove', 'pointerup']
+    .forEach(t => document.addEventListener(t, e => __touchDebug('DOC ' + t
+      + ' target=' + (e.target.id || e.target.tagName)
+      + ' xy=' + Math.round(e.clientX) + ',' + Math.round(e.clientY)
+      + ' buttons=' + e.buttons), true));
+}
 
 // 浏览器按键 → Android keycode
 const KEYMAP = {

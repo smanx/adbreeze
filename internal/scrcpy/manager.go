@@ -158,6 +158,17 @@ func (m *Manager) Info(serial string) (StreamInfo, error) {
 	return s.Info(), nil
 }
 
+// Viewers 返回设备当前流的观看者数量（流不存在时返回 0）。
+func (m *Manager) Viewers(serial string) int {
+	m.mu.Lock()
+	s, ok := m.streams[serial]
+	m.mu.Unlock()
+	if !ok {
+		return 0
+	}
+	return s.Viewers()
+}
+
 // VideoSize 返回设备当前视频尺寸（触摸注入的 screenW/H 必须与之匹配）。
 func (m *Manager) VideoSize(serial string) (int, int, error) {
 	m.mu.Lock()

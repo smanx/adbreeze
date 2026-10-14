@@ -36,6 +36,7 @@ func New(token, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS 
 	authed.HandleFunc("DELETE /api/devices/{serial}", s.disconnectDevice)
 	authed.HandleFunc("POST /api/devices/{serial}/shell", s.shell)
 	authed.HandleFunc("POST /api/devices/{serial}/mirror", s.startMirror)
+	authed.HandleFunc("GET /api/devices/{serial}/mirror", s.mirrorInfo)
 	authed.HandleFunc("DELETE /api/devices/{serial}/mirror", s.stopMirror)
 	authed.HandleFunc("POST /api/devices/{serial}/webrtc", s.createWebRTC)
 	authed.HandleFunc("GET /api/mirrors", s.listMirrors)

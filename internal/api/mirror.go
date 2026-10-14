@@ -78,6 +78,13 @@ func (s *Server) stopMirror(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"message": "投屏已停止"})
 }
 
+// mirrorInfo 返回流的观看者数量（流不存在时 viewers=0）。
+// 前端「停止」按钮据此判断：还有其他观众时仅断开本页，不停止共享的推流。
+func (s *Server) mirrorInfo(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	writeJSON(w, http.StatusOK, map[string]int{"viewers": s.mirror.Viewers(serial)})
+}
+
 func (s *Server) listMirrors(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.mirror.Active())
 }
