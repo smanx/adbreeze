@@ -361,6 +361,15 @@ function currentMirrorSettings() {
 $('mSettingsBtn').onclick = () => { fillMirrorSettingsUI(); $('mSettings').hidden = !$('mSettings').hidden; };
 
 let mirrorRestarting = false;
+// 等待关键帧提示：中途加入的观看者要等设备编码器的下一个关键帧（GOP 最长 10 秒）
+let waitingKeyframe = false;
+function waitKeyframe() {
+  waitingKeyframe = true;
+  showMsg('正在等待画面关键帧…（受编码器 GOP 周期影响，最长约 10 秒）');
+}
+function clearKeyframeWait() {
+  if (waitingKeyframe) { waitingKeyframe = false; showMsg(''); }
+}
 // 关闭本页观看通道（WS/WebRTC 订阅），供重建或重启前调用
 function closeViewers() {
   if (mirrorWS) { mirrorWS.onclose = null; mirrorWS.close(); mirrorWS = null; }
@@ -390,7 +399,7 @@ async function restartStream(overrides = {}) {
     const params = { deviceAudio: !!s.deviceAudio, bitrateMbps: s.bitrateMbps, shortSize: s.shortSize, maxFps: s.maxFps, ...overrides };
     await api('POST', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`, params);
     deviceAudio = params.deviceAudio;
-    showMsg('');
+    waitKeyframe();
     await reopenViewer(mirrorSerial);
     return true;
   } catch (e) {
@@ -410,12 +419,11 @@ $('sApply').onclick = async () => {
   if (!qualityChanged) {
     // 仅切换方案：scrcpy 流共享，重建观看通道即可（秒级，无需重启设备端流）
     mirrorRestarting = true;
-    showMsg('正在切换投屏方案…');
+    waitKeyframe();
     try {
       closeViewers();
       webrtcMode = next.mode === 'webrtc';
       await reopenViewer(mirrorSerial);
-      showMsg('');
     } catch (e) {
       showMsg('切换投屏方案失败: ' + e.message);
     } finally {
@@ -448,9 +456,10 @@ function tryAudioConnect(serial, attempt) {
   ws.onclose = () => {
     if (audioWS !== ws) return;
     audioWS = null;
-    // 409 = 音频尚未就绪，2s 后重试
+    // 409 = 音频尚未就绪，300ms 后重试（切换模式时音频采集就绪有 1~2 秒延迟，
+    // 固定 2 秒重试会让声音迟到 1~2 秒）
     if (mirrorSerial === serial) {
-      audioRetryTimer = setTimeout(() => tryAudioConnect(serial, attempt + 1), 2000);
+      audioRetryTimer = setTimeout(() => tryAudioConnect(serial, attempt + 1), 300);
     }
   };
   ws.onmessage = ev => {
@@ -799,7 +808,8 @@ async function startWebrtcViewer(serial) {
           const st = await pc.getStats();
           let decoded = 0;
           st.forEach(s => { if (s.type === 'inbound-rtp' && s.kind === 'video') decoded = s.framesDecoded; });
-          if (lastDecoded < 0) { lastDecoded = decoded; continue; }
+          if (decoded > prev) clearKeyframeWait();
+          if (lastDecoded < 0) { lastDecoded = decoded; prev = decoded; continue; }
           $('mStats').textContent = `${Math.max(0, decoded - prev)} fps · WebRTC`;
           prev = decoded;
         }
@@ -854,6 +864,7 @@ function stopMirror(callApi) {
   if (callApi && mirrorSerial) api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {});
   mirrorSerial = null;
   deviceAudio = false;
+  waitingKeyframe = false;
   $('mirror').hidden = true;
 }
 
@@ -910,6 +921,7 @@ function openVideoWS(serial) {
       }
       mirrorDecoder = new VideoDecoder({
         output: frame => {
+          clearKeyframeWait();
           const canvas = $('mCanvas');
           if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
             canvas.width = frame.displayWidth; canvas.height = frame.displayHeight;

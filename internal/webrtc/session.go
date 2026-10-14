@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 
@@ -57,7 +58,10 @@ func (m *Manager) Create(serial string, mirror *scrcpy.Manager, offer webrtc.Ses
 		vCap()
 		return webrtc.SessionDescription{}, fmt.Errorf("初始化媒体引擎失败: %w", err)
 	}
-	pc, err := webrtc.NewAPI(webrtc.WithMediaEngine(me)).NewPeerConnection(webrtc.Configuration{})
+	// 关闭 mDNS 候选：内网直连用真实 IP，省去 mDNS 解析、加快 gathering/连通
+	se := &webrtc.SettingEngine{}
+	se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+	pc, err := webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(*se)).NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		vCap()
 		return webrtc.SessionDescription{}, fmt.Errorf("创建 PeerConnection 失败: %w", err)
