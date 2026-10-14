@@ -12,22 +12,26 @@ import (
 func (s *Server) startMirror(w http.ResponseWriter, r *http.Request) {
 	serial := r.PathValue("serial")
 	// 请求体可选：
-	//   deviceAudio=true            设备扬声器出声（不采集音频，参考 ya-webadb 的 audio 开关）
+	//   audioMode: mute(默认，采集到网页并静音设备扬声器) | device(设备扬声器出声，不采集) |
+	//              both(两边都出声，v5 audio_dup，需 Android 13+)
 	//   bitrateMbps/shortSize/maxFps 画质参数（编码器参数在设备端，需重启流生效；0 = 用默认值）
 	//   shortSize 为"短边"目标值，内部按设备物理分辨率换算成 scrcpy 的长边上限 max_size
 	var req struct {
-		DeviceAudio bool `json:"deviceAudio"`
-		BitRateMbps int  `json:"bitrateMbps"`
-		ShortSize   int  `json:"shortSize"`
-		MaxFPS      int  `json:"maxFps"`
+		AudioMode   string `json:"audioMode"`
+		BitRateMbps int    `json:"bitrateMbps"`
+		ShortSize   int    `json:"shortSize"`
+		MaxFPS      int    `json:"maxFps"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
 	opts := scrcpy.Options{}
-	if req.DeviceAudio {
+	switch req.AudioMode {
+	case "device":
 		f := false
 		opts.Audio = &f
+	case "both":
+		opts.AudioDup = true
 	}
 	if req.BitRateMbps > 0 {
 		opts.BitRate = req.BitRateMbps * 1_000_000

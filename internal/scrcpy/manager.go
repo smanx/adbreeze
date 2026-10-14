@@ -1,7 +1,7 @@
 // Package scrcpy 实现投屏链路：推送并启动设备端 scrcpy-server，
 // 建立视频流隧道，解析 scrcpy client 协议并扇出给多个 WebSocket 订阅者。
 //
-// 协议依据 scrcpy v2.4（与内嵌 server jar 版本严格配套）：
+// 协议依据 scrcpy v5.0.1（与内嵌 server jar 版本严格配套）：
 //   - server 启动: app_process + scid/tunnel_forward 等参数
 //   - 握手: 1 字节 dummy + 64 字节设备名 + 12 字节视频元数据
 //   - 帧: 12 字节帧头（flags+PTS / size）+ AnnexB 裸流
@@ -26,6 +26,7 @@ type Options struct {
 	Audio      *bool  // 音频转发（Opus，设备播放声音采集），默认开启。
 	// 采集激活时设备扬声器会被 remote submix 静音；关闭则设备扬声器正常出声
 	// （参考 ya-webadb adb-scrcpy 各版本 Options 的 audio 开关）。
+	AudioDup bool // audio_dup（v5，需 audio_source=playback，Android 13+）：采集的同时设备扬声器也出声
 }
 
 func (o Options) withDefaults() Options {
@@ -219,6 +220,14 @@ func (m *Manager) SubscribeAudio(serial string) (*Subscriber, func(), []byte, er
 		return nil, nil, nil, fmt.Errorf("设备 %s 没有活跃的投屏流", serial)
 	}
 	return s.SubscribeAudio()
+}
+
+// AudioDisabled 报告设备端是否已明确禁用音频（流不存在时返回 false）。
+func (m *Manager) AudioDisabled(serial string) bool {
+	m.mu.Lock()
+	s, ok := m.streams[serial]
+	m.mu.Unlock()
+	return ok && s.AudioDisabled()
 }
 
 // Active 返回有活跃流的设备 serial 列表。

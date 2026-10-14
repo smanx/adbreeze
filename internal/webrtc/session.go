@@ -83,9 +83,10 @@ func (m *Manager) Create(serial string, mirror *scrcpy.Manager, offer webrtc.Ses
 	}
 
 	// 音频轨：音频采集就绪通常在投屏启动后 1~2 秒，轮询等待（不阻塞视频）。
-	// 订阅先行挂在 hub 上（等待期间帧会被丢弃，2 秒 IDR 会快速恢复画面）。
+	// 超时上限 3 秒：设备禁用音频时（如 audio_dup 需 Android 13+）SubscribeAudio
+	// 永远失败，等太久会把 answer 拖到关键帧窗口之后，导致浏览器错过首个 IDR。
 	var aTrack *webrtc.TrackLocalStaticSample
-	aSub, aCap := waitAudio(mirror, serial, 10*time.Second)
+	aSub, aCap := waitAudio(mirror, serial, 3*time.Second)
 	if aCap != nil {
 		s.audioSub, s.audioCap = aSub, aCap
 		aTrack, err = webrtc.NewTrackLocalStaticSample(
@@ -217,8 +218,13 @@ func (s *Session) pumpVideo(track *webrtc.TrackLocalStaticSample, cachedConfig [
 		if havePTS && p.PTS > lastPTS {
 			dur = time.Duration(p.PTS-lastPTS) * time.Microsecond
 		}
-		// 轨道尚未完成协商绑定时写帧会报错：丢弃即可，绑定后的帧自然正常
+		// 轨道尚未完成协商绑定时写帧会报错：丢弃并回退关键帧状态——首个 IDR 若在
+		// 绑定前到达已被丢弃，后续 P 帧失去参考，必须等下一个关键帧再开始推流
 		if err := track.WriteSample(media.Sample{Data: data, Duration: dur}); err != nil {
+			if keySeen {
+				keySeen = false
+				waitLogged = false
+			}
 			continue
 		}
 		lastPTS, havePTS = p.PTS, true
@@ -226,21 +232,22 @@ func (s *Session) pumpVideo(track *webrtc.TrackLocalStaticSample, cachedConfig [
 }
 
 // pumpAudio 把 hub 音频帧（opus）写入 WebRTC 轨；OpusHead 配置包不属于 RTP 载荷，跳过。
+//
+// RTP 时间戳必须按「包内真实音频时长」推进，绝不能用设备 PTS 增量：scrcpy 的音频 PTS
+// 取自设备端墙钟（AudioEncoder#regeneratePts），反映采集调度抖动（实测 4.5~41ms 乱跳，
+// 设备静默后恢复时还有亚毫秒增量），而 opus 包内容时长是固定的——OPPO 实测 TOC=0xFC
+// （config 31 = CELT 全频带 20ms 单帧）。用抖动的 PTS 增量推进时间戳会让浏览器 NetEQ
+// 抖动缓冲持续失配，表现为音频卡顿、断续、严重失真（WS/WebCodecs 路径不按 PTS 走播所以不受影响）。
 func (s *Session) pumpAudio(track *webrtc.TrackLocalStaticSample) {
-	var lastPTS uint64
-	havePTS := false
+	const opusFrameDur = 20 * time.Millisecond // 与设备端编码器帧长一致（TOC config 31）
 	for p := range s.audioSub.Chan() {
 		if p.Config {
 			continue
 		}
-		dur := 20 * time.Millisecond
-		if havePTS && p.PTS > lastPTS {
-			dur = time.Duration(p.PTS-lastPTS) * time.Microsecond
-		}
-		if err := track.WriteSample(media.Sample{Data: p.Data, Duration: dur}); err != nil {
+		// 轨道尚未绑定时写帧报错：丢弃继续，绑定后的帧自然正常
+		if err := track.WriteSample(media.Sample{Data: p.Data, Duration: opusFrameDur}); err != nil {
 			continue
 		}
-		lastPTS, havePTS = p.PTS, true
 	}
 }
 

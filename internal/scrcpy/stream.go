@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -47,6 +48,10 @@ type Stream struct {
 
 	// 音频流（scrcpy v2 audio，独立于视频扇出）
 	audioHub *Hub
+
+	// 音频已被设备端明确禁用（编码 ID 0/错误码/读取失败），
+	// 用于让音频订阅方立即失败而非无限重试
+	audioDisabled atomic.Bool
 
 	// 剪贴板（设备端下行 DeviceMessage 更新）
 	clipboardMu  sync.Mutex
@@ -139,7 +144,7 @@ func start(deps streamDeps, serial string, jarBytes []byte, serverVersion string
 	}
 	s.videoConn = videoConn
 
-	// 3. 握手：64 字节设备名 + 12 字节视频元数据
+	// 3. 握手（v5）：64 字节设备名 + 4 字节编码 ID + 12 字节会话元数据（SESSION flag/width/height）
 	// （reverse 模式无 dummy 字节；forward 模式的 dummy 已在 openForward 内消费）
 	_ = videoConn.SetReadDeadline(time.Now().Add(handshakeTimeout))
 	var name [64]byte
@@ -147,14 +152,19 @@ func start(deps streamDeps, serial string, jarBytes []byte, serverVersion string
 		s.Stop()
 		return nil, fmt.Errorf("读取设备名失败: %w", err)
 	}
-	var meta [12]byte
-	if _, err := io.ReadFull(videoConn, meta[:]); err != nil {
+	var codec [4]byte
+	if _, err := io.ReadFull(videoConn, codec[:]); err != nil {
 		s.Stop()
-		return nil, fmt.Errorf("读取视频元数据失败: %w", err)
+		return nil, fmt.Errorf("读取视频编码 ID 失败: %w", err)
+	}
+	var sessionMeta [12]byte
+	if _, err := io.ReadFull(videoConn, sessionMeta[:]); err != nil {
+		s.Stop()
+		return nil, fmt.Errorf("读取会话元数据失败: %w", err)
 	}
 	_ = videoConn.SetReadDeadline(time.Time{}) // 长连接，清除超时
 
-	if codecID := binary.BigEndian.Uint32(meta[0:4]); codecID != 0x68323634 { // "h264"
+	if codecID := binary.BigEndian.Uint32(codec[0:4]); codecID != 0x68323634 { // "h264"
 		s.Stop()
 		return nil, fmt.Errorf("意外的视频编码: 0x%08x", codecID)
 	}
@@ -162,8 +172,8 @@ func start(deps streamDeps, serial string, jarBytes []byte, serverVersion string
 		Serial:     serial,
 		DeviceName: trimName(name[:]),
 		Codec:      "h264",
-		Width:      int(binary.BigEndian.Uint32(meta[4:8])),
-		Height:     int(binary.BigEndian.Uint32(meta[8:12])),
+		Width:      int(binary.BigEndian.Uint32(sessionMeta[4:8])),
+		Height:     int(binary.BigEndian.Uint32(sessionMeta[8:12])),
 	}
 
 	// 4. shell 输出消费必须先于一切阻塞读取：adbd 缓冲写满会阻塞
@@ -195,6 +205,7 @@ func (s *Stream) setupAudioAsync() {
 	var codec [4]byte
 	if _, err := io.ReadFull(s.audioConn, codec[:]); err != nil {
 		log.Printf("[scrcpy:%s] 音频头读取失败，降级为仅视频: %v", s.info.Serial, err)
+		s.audioDisabled.Store(true)
 		_ = s.audioConn.Close()
 		s.audioConn = nil
 		return
@@ -207,8 +218,10 @@ func (s *Stream) setupAudioAsync() {
 		s.audioReadLoop() // 阻塞消费音频流
 	case 0:
 		log.Printf("[scrcpy:%s] 设备端禁用了音频，继续仅视频", s.info.Serial)
+		s.audioDisabled.Store(true)
 	default:
 		log.Printf("[scrcpy:%s] 音频不可用（编码 ID 0x%08x），继续仅视频", s.info.Serial, id)
+		s.audioDisabled.Store(true)
 	}
 }
 
@@ -232,11 +245,12 @@ func (s *Stream) audioReadLoop() {
 			log.Printf("[scrcpy:%s] 音频数据读取结束: %v", s.info.Serial, err)
 			return
 		}
+		// v5 音频帧头：bit62=config、bit61=key、低 61 位 PTS（音频流无 SESSION 包）
 		s.audioHub.Broadcast(Packet{
 			Kind:   PacketVideo,
-			Config: ptsFlags&(1<<63) != 0,
-			Key:    ptsFlags&(1<<62) != 0,
-			PTS:    ptsFlags &^ (1<<63 | 1<<62),
+			Config: ptsFlags&(1<<62) != 0,
+			Key:    ptsFlags&(1<<61) != 0,
+			PTS:    ptsFlags &^ (1<<63 | 1<<62 | 1<<61),
 			Data:   data,
 		})
 	}
@@ -454,9 +468,13 @@ func (s *Stream) launchServer(deps streamDeps, scid uint32, serverVersion string
 	}
 	cmd := fmt.Sprintf("CLASSPATH=%s app_process / com.genymobile.scrcpy.Server %s "+
 		"scid=%08x%s log_level=warn video_codec=%s max_size=%d video_bit_rate=%d max_fps=%d "+
+		"video_codec_options=i-frame-interval=2 "+
 		"audio=%v audio_codec=opus clipboard_autosync=false stay_awake=true cleanup=false",
 		serverDevicePath, serverVersion, scid, tf, opts.VideoCodec,
 		opts.MaxSize, opts.BitRate, opts.MaxFPS, audioEnabled(opts))
+	if opts.AudioDup { // 两边都出声：回放捕获 + 设备扬声器继续播放（v5，Android 13+）
+		cmd += " audio_source=playback audio_dup=true"
+	}
 	shellConn, err := deps.ShellConn(s.info.Serial, cmd)
 	if err != nil {
 		return fmt.Errorf("启动 scrcpy server 失败: %w", err)
@@ -502,6 +520,9 @@ func (s *Stream) SubscribeAudio() (*Subscriber, func(), []byte, error) {
 	return sub, cancel, cfg, nil
 }
 
+// AudioDisabled 报告设备端是否已明确禁用音频（区别于「尚未就绪」）。
+func (s *Stream) AudioDisabled() bool { return s.audioDisabled.Load() }
+
 // SendControl 向设备写入一条 ControlMessage（并发安全）。
 func (s *Stream) SendControl(msg []byte) error {
 	s.controlMu.Lock()
@@ -538,6 +559,10 @@ func (s *Stream) readLoop() {
 		}
 		ptsFlags := binary.BigEndian.Uint64(hdr[0:8])
 		size := binary.BigEndian.Uint32(hdr[8:12])
+		// v5 帧头：bit63=SESSION(会话元数据包，整个 12B 即内容、无载荷)、bit62=config、bit61=key、低 61 位 PTS
+		if ptsFlags&(1<<63) != 0 {
+			continue // 会话元数据（flags/width/height），尺寸已由 SPS 解析覆盖
+		}
 		data := make([]byte, size)
 		if _, err := io.ReadFull(conn, data); err != nil {
 			log.Printf("[scrcpy:%s] 读帧数据结束: %v", s.info.Serial, err)
@@ -545,14 +570,14 @@ func (s *Stream) readLoop() {
 		}
 		s.hub.Broadcast(Packet{
 			Kind:   PacketVideo,
-			Config: ptsFlags&(1<<63) != 0,
-			Key:    ptsFlags&(1<<62) != 0,
-			PTS:    ptsFlags &^ (1<<63 | 1<<62),
+			Config: ptsFlags&(1<<62) != 0,
+			Key:    ptsFlags&(1<<61) != 0,
+			PTS:    ptsFlags &^ (1<<63 | 1<<62 | 1<<61),
 			Data:   data,
 		})
 
 		// 配置包携带 SPS：旋转/分辨率变化时解析新尺寸并广播 resize 事件
-		if ptsFlags&(1<<63) != 0 {
+		if ptsFlags&(1<<62) != 0 {
 			if w, h, ok := parseSPSResolution(findNAL(data, 7)); ok && (w != s.info.Width || h != s.info.Height) {
 				s.info.Width, s.info.Height = w, h
 				log.Printf("[scrcpy:%s] 视频尺寸变化: %dx%d", s.info.Serial, w, h)

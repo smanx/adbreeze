@@ -96,7 +96,7 @@ func (f *fakeDeps) serveAudio(conn net.Conn) {
 
 func (f *fakeDeps) serveVideo(conn net.Conn) {
 	defer conn.Close()
-	// 握手：dummy + 64B 设备名 + 12B 视频元数据
+	// 握手（v5）：dummy + 64B 设备名 + 4B codecId + 12B 会话元数据
 	if _, err := conn.Write([]byte{0}); err != nil {
 		return
 	}
@@ -105,11 +105,16 @@ func (f *fakeDeps) serveVideo(conn net.Conn) {
 	if _, err := conn.Write(name); err != nil {
 		return
 	}
-	meta := make([]byte, 12)
-	binary.BigEndian.PutUint32(meta[0:4], 0x68323634) // "h264"
-	binary.BigEndian.PutUint32(meta[4:8], 1080)
-	binary.BigEndian.PutUint32(meta[8:12], 2400)
-	if _, err := conn.Write(meta); err != nil {
+	codec := make([]byte, 4)
+	binary.BigEndian.PutUint32(codec, 0x68323634) // "h264"
+	if _, err := conn.Write(codec); err != nil {
+		return
+	}
+	sessionMeta := make([]byte, 12)
+	binary.BigEndian.PutUint32(sessionMeta[0:4], 0x80000000) // SESSION 标志
+	binary.BigEndian.PutUint32(sessionMeta[4:8], 1080)       // width
+	binary.BigEndian.PutUint32(sessionMeta[8:12], 2400)      // height
+	if _, err := conn.Write(sessionMeta); err != nil {
 		return
 	}
 	// 等测试订阅完成
@@ -120,13 +125,14 @@ func (f *fakeDeps) serveVideo(conn net.Conn) {
 	time.Sleep(3 * time.Second)                                                              // 保持连接，等待测试读取
 }
 
+// writeFrame 按 scrcpy v5 帧头格式写包：bit63=SESSION、bit62=config、bit61=key、低 61 位 PTS
 func writeFrame(conn net.Conn, config, key bool, pts uint64, data []byte) {
 	var flags uint64
 	if config {
-		flags |= 1 << 63
+		flags |= 1 << 62
 	}
 	if key {
-		flags |= 1 << 62
+		flags |= 1 << 61
 	}
 	flags |= pts
 	hdr := make([]byte, 12)

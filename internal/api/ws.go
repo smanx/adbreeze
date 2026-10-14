@@ -222,17 +222,29 @@ func (s *Server) handleVideoCtrl(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
 	serial := r.PathValue("serial")
 	sub, cancel, cachedConfig, err := s.mirror.SubscribeAudio(serial)
-	if err != nil {
+	if err != nil && !s.mirror.AudioDisabled(serial) {
+		// 音频尚未就绪（采集初始化慢），客户端会以 300ms 重试
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	defer cancel()
+	audioDisabled := err != nil // 设备端已明确禁用音频：升级后以 4003 关闭，客户端立即停止重试
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		if !audioDisabled {
+			cancel()
+		}
 		return
 	}
 	defer conn.Close()
+
+	if audioDisabled {
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(4003, "设备端音频不可用"),
+			time.Now().Add(time.Second))
+		return
+	}
+	defer cancel()
 
 	if err := conn.WriteJSON(map[string]any{"type": "meta", "codec": "opus"}); err != nil {
 		return

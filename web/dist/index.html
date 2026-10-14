@@ -68,7 +68,8 @@
     <h2>设备列表 <span class="hint">（实时推送）</span></h2>
     <ul id="devices"><li>未连接</li></ul>
     <div class="row" style="margin-top:12px">
-      <input id="addr" placeholder="192.168.1.20:5555">
+      <input id="addr" placeholder="192.168.1.20:5555" list="addrHistory" autocomplete="off">
+      <datalist id="addrHistory"></datalist>
       <button id="connect">连接网络设备</button>
       <span class="hint">当前设备：</span>
       <select id="curSerial" style="width:220px"><option value="">— 选择设备 —</option></select>
@@ -130,6 +131,7 @@
     <button data-op="rotate">旋转</button>
     <button data-clip="get">取剪贴板</button>
     <button data-clip="paste">粘贴到设备</button>
+    <button id="mMute">🔊 声音</button>
     <button id="mSettingsBtn">⚙ 设置</button>
     <button class="danger" id="mStop">停止</button>
   </div>
@@ -139,8 +141,9 @@
       <option value="webrtc">WebRTC（原生低延迟）</option>
     </select></label>
     <label>手机声音 <select id="sDevAudio">
-      <option value="false" selected>🔇 静音（采集到网页）</option>
-      <option value="true">🔊 出声（设备扬声器）</option>
+      <option value="both" selected>�🔊 两边都出声（默认）</option>
+      <option value="mute">� 静音（采集到网页）</option>
+      <option value="device">🔊 出声（设备扬声器）</option>
     </select></label>
     <label>码率 <select id="sBitrate">
       <option value="2">2 Mbps</option><option value="4">4 Mbps</option>
@@ -278,10 +281,27 @@ $('save').onclick = () => {
   loadDevices(); watchEvents();
 };
 
+// ---------- 无线 ADB 连接地址历史（localStorage 记忆，最新在前，最多 10 条） ----------
+const ADB_ADDR_KEY = 'ADBreeze-adb-addresses';
+function loadAddrHistory() {
+  try { return JSON.parse(localStorage.getItem(ADB_ADDR_KEY)) || []; } catch (_) { return []; }
+}
+function renderAddrHistory() {
+  $('addrHistory').innerHTML = loadAddrHistory()
+    .map(a => `<option value="${a.replace(/"/g, '&quot;')}"></option>`).join('');
+}
+function rememberAddr(address) {
+  const list = loadAddrHistory().filter(a => a !== address);
+  list.unshift(address);
+  try { localStorage.setItem(ADB_ADDR_KEY, JSON.stringify(list.slice(0, 10))); } catch (_) {}
+  renderAddrHistory();
+}
+renderAddrHistory();
+
 $('connect').onclick = async () => {
   const address = $('addr').value.trim();
   if (!address) return;
-  try { await api('POST', '/api/devices/connect', { address }); loadDevices(); }
+  try { await api('POST', '/api/devices/connect', { address }); rememberAddr(address); loadDevices(); }
   catch (e) { alert('连接失败: ' + e.message); }
 };
 window.disconnect = async serial => {
@@ -301,23 +321,26 @@ $('run').onclick = async () => {
 
 // ---------- 投屏 + 反向控制 ----------
 let mirrorWS = null, mirrorDecoder = null, mirrorSerial = null;
-let deviceAudio = false; // 手机扬声器是否出声（false = 采集静音手机，true = 回放捕获手机正常出声）
+let deviceAudio = false; // 设备扬声器是否出声（device 模式：不采集，扬声器正常）
+let audioDup = false;    // 两边都出声（both 模式：采集到网页 + 设备扬声器也响）
 let webrtcMode = false, webrtcPC = null;
 let videoW = 720, videoH = 1280;
 
 window.startMirror = async function (serial) {
   if (!('VideoDecoder' in window)) { alert('当前浏览器不支持 WebCodecs，请使用 Chrome / Edge 94+'); return; }
   mirrorSerial = serial;
-  deviceAudio = !!loadMirrorSettings().deviceAudio;
+  const s = loadMirrorSettings(serial);
+  deviceAudio = s.audioMode === 'device';
+  audioDup = s.audioMode === 'both';
   videoW = 720; videoH = 1280;
-  webrtcMode = (loadMirrorSettings().mode || 'codecs') === 'webrtc';
+  webrtcMode = (s.mode || 'codecs') === 'webrtc';
   $('mirror').hidden = false;
   $('mTitle').textContent = serial + ' — 连接中…';
   $('mStats').textContent = '';
   showMsg('');
   $('mCanvas').focus();
   try {
-    await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`, { deviceAudio, ...loadMirrorSettings() });
+    await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`, loadMirrorSettings(serial));
     if (webrtcMode) {
       openCtrlWS(serial);
       await startWebrtcViewer(serial);
@@ -330,21 +353,24 @@ window.startMirror = async function (serial) {
   }
 };
 
-// ---------- 投屏画质与方案设置（localStorage 记忆） ----------
-const MIRROR_SETTINGS_KEY = 'ADBreeze-mirror-settings-v2';
-function loadMirrorSettings() {
-  try { return JSON.parse(localStorage.getItem(MIRROR_SETTINGS_KEY)) || {}; } catch (_) { return {}; }
+// ---------- 投屏画质与方案设置（按设备保存在 localStorage，无存档用默认值） ----------
+const MIRROR_DEFAULTS = { mode: 'codecs', audioMode: 'both', bitrateMbps: 8, shortSize: 720, maxFps: 60 };
+const mirrorSettingsKey = serial => 'ADBreeze-mirror-settings-v3:' + serial;
+function loadMirrorSettings(serial = mirrorSerial) {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(mirrorSettingsKey(serial))) || {}; } catch (_) {}
+  return { ...MIRROR_DEFAULTS, ...saved };
 }
-function saveMirrorSettings(s) {
-  try { localStorage.setItem(MIRROR_SETTINGS_KEY, JSON.stringify(s)); } catch (_) {}
+function saveMirrorSettings(serial, s) {
+  try { localStorage.setItem(mirrorSettingsKey(serial), JSON.stringify(s)); } catch (_) {}
 }
 function savedQualityJSON() {
-  try { return JSON.stringify(loadMirrorSettings()); } catch (_) { return ''; }
+  return JSON.stringify(loadMirrorSettings(mirrorSerial));
 }
 function fillMirrorSettingsUI() {
   const s = loadMirrorSettings();
   $('sMode').value = s.mode || 'codecs';
-  $('sDevAudio').value = s.deviceAudio ? 'true' : 'false';
+  $('sDevAudio').value = s.audioMode || 'both';
   $('sBitrate').value = s.bitrateMbps || 8;
   $('sSize').value = s.shortSize || 720;
   $('sFps').value = s.maxFps || 60;
@@ -352,7 +378,7 @@ function fillMirrorSettingsUI() {
 function currentMirrorSettings() {
   return {
     mode: $('sMode').value,
-    deviceAudio: $('sDevAudio').value === 'true',
+    audioMode: $('sDevAudio').value,
     bitrateMbps: +$('sBitrate').value,
     shortSize: +$('sSize').value,
     maxFps: +$('sFps').value,
@@ -361,11 +387,11 @@ function currentMirrorSettings() {
 $('mSettingsBtn').onclick = () => { fillMirrorSettingsUI(); $('mSettings').hidden = !$('mSettings').hidden; };
 
 let mirrorRestarting = false;
-// 等待关键帧提示：中途加入的观看者要等设备编码器的下一个关键帧（GOP 最长 10 秒）
+// 等待关键帧提示：中途加入的观看者要等设备编码器的下一个关键帧（GOP 约 2 秒）
 let waitingKeyframe = false;
 function waitKeyframe() {
   waitingKeyframe = true;
-  showMsg('正在等待画面关键帧…（受编码器 GOP 周期影响，最长约 10 秒）');
+  showMsg('正在等待画面关键帧…（编码器 GOP 约 2 秒，静止画面下个别机型可能更久）');
 }
 function clearKeyframeWait() {
   if (waitingKeyframe) { waitingKeyframe = false; showMsg(''); }
@@ -384,7 +410,7 @@ async function reopenViewer(serial) {
     await startWebrtcViewer(serial);
   } else {
     openVideoWS(serial);
-    if (!deviceAudio) openAudioWS(serial); // 手机出声模式下无音频流
+    if (audioDup || !deviceAudio) openAudioWS(serial); // device 模式无音频流，其余都有
   }
 }
 // 重启投屏流：编码器参数（画质/音频采集）都在设备端，任何改动都需走此路径
@@ -396,9 +422,10 @@ async function restartStream(overrides = {}) {
     closeViewers();
     await api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {});
     const s = loadMirrorSettings();
-    const params = { deviceAudio: !!s.deviceAudio, bitrateMbps: s.bitrateMbps, shortSize: s.shortSize, maxFps: s.maxFps, ...overrides };
+    const params = { audioMode: s.audioMode, bitrateMbps: s.bitrateMbps, shortSize: s.shortSize, maxFps: s.maxFps, ...overrides };
     await api('POST', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`, params);
-    deviceAudio = params.deviceAudio;
+    deviceAudio = params.audioMode === 'device';
+    audioDup = params.audioMode === 'both';
     waitKeyframe();
     await reopenViewer(mirrorSerial);
     return true;
@@ -414,7 +441,7 @@ $('sApply').onclick = async () => {
   const next = currentMirrorSettings();
   const qualityChanged = JSON.stringify(next) !== savedQualityJSON();
   const modeChanged = (next.mode === 'webrtc') !== webrtcMode;
-  saveMirrorSettings(next);
+  saveMirrorSettings(mirrorSerial, next);
   if (!qualityChanged && !modeChanged) return;
   if (!qualityChanged) {
     // 仅切换方案：scrcpy 流共享，重建观看通道即可（秒级，无需重启设备端流）
@@ -437,7 +464,7 @@ $('sApply').onclick = async () => {
 
 // ---------- 音频播放（Opus → WebCodecs AudioDecoder → AudioWorklet）----------
 let audioWS = null, audioDecoder = null, audioCtx = null, audioNode = null, audioGain = null;
-let audioRetryTimer = null, audioPackets = 0;
+let audioRetryTimer = null, audioPackets = 0, audioOn = false;
 
 function openAudioWS(serial) {
   closeAudio();
@@ -453,9 +480,14 @@ function tryAudioConnect(serial, attempt) {
   audioWS = ws;
 
   ws.onerror = () => {};
-  ws.onclose = () => {
+  ws.onclose = ev => {
     if (audioWS !== ws) return;
     audioWS = null;
+    // 4003 = 设备端已明确禁用音频（如 audio_dup 需 Android 13+），不再重试
+    if (ev.code === 4003) {
+      if (mirrorSerial === serial) showMsg('设备端音频不可用（audio_dup 需 Android 13+），已按仅视频继续');
+      return;
+    }
     // 409 = 音频尚未就绪，300ms 后重试（切换模式时音频采集就绪有 1~2 秒延迟，
     // 固定 2 秒重试会让声音迟到 1~2 秒）
     if (mirrorSerial === serial) {
@@ -475,7 +507,7 @@ function tryAudioConnect(serial, attempt) {
       return;
     }
     audioPackets++;
-    if (audioPackets === 1) $('mStats').textContent += ' · 🔊';
+    if (audioPackets === 1) { audioOn = true; }
     if (audioDecoder && audioDecoder.state === 'configured') {
       try {
         audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: pts, data: payload }));
@@ -661,6 +693,7 @@ function setupAudio(opusHead) {
       outputChannelCount: [channels],
     });
     audioGain = audioCtx.createGain();
+    audioGain.gain.value = pageMuted ? 0 : 1; // 静音先于音频就绪时同样生效
     audioNode.connect(audioGain).connect(audioCtx.destination);
   }).catch(e => showMsg('音频播放初始化失败: ' + e.message));
 }
@@ -713,10 +746,20 @@ function closeAudio() {
   if (audioWS) { audioWS.onclose = null; audioWS.close(); audioWS = null; }
   if (audioDecoder) { try { audioDecoder.close(); } catch (_) {} audioDecoder = null; }
   if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
-  audioNode = null; audioGain = null; audioPackets = 0;
+  audioNode = null; audioGain = null; audioPackets = 0; audioOn = false;
 }
 
 $('mStop').onclick = () => stopMirror(true);
+
+// 页面静音：只控制本页是否出声（WS 路径走 audioGain，WebRTC 路径走 mAudio.muted），
+// 不影响服务端是否推送音频流
+let pageMuted = false;
+function applyPageMute() {
+  if (audioGain) audioGain.gain.value = pageMuted ? 0 : 1;
+  $('mAudio').muted = pageMuted;
+  $('mMute').textContent = pageMuted ? '🔇 已静音' : '🔊 声音';
+}
+$('mMute').onclick = () => { pageMuted = !pageMuted; applyPageMute(); };
 document.querySelectorAll('.m-head button[data-op]').forEach(b => {
   b.onclick = () => wsSend({ type: 'op', name: b.dataset.op });
 });
@@ -817,6 +860,7 @@ async function startWebrtcViewer(serial) {
       statsLoop();
     } else {
       a.srcObject = stream;
+      a.muted = pageMuted; // 静音先于音频就绪时同样生效
       a.play().catch(() => {});
     }
   };
@@ -864,6 +908,7 @@ function stopMirror(callApi) {
   if (callApi && mirrorSerial) api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {});
   mirrorSerial = null;
   deviceAudio = false;
+  audioDup = false;
   waitingKeyframe = false;
   $('mirror').hidden = true;
 }
@@ -904,7 +949,8 @@ function openVideoWS(serial) {
     if (!(flags & 1)) { frameCount++; byteCount += payload.length; }
     const now = performance.now();
     if (now - lastTick >= 1000) {
-      $('mStats').textContent = `${frameCount} fps · ${(byteCount * 8 / 1e6).toFixed(1)} Mbps`;
+      // 音频包到达后由 audioOn 标记统一附加 🔊（直接 += 会被本循环每秒覆盖）
+      $('mStats').textContent = `${frameCount} fps · ${(byteCount * 8 / 1e6).toFixed(1)} Mbps${audioOn ? ' · 🔊' : ''}`;
       frameCount = 0; byteCount = 0; lastTick = now;
     }
 
