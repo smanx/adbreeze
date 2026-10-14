@@ -70,6 +70,7 @@ type streamDeps interface {
 	Reverse(serial, remote, local string) error
 	KillReverse(serial, remote string) error
 	ShellConn(serial, cmd string) (net.Conn, error)
+	Shell(serial, cmd string) (string, error)
 }
 
 // outputCapture 环形捕获 server 的 shell 输出，失败时带回诊断信息。
@@ -105,6 +106,12 @@ func start(deps streamDeps, serial string, jarBytes []byte, serverVersion string
 	// 1. 推送 server jar
 	if err := deps.Push(serial, serverDevicePath, jarBytes, "0644"); err != nil {
 		return nil, fmt.Errorf("推送 scrcpy-server 失败: %w", err)
+	}
+
+	// 1.5 唤醒屏幕：熄屏时设备端编码器没有输入帧，GOP 内（最长 10 秒）无关键帧
+	// 可供新订阅者解码，表现为启动后长时间黑屏
+	if _, err := deps.Shell(serial, "input keyevent KEYCODE_WAKEUP"); err != nil {
+		log.Printf("[scrcpy:%s] 唤醒屏幕失败: %v", serial, err)
 	}
 
 	// 2. 建立隧道并启动 server。
@@ -447,7 +454,7 @@ func (s *Stream) launchServer(deps streamDeps, scid uint32, serverVersion string
 	}
 	cmd := fmt.Sprintf("CLASSPATH=%s app_process / com.genymobile.scrcpy.Server %s "+
 		"scid=%08x%s log_level=warn video_codec=%s max_size=%d video_bit_rate=%d max_fps=%d "+
-		"audio=%v audio_codec=opus clipboard_autosync=false cleanup=false",
+		"audio=%v audio_codec=opus clipboard_autosync=false stay_awake=true cleanup=false",
 		serverDevicePath, serverVersion, scid, tf, opts.VideoCodec,
 		opts.MaxSize, opts.BitRate, opts.MaxFPS, audioEnabled(opts))
 	shellConn, err := deps.ShellConn(s.info.Serial, cmd)

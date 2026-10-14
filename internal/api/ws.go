@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -58,6 +59,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 // handleVideo 推送设备投屏流并接收控制事件。
 //
+// mode=ctrl 时为纯控制通道（WebRTC 方案使用）：只交换 meta/resize 与控制事件，不推帧。
+//
 // 服务端 → 客户端：
 //   - 第一条 JSON 文本消息: {"type":"meta","serial":...,"device":...,"codec":"h264","width":...,"height":...}
 //   - 二进制帧: [1B flags( bit0=config, bit1=key )][8B PTS u64 BE][H.264 AnnexB 载荷]
@@ -65,6 +68,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 //
 // 客户端 → 服务端：JSON 控制事件（touch/key/text/scroll/op，见 control.go）。
 func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("mode") == "ctrl" {
+		s.handleVideoCtrl(w, r)
+		return
+	}
 	serial := r.PathValue("serial")
 	sub, cancel, cachedConfig, info, err := s.mirror.Subscribe(serial)
 	if err != nil {
@@ -137,6 +144,77 @@ func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
 	// 流已结束（设备断开或服务端停止）
 	_ = conn.WriteMessage(websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseGoingAway, "stream ended"))
+}
+
+// handleVideoCtrl 是 WebRTC 方案使用的纯控制通道：交换 meta 与控制事件，
+// 周期检查流存活，流结束后主动关闭通知前端。
+func (s *Server) handleVideoCtrl(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	info, err := s.mirror.Info(serial)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	if err := conn.WriteJSON(map[string]any{
+		"type":   "meta",
+		"serial": info.Serial,
+		"device": info.DeviceName,
+		"codec":  info.Codec,
+		"width":  info.Width,
+		"height": info.Height,
+	}); err != nil {
+		return
+	}
+
+	// 读协程：控制事件（与帧推模式相同的处理）
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		sink := &controlEventSink{
+			videoSize: func() (int, int) {
+				w, h, err := s.mirror.VideoSize(serial)
+				if err != nil {
+					return 0, 0
+				}
+				return w, h
+			},
+			send: func(msg []byte) error { return s.mirror.SendControl(serial, msg) },
+		}
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var ev controlEvent
+			if json.Unmarshal(data, &ev) != nil {
+				continue
+			}
+			_ = handleControlEvent(sink, &ev)
+		}
+	}()
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-readDone:
+			return
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if _, err := s.mirror.Info(serial); err != nil { // 流已结束
+				_ = conn.WriteMessage(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseGoingAway, "stream ended"))
+				return
+			}
+		}
+	}
 }
 
 // handleAudio 推送设备音频流（Opus，帧格式与视频一致：[flags][pts][payload]）。

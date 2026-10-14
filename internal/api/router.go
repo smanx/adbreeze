@@ -9,6 +9,7 @@ import (
 	"adbreeze/internal/adb"
 	"adbreeze/internal/auth"
 	"adbreeze/internal/scrcpy"
+	"adbreeze/internal/webrtc"
 )
 
 // Server 承载 HTTP 服务。
@@ -17,11 +18,12 @@ type Server struct {
 	version string
 	mgr     *adb.Manager
 	mirror  *scrcpy.Manager
+	webrtc  *webrtc.Manager
 }
 
 // New 组装路由，返回可直接交给 http.Server 的 Handler。
 func New(token, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS fs.FS) http.Handler {
-	s := &Server{token: token, version: version, mgr: mgr, mirror: mirror}
+	s := &Server{token: token, version: version, mgr: mgr, mirror: mirror, webrtc: webrtc.NewManager()}
 	mux := http.NewServeMux()
 
 	// 健康检查（无需鉴权）
@@ -35,6 +37,7 @@ func New(token, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS 
 	authed.HandleFunc("POST /api/devices/{serial}/shell", s.shell)
 	authed.HandleFunc("POST /api/devices/{serial}/mirror", s.startMirror)
 	authed.HandleFunc("DELETE /api/devices/{serial}/mirror", s.stopMirror)
+	authed.HandleFunc("POST /api/devices/{serial}/webrtc", s.createWebRTC)
 	authed.HandleFunc("GET /api/mirrors", s.listMirrors)
 	authed.HandleFunc("GET /api/devices/{serial}/files", s.listFiles)
 	authed.HandleFunc("PUT /api/devices/{serial}/files", s.uploadFile)

@@ -146,6 +146,17 @@ func (m *Manager) Subscribe(serial string) (*Subscriber, func(), []byte, StreamI
 	return sub, cancel, cfg, s.Info(), nil
 }
 
+// Info 返回设备当前流的元信息（不订阅）。
+func (m *Manager) Info(serial string) (StreamInfo, error) {
+	m.mu.Lock()
+	s, ok := m.streams[serial]
+	m.mu.Unlock()
+	if !ok {
+		return StreamInfo{}, fmt.Errorf("设备 %s 没有活跃的投屏流", serial)
+	}
+	return s.Info(), nil
+}
+
 // VideoSize 返回设备当前视频尺寸（触摸注入的 screenW/H 必须与之匹配）。
 func (m *Manager) VideoSize(serial string) (int, int, error) {
 	m.mu.Lock()

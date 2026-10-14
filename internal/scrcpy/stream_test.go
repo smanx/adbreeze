@@ -24,6 +24,8 @@ type fakeDeps struct {
 
 func (f *fakeDeps) Push(serial, remote string, data []byte, mode string) error { return nil }
 
+func (f *fakeDeps) Shell(serial, cmd string) (string, error) { return "", nil }
+
 func (f *fakeDeps) Forward(serial, local, remote string) error {
 	port, err := strconv.Atoi(strings.TrimPrefix(local, "tcp:"))
 	if err != nil {

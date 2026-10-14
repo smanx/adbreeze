@@ -41,6 +41,11 @@
   .m-body { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 0 16px 16px; }
   #mCanvas { max-width: 100%; max-height: 100%; background: #000; border-radius: 6px; touch-action: none; outline: none; }
   .m-msg { color: #ffd7d2; font-size: 14px; text-align: center; padding: 12px; }
+  #mSettings { display: flex; align-items: center; gap: 12px; padding: 8px 16px; color: #e8eaed; font-size: 13px; flex-wrap: wrap; background: rgba(30,32,35,.9); }
+  #mSettings[hidden] { display: none; }
+  #mSettings label { display: flex; align-items: center; gap: 6px; }
+  #mSettings select { background: #2c2e31; color: #e8eaed; border: 1px solid #444; border-radius: 4px; padding: 2px 4px; }
+  #mSettings button { background: #1a73e8; color: #fff; }
   .m-term-wrap { height: 380px; padding: 0 16px 16px; }
   .m-term-wrap > div { height: 100%; }
 </style>
@@ -125,11 +130,35 @@
     <button data-op="rotate">旋转</button>
     <button data-clip="get">取剪贴板</button>
     <button data-clip="paste">粘贴到设备</button>
-    <button id="mMute">🔊 声音</button>
-    <button id="mDevAudio">🔇 手机静音</button>
+    <button id="mSettingsBtn">⚙ 设置</button>
     <button class="danger" id="mStop">停止</button>
   </div>
-  <div class="m-body"><canvas id="mCanvas" width="720" height="1280"></canvas></div>
+  <div id="mSettings" hidden>
+    <label>投屏方案 <select id="sMode">
+      <option value="codecs">WebCodecs（WS 直推）</option>
+      <option value="webrtc">WebRTC（原生低延迟）</option>
+    </select></label>
+    <label>手机声音 <select id="sDevAudio">
+      <option value="false" selected>🔇 静音（采集到网页）</option>
+      <option value="true">🔊 出声（设备扬声器）</option>
+    </select></label>
+    <label>码率 <select id="sBitrate">
+      <option value="2">2 Mbps</option><option value="4">4 Mbps</option>
+      <option value="8" selected>8 Mbps</option><option value="16">16 Mbps</option><option value="20">20 Mbps</option>
+    </select></label>
+    <label>分辨率（短边） <select id="sSize">
+      <option value="1440">1440（原生以上）</option><option value="1280">1280</option>
+      <option value="1080">1080</option><option value="900">900</option>
+      <option value="720" selected>720（默认）</option><option value="480">480</option>
+    </select></label>
+    <label>帧率 <select id="sFps">
+      <option value="15">15 fps</option><option value="30">30 fps</option>
+      <option value="60" selected>60 fps</option><option value="120">120 fps</option>
+    </select></label>
+    <button id="sApply">应用（重启投屏）</button>
+    <span class="hint" style="color:#9aa0a6">改编码器参数需重启流，约 1 秒</span>
+  </div>
+  <div class="m-body"><canvas id="mCanvas" width="720" height="1280"></canvas><video id="mVideo" playsinline autoplay muted style="position:absolute;opacity:0;pointer-events:none;width:2px;height:2px;"></video><audio id="mAudio" autoplay style="display:none"></audio></div>
   <div class="m-msg" id="mMsg" hidden></div>
 </div>
 
@@ -273,69 +302,134 @@ $('run').onclick = async () => {
 // ---------- 投屏 + 反向控制 ----------
 let mirrorWS = null, mirrorDecoder = null, mirrorSerial = null;
 let deviceAudio = false; // 手机扬声器是否出声（false = 采集静音手机，true = 回放捕获手机正常出声）
-let devAudioSwitching = false;
+let webrtcMode = false, webrtcPC = null;
 let videoW = 720, videoH = 1280;
-
-function updateDevAudioBtn() {
-  $('mDevAudio').textContent = deviceAudio ? '🔊 手机出声' : '🔇 手机静音';
-}
 
 window.startMirror = async function (serial) {
   if (!('VideoDecoder' in window)) { alert('当前浏览器不支持 WebCodecs，请使用 Chrome / Edge 94+'); return; }
   mirrorSerial = serial;
-  deviceAudio = false;
-  updateDevAudioBtn();
+  deviceAudio = !!loadMirrorSettings().deviceAudio;
   videoW = 720; videoH = 1280;
+  webrtcMode = (loadMirrorSettings().mode || 'codecs') === 'webrtc';
   $('mirror').hidden = false;
   $('mTitle').textContent = serial + ' — 连接中…';
   $('mStats').textContent = '';
   showMsg('');
   $('mCanvas').focus();
   try {
-    await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`, { deviceAudio });
-    openVideoWS(serial);
-    if (!deviceAudio) openAudioWS(serial); // 手机出声模式下无音频流
+    await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`, { deviceAudio, ...loadMirrorSettings() });
+    if (webrtcMode) {
+      openCtrlWS(serial);
+      await startWebrtcViewer(serial);
+    } else {
+      openVideoWS(serial);
+      if (!deviceAudio) openAudioWS(serial); // 手机出声模式下无音频流
+    }
   } catch (e) {
     showMsg('启动投屏失败: ' + e.message);
   }
 };
 
-// 切换手机扬声器开关：采集激活时 remote submix 会静音设备扬声器（参考 ya-webadb
-// adb-scrcpy 的 audio 开关），需重启投屏流（约 1 秒）。
-//   手机静音（默认）= audio=true，采集到网页；手机出声 = audio=false，不采集。
-$('mDevAudio').onclick = async () => {
-  if (!mirrorSerial || devAudioSwitching) return;
-  devAudioSwitching = true;
-  const target = !deviceAudio;
-  showMsg('正在切换手机声音…');
-  try {
-    // 关闭本页订阅 → 重启服务端流（Start 对已存在的流会直接复用，必须先 Stop）
-    if (mirrorWS) { mirrorWS.onclose = null; mirrorWS.close(); mirrorWS = null; }
-    if (mirrorDecoder) { try { mirrorDecoder.close(); } catch (_) {} mirrorDecoder = null; }
-    closeAudio();
-    await api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {});
-    await api('POST', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`, { deviceAudio: target });
-    deviceAudio = target;
-    updateDevAudioBtn();
-    showMsg('');
-    openVideoWS(mirrorSerial);
-    if (!deviceAudio) openAudioWS(mirrorSerial); // 手机出声模式下无音频流
-  } catch (e) {
-    showMsg('切换失败: ' + e.message);
+// ---------- 投屏画质与方案设置（localStorage 记忆） ----------
+const MIRROR_SETTINGS_KEY = 'ADBreeze-mirror-settings-v2';
+function loadMirrorSettings() {
+  try { return JSON.parse(localStorage.getItem(MIRROR_SETTINGS_KEY)) || {}; } catch (_) { return {}; }
+}
+function saveMirrorSettings(s) {
+  try { localStorage.setItem(MIRROR_SETTINGS_KEY, JSON.stringify(s)); } catch (_) {}
+}
+function savedQualityJSON() {
+  try { return JSON.stringify(loadMirrorSettings()); } catch (_) { return ''; }
+}
+function fillMirrorSettingsUI() {
+  const s = loadMirrorSettings();
+  $('sMode').value = s.mode || 'codecs';
+  $('sDevAudio').value = s.deviceAudio ? 'true' : 'false';
+  $('sBitrate').value = s.bitrateMbps || 8;
+  $('sSize').value = s.shortSize || 720;
+  $('sFps').value = s.maxFps || 60;
+}
+function currentMirrorSettings() {
+  return {
+    mode: $('sMode').value,
+    deviceAudio: $('sDevAudio').value === 'true',
+    bitrateMbps: +$('sBitrate').value,
+    shortSize: +$('sSize').value,
+    maxFps: +$('sFps').value,
+  };
+}
+$('mSettingsBtn').onclick = () => { fillMirrorSettingsUI(); $('mSettings').hidden = !$('mSettings').hidden; };
+
+let mirrorRestarting = false;
+// 关闭本页观看通道（WS/WebRTC 订阅），供重建或重启前调用
+function closeViewers() {
+  if (mirrorWS) { mirrorWS.onclose = null; mirrorWS.close(); mirrorWS = null; }
+  if (mirrorDecoder) { try { mirrorDecoder.close(); } catch (_) {} mirrorDecoder = null; }
+  closeWebrtcViewer();
+  closeAudio();
+}
+// 按当前 webrtcMode 重建观看通道（不触碰设备端流）
+async function reopenViewer(serial) {
+  if (webrtcMode) {
+    openCtrlWS(serial);
+    await startWebrtcViewer(serial);
+  } else {
+    openVideoWS(serial);
+    if (!deviceAudio) openAudioWS(serial); // 手机出声模式下无音频流
   }
-  devAudioSwitching = false;
+}
+// 重启投屏流：编码器参数（画质/音频采集）都在设备端，任何改动都需走此路径
+async function restartStream(overrides = {}) {
+  if (!mirrorSerial || mirrorRestarting) return false;
+  mirrorRestarting = true;
+  showMsg('正在重启投屏流…');
+  try {
+    closeViewers();
+    await api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {});
+    const s = loadMirrorSettings();
+    const params = { deviceAudio: !!s.deviceAudio, bitrateMbps: s.bitrateMbps, shortSize: s.shortSize, maxFps: s.maxFps, ...overrides };
+    await api('POST', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`, params);
+    deviceAudio = params.deviceAudio;
+    showMsg('');
+    await reopenViewer(mirrorSerial);
+    return true;
+  } catch (e) {
+    showMsg('重启投屏流失败: ' + e.message);
+    return false;
+  } finally {
+    mirrorRestarting = false;
+  }
+}
+$('sApply').onclick = async () => {
+  if (!mirrorSerial || mirrorRestarting) return;
+  const next = currentMirrorSettings();
+  const qualityChanged = JSON.stringify(next) !== savedQualityJSON();
+  const modeChanged = (next.mode === 'webrtc') !== webrtcMode;
+  saveMirrorSettings(next);
+  if (!qualityChanged && !modeChanged) return;
+  if (!qualityChanged) {
+    // 仅切换方案：scrcpy 流共享，重建观看通道即可（秒级，无需重启设备端流）
+    mirrorRestarting = true;
+    showMsg('正在切换投屏方案…');
+    try {
+      closeViewers();
+      webrtcMode = next.mode === 'webrtc';
+      await reopenViewer(mirrorSerial);
+      showMsg('');
+    } catch (e) {
+      showMsg('切换投屏方案失败: ' + e.message);
+    } finally {
+      mirrorRestarting = false;
+    }
+    return;
+  }
+  webrtcMode = next.mode === 'webrtc'; // 画质与方案同时变更：重启时按新方案重连
+  restartStream();
 };
 
 // ---------- 音频播放（Opus → WebCodecs AudioDecoder → AudioWorklet）----------
 let audioWS = null, audioDecoder = null, audioCtx = null, audioNode = null, audioGain = null;
 let audioRetryTimer = null, audioPackets = 0;
-
-$('mMute').onclick = () => {
-  if (!audioGain) return;
-  const muted = audioGain.gain.value > 0;
-  audioGain.gain.value = muted ? 0 : 1;
-  $('mMute').textContent = muted ? '🔇 静音' : '🔊 声音';
-};
 
 function openAudioWS(serial) {
   closeAudio();
@@ -611,7 +705,6 @@ function closeAudio() {
   if (audioDecoder) { try { audioDecoder.close(); } catch (_) {} audioDecoder = null; }
   if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
   audioNode = null; audioGain = null; audioPackets = 0;
-  $('mMute').textContent = '🔊 声音';
 }
 
 $('mStop').onclick = () => stopMirror(true);
@@ -640,9 +733,123 @@ document.querySelectorAll('.m-head button[data-clip]').forEach(b => {
   };
 });
 
+// ---------- WebRTC 方案（信令 → pion 推流 → 浏览器原生解码） ----------
+
+// 控制通道：/ws/video?mode=ctrl（仅 meta/resize + 控制事件，无视频帧）
+function openCtrlWS(serial) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}?mode=ctrl&token=${encodeURIComponent(token)}`);
+  mirrorWS = ws;
+  ws.onmessage = ev => {
+    if (typeof ev.data !== 'string') return;
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'meta') {
+      videoW = msg.width; videoH = msg.height;
+      $('mTitle').textContent = `【WebRTC】${msg.device}（${msg.width}×${msg.height}）`;
+    } else if (msg.type === 'resize') {
+      videoW = msg.width; videoH = msg.height;
+      $('mTitle').textContent = $('mTitle').textContent.replace(/（.*）/, `（${msg.width}×${msg.height}）`);
+    }
+  };
+  ws.onclose = ev => {
+    if (mirrorWS !== ws) return;
+    mirrorWS = null;
+    if (mirrorSerial) showMsg(ev.reason || '投屏流已结束');
+  };
+}
+
+// 建立观看端 PeerConnection：视频轨经 requestVideoFrameCallback 绘制到 canvas
+// （复用触摸/键盘/坐标逻辑），音频轨走隐藏 audio 元素。
+async function startWebrtcViewer(serial) {
+  const pc = new RTCPeerConnection();
+  webrtcPC = pc;
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.addTransceiver('audio', { direction: 'recvonly' });
+
+  const v = $('mVideo'), a = $('mAudio');
+  let lastDecoded = -1;
+  pc.ontrack = ev => {
+    if (webrtcPC !== pc) return;
+    // pion answer 可能不带 msid，ev.streams 可能为空，直接用 track 构造流
+    const stream = ev.streams[0] || new MediaStream([ev.track]);
+    if (ev.track.kind === 'video') {
+      v.srcObject = stream;
+      v.play().catch(() => {});
+      // 隐藏 video 的合成器会丢帧导致 rVFC 不触发，用 rAF 循环 drawImage 取解码帧
+      const drawLoop = () => {
+        if (webrtcPC !== pc) return;
+        if (v.videoWidth) {
+          const canvas = $('mCanvas');
+          if (canvas.width !== v.videoWidth || canvas.height !== v.videoHeight) {
+            canvas.width = v.videoWidth; canvas.height = v.videoHeight;
+            videoW = v.videoWidth; videoH = v.videoHeight;
+          }
+          canvas.getContext('2d').drawImage(v, 0, 0, v.videoWidth, v.videoHeight);
+        }
+        requestAnimationFrame(drawLoop);
+      };
+      requestAnimationFrame(drawLoop);
+      // 帧率统计：getStats 的 framesDecoded 增量（隐藏 video 的 totalVideoFrames
+      // 受合成器丢帧影响不可靠；rAF 回调频率也 ≠ 视频帧率）
+      const statsLoop = async () => {
+        let prev = 0;
+        while (webrtcPC === pc) {
+          await new Promise(r => setTimeout(r, 1000));
+          if (webrtcPC !== pc) return;
+          const st = await pc.getStats();
+          let decoded = 0;
+          st.forEach(s => { if (s.type === 'inbound-rtp' && s.kind === 'video') decoded = s.framesDecoded; });
+          if (lastDecoded < 0) { lastDecoded = decoded; continue; }
+          $('mStats').textContent = `${Math.max(0, decoded - prev)} fps · WebRTC`;
+          prev = decoded;
+        }
+      };
+      statsLoop();
+    } else {
+      a.srcObject = stream;
+      a.play().catch(() => {});
+    }
+  };
+  pc.onconnectionstatechange = () => {
+    if (webrtcPC === pc && ['failed', 'disconnected'].includes(pc.connectionState) && mirrorSerial) {
+      showMsg('WebRTC 连接断开');
+    }
+  };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  // 非 trickle：等 ICE gathering 完成再发 offer（内网 host candidate 直连）
+  await new Promise(res => {
+    if (pc.iceGatheringState === 'complete') return res();
+    const t = setTimeout(res, 2000);
+    pc.addEventListener('icegatheringstatechange', () => {
+      if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); }
+    });
+  });
+  const r = await api('POST', `/api/devices/${encodeURIComponent(serial)}/webrtc`, {
+    sdp: pc.localDescription.sdp, type: pc.localDescription.type,
+  });
+  if (webrtcPC !== pc) { pc.close(); return; }
+  await pc.setRemoteDescription({ type: r.type, sdp: r.sdp });
+}
+
+function closeWebrtcViewer() {
+  if (webrtcPC) { try { webrtcPC.close(); } catch (_) {} webrtcPC = null; }
+  $('mVideo').srcObject = null;
+  const a = $('mAudio');
+  a.pause(); a.srcObject = null;
+}
+
+// WebRTC 音频自动播放被浏览器策略拦截时，点击画面恢复
+$('mCanvas').addEventListener('click', () => {
+  const a = $('mAudio');
+  if (webrtcMode && a.srcObject && a.paused) a.play().catch(() => {});
+});
+
 function stopMirror(callApi) {
   if (mirrorWS) { mirrorWS.onclose = null; mirrorWS.close(); mirrorWS = null; }
   if (mirrorDecoder) { try { mirrorDecoder.close(); } catch (_) {} mirrorDecoder = null; }
+  closeWebrtcViewer();
   closeAudio();
   if (callApi && mirrorSerial) api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {});
   mirrorSerial = null;
