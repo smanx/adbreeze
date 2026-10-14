@@ -1,0 +1,125 @@
+# ADBreeze
+
+**轻风般的跨平台 ADB 控制中心** —— 一个二进制文件，在 Windows / macOS / Linux / Docker / Android 上运行，通过浏览器完成对任意 Android 设备的全部控制：投屏、反向触控、终端、文件管理、剪贴板、截图、APK 安装。
+
+> 本地只跑 ADB，所有功能 UI 全部在 Web 上。
+
+## 特性
+
+- **实时投屏**：基于 scrcpy 协议（H.264），浏览器 WebCodecs 硬解，延迟约 100ms；一路流支持多观众
+- **反向控制**：鼠标点击/拖动/滚轮、PC 键盘直接操作设备；旋转屏幕自适应（服务端解析 SPS 实时跟踪分辨率）
+- **设备剪贴板互通**：读取/写入设备剪贴板，一键复制到本机
+- **交互终端**：原生 PTY shell，前端 xterm.js 完整支持 vim/top 等交互程序
+- **文件管理**：目录浏览、上传下载、删除、新建（原生 adb sync 协议实现）
+- **截图 / APK 安装**：一键 screencap 下载 PNG；浏览器拖入 APK 直接安装
+- **批量命令**：勾选多台设备并行执行 shell
+- **设备热插拔**：`host:track-devices` 长连接监听，设备上下线实时推送
+- **单文件交付**：前端与 scrcpy-server 全部嵌入二进制，部署 = 拷贝一个文件（约 10MB）
+- **adb server 自愈**：检测到 adb server 消失时自动拉起
+
+## 架构
+
+```
+浏览器 (Web UI)
+   │  REST（控制） + WebSocket（视频流 / 终端 / 事件）
+   ▼
+ADBreeze 服务进程（Go 单二进制）
+   ├── ADB 层 ──── adb server（5037，smart socket 协议原生实现）
+   ├── scrcpy 层 ── 设备端 scrcpy-server.jar（sync push → 隧道 → client 协议解析）
+   └── 设备：USB / adb connect 网络 / 本机自身
+```
+
+- **ADB 层**：不依赖 `adb` 子进程（除启动 server 外），原生实现 smart socket（`host:transport` / `host:track-devices` / forward / reverse）与 sync 协议（SEND/DATA/DONE、LIST/RECV）
+- **投屏**：嵌入 `scrcpy-server` v2.4，reverse 隧道优先（无连接竞态）、forward 自动回退；视频流经 Hub 扇出给多个 WebSocket 订阅者，新订阅者自动补发 SPS/PPS 并对齐关键帧
+- **鉴权**：全接口 token 校验（constant-time 比较），WebSocket 走 query 参数
+
+## 快速开始
+
+```powershell
+# 构建（Go 1.22+）
+go build -o bin/adbreeze.exe ./cmd/adbreeze
+
+# 运行（token 随机生成并打印在控制台）
+.\bin\adbreeze.exe
+
+# 或指定端口与 token
+.\bin\adbreeze.exe -addr :8000 -token my-secret
+```
+
+浏览器打开 `http://localhost:8000`，填入 token 即可使用。
+
+设备接入：
+
+```powershell
+adb connect 192.168.1.20:5555   # 网络设备（也可在网页上连接）
+# USB 设备插上即出现在列表
+```
+
+### Docker
+
+```bash
+docker build -t adbreeze .
+docker run -p 8000:8000 adbreeze -token my-secret
+# 容器内自带 adb，可 adb connect 管理网络设备
+```
+
+### 交叉编译（六平台单文件）
+
+```bash
+make build-all   # windows/amd64 arm64 · darwin/amd64 arm64 · linux/amd64 arm64
+```
+
+### Android（Termux）
+
+```bash
+pkg install android-tools
+./adbreeze-linux-arm64          # 运行服务
+adb connect 127.0.0.1:5555      # 无线调试自连
+```
+
+## API 概览
+
+所有接口需 Header `X-Auth-Token`（或 query `?token=`）。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/devices` | 设备列表 |
+| POST / DELETE | `/api/devices/connect`、`/api/devices/{serial}` | 网络设备连接 / 断开 |
+| POST | `/api/devices/{serial}/shell` | 执行一次性命令 |
+| POST / DELETE | `/api/devices/{serial}/mirror` | 投屏启动 / 停止 |
+| WS | `/ws/video/{serial}` | 视频流（下行二进制帧，上行 JSON 控制事件） |
+| WS | `/ws/term/{serial}` | 交互终端 |
+| WS | `/ws/events` | 设备上下线推送 |
+| GET/PUT/DELETE | `/api/devices/{serial}/files` | 文件浏览 / 上传 / 删除 |
+| GET/POST | `/api/devices/{serial}/clipboard` | 剪贴板读取 / 写入 |
+| GET | `/api/devices/{serial}/screenshot` | 截图 PNG |
+| POST | `/api/devices/{serial}/install` | APK 安装 |
+
+## 安全提示
+
+ADB 意味着设备的**完全控制权**。token 务必妥善保管，服务默认面向内网使用；公网部署请置于反向代理之后并启用 TLS。
+
+## 目录结构
+
+```
+adbreeze/
+├── cmd/adbreeze/          # 入口
+├── internal/
+│   ├── adb/               # adb server 协议（smart socket + sync）
+│   ├── scrcpy/            # 投屏（server 生命周期 / 协议解析 / ControlMessage / SPS）
+│   ├── api/               # REST + WebSocket + 静态前端
+│   ├── auth/              # token 鉴权
+│   └── config/            # 命令行配置
+├── web/dist/              # 前端（embed 进二进制）
+├── vendor-bin/            # 内嵌 scrcpy-server jar
+├── Dockerfile / Makefile / .github/workflows/release.yml
+```
+
+## 致谢
+
+- [scrcpy](https://github.com/Genymobile/scrcpy)（Apache-2.0）—— 投屏核心 `scrcpy-server` 与协议参考
+- [ws-scrcpy](https://github.com/DeviceFarmer/ws-scrcpy) —— 协议实现的参考资料
+
+## License
+
+Apache-2.0

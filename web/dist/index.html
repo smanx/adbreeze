@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADBreeze</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, "Segoe UI", "PingFang SC", sans-serif; margin: 0; background: #f6f7f9; color: #1c1e21; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #65676b; font-size: 13px; margin: 0 0 24px; }
+  section { background: #fff; border: 1px solid #e4e6eb; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  input, select { padding: 7px 10px; border: 1px solid #ccd0d5; border-radius: 6px; font-size: 14px; margin: 4px 8px 4px 0; }
+  input { width: 260px; }
+  button { padding: 7px 14px; border: 0; border-radius: 6px; background: #0f9d58; color: #fff; font-size: 14px; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: #e4e6eb; color: #1c1e21; }
+  button.danger { background: #e8463a; }
+  ul { list-style: none; padding: 0; margin: 8px 0 0; }
+  li { padding: 8px 10px; border-bottom: 1px solid #f0f2f5; font-size: 14px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .state { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #e8f5e9; color: #1b5e20; }
+  .state.off { background: #fbe9e7; color: #b71c1c; }
+  pre { background: #f6f7f9; border: 1px solid #e4e6eb; border-radius: 6px; padding: 10px; font-size: 13px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .hint { font-size: 12px; color: #8a8d91; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td, th { padding: 6px 8px; border-bottom: 1px solid #f0f2f5; text-align: left; }
+  td.name { cursor: pointer; color: #0b57d0; }
+
+  /* 投屏浮层 */
+  #mirror { position: fixed; inset: 0; background: rgba(0,0,0,.86); display: flex; flex-direction: column; z-index: 10; }
+  #mirror[hidden] { display: none; }
+  .m-head { display: flex; align-items: center; gap: 8px; padding: 10px 16px; color: #fff; flex-wrap: wrap; }
+  .m-title { font-size: 15px; flex: 1; min-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-head button { background: #2c2e31; color: #e8eaed; }
+  .m-head button.danger { background: #e8463a; color: #fff; }
+  .m-stats { font-size: 12px; color: #9fe8bf; font-variant-numeric: tabular-nums; }
+  .m-body { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 0 16px 16px; }
+  #mCanvas { max-width: 100%; max-height: 100%; background: #000; border-radius: 6px; touch-action: none; outline: none; }
+  .m-msg { color: #ffd7d2; font-size: 14px; text-align: center; padding: 12px; }
+  .m-term-wrap { height: 380px; padding: 0 16px 16px; }
+  .m-term-wrap > div { height: 100%; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ADBreeze 控制台</h1>
+  <p class="sub" id="sub">M4：投屏控制 / 终端 / 文件 / 剪贴板 / 截图 / APK 安装 / 批量命令。</p>
+
+  <section>
+    <h2>鉴权</h2>
+    <div class="row">
+      <input id="token" placeholder="API Token（服务启动时打印）" style="width:340px">
+      <button id="save">保存</button>
+      <span class="hint" id="connState"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>设备列表 <span class="hint">（实时推送）</span></h2>
+    <ul id="devices"><li>未连接</li></ul>
+    <div class="row" style="margin-top:12px">
+      <input id="addr" placeholder="192.168.1.20:5555">
+      <button id="connect">连接网络设备</button>
+      <span class="hint">当前设备：</span>
+      <select id="curSerial" style="width:220px"><option value="">— 选择设备 —</option></select>
+      <input type="file" id="apkFile" accept=".apk" style="display:none">
+      <button id="batchBtn" class="ghost">批量命令</button>
+    </div>
+    <div id="batchBox" hidden style="margin-top:10px; background:#f6f7f9; border:1px solid #e4e6eb; border-radius:6px; padding:10px;">
+      <div class="row">
+        <input id="batchCmd" placeholder="对勾选设备并行执行的命令" style="width:340px">
+        <button id="batchRun">执行</button>
+        <span class="hint" id="batchHint"></span>
+      </div>
+      <pre id="batchOut" style="max-height:180px"># 勾选设备后执行</pre>
+    </div>
+  </section>
+
+  <section>
+    <h2>终端</h2>
+    <div class="row">
+      <button id="termOpen">打开终端</button>
+      <button id="termClose" class="ghost">关闭</button>
+      <span class="hint" id="termState"></span>
+    </div>
+    <div id="termBox" style="height:360px; margin-top:8px; border:1px solid #e4e6eb; border-radius:6px; padding:4px;"></div>
+  </section>
+
+  <section>
+    <h2>文件管理</h2>
+    <div class="row">
+      <input id="filePath" placeholder="/sdcard" style="width:320px" value="/sdcard">
+      <button id="fileRefresh">刷新</button>
+      <button id="fileMkdir" class="ghost">新建目录</button>
+      <input type="file" id="fileUpload" style="display:none">
+      <button id="fileUploadBtn" class="ghost">上传文件</button>
+    </div>
+    <table id="fileTable"><thead><tr><th>名称</th><th>大小</th><th>操作</th></tr></thead><tbody><tr><td colspan="3" class="hint">选择设备后刷新</td></tr></tbody></table>
+  </section>
+
+  <section>
+    <h2>Shell（一次性命令）</h2>
+    <div class="row">
+      <input id="cmd" placeholder="如 getprop ro.product.model" style="width:420px">
+      <button id="run">执行</button>
+    </div>
+    <pre id="out"># 输出</pre>
+  </section>
+</div>
+
+<!-- 投屏浮层 -->
+<div id="mirror" hidden>
+  <div class="m-head">
+    <span class="m-title" id="mTitle">投屏</span>
+    <span class="m-stats" id="mStats"></span>
+    <button data-op="back">返回</button>
+    <button data-op="home">主页</button>
+    <button data-op="menu">菜单</button>
+    <button data-op="notify">通知</button>
+    <button data-op="power">电源</button>
+    <button data-op="rotate">旋转</button>
+    <button data-clip="get">取剪贴板</button>
+    <button data-clip="paste">粘贴到设备</button>
+    <button class="danger" id="mStop">停止</button>
+  </div>
+  <div class="m-body"><canvas id="mCanvas" width="720" height="1280"></canvas></div>
+  <div class="m-msg" id="mMsg" hidden></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let token = localStorage.getItem('ADBreeze-token') || '';
+$('token').value = token;
+let devices = [];
+
+async function api(method, url, body, raw) {
+  const res = await fetch(url, {
+    method,
+    headers: { 'X-Auth-Token': token, 'Content-Type': 'application/json' },
+    body: body !== undefined && !raw ? JSON.stringify(body) : body,
+  });
+  if (raw) return res;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+// ---------- 设备列表 ----------
+function renderDevices(devs) {
+  devices = devs || [];
+  if (!devices.length) { $('devices').innerHTML = '<li class="hint">无设备</li>'; }
+  else {
+    $('devices').innerHTML = devices.filter(d => d.state === 'device').map(d =>
+      `<li><span><input type="checkbox" class="devchk" value="${d.serial}">
+        ${d.serial}</span>
+        <span class="row">
+          ${d.model ? `<span class="hint">${d.model}</span>` : ''}
+          <span class="state">device</span>
+          <button onclick="startMirror('${d.serial}')">投屏</button>
+          <button class="ghost" onclick="screenshot('${d.serial}')">截图</button>
+          <button class="ghost" onclick="installApk('${d.serial}')">装APK</button>
+          ${d.serial.includes(':') ? `<button class="danger" onclick="disconnect('${d.serial}')">断开</button>` : ''}
+        </span></li>`).join('') || '<li class="hint">无在线设备</li>';
+  }
+  const sel = $('curSerial');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— 选择设备 —</option>' +
+    devices.filter(d => d.state === 'device').map(d => `<option value="${d.serial}">${d.serial}</option>`).join('');
+  if (cur) sel.value = cur;
+}
+window.useSerial = s => { $('curSerial').value = s; };
+
+// ---------- 截图 / APK 安装 ----------
+window.screenshot = serial => {
+  window.open(`/api/devices/${encodeURIComponent(serial)}/screenshot?token=${encodeURIComponent(token)}`);
+};
+window.installApk = serial => {
+  $('apkFile').value = '';
+  $('apkFile').onchange = async () => {
+    const f = $('apkFile').files[0];
+    if (!f) return;
+    if (!confirm(`安装 ${f.name} (${(f.size / 1048576).toFixed(1)} MB) 到 ${serial} ?`)) return;
+    $('batchHint').textContent = '安装中…';
+    try {
+      const res = await fetch(`/api/devices/${encodeURIComponent(serial)}/install`, {
+        method: 'POST', headers: { 'X-Auth-Token': token }, body: f,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.status);
+      alert('安装完成：' + (data.output || '').trim());
+    } catch (e) { alert('安装失败: ' + e.message); }
+  };
+  $('apkFile').click();
+};
+
+// ---------- 批量命令 ----------
+$('batchBtn').onclick = () => { $('batchBox').hidden = !$('batchBox').hidden; };
+$('batchRun').onclick = async () => {
+  const cmd = $('batchCmd').value.trim();
+  const serials = [...document.querySelectorAll('.devchk:checked')].map(c => c.value);
+  if (!cmd || !serials.length) { $('batchHint').textContent = '勾选设备并输入命令'; return; }
+  $('batchHint').textContent = `并行执行于 ${serials.length} 台设备…`;
+  $('batchOut').textContent = '';
+  await Promise.all(serials.map(async serial => {
+    try {
+      const r = await api('POST', `/api/devices/${encodeURIComponent(serial)}/shell`, { command: cmd });
+      $('batchOut').textContent += `\n==== ${serial} ====\n${r.output || '(无输出)'}`;
+    } catch (e) {
+      $('batchOut').textContent += `\n==== ${serial} ====\n[错误] ${e.message}`;
+    }
+  }));
+  $('batchHint').textContent = '完成';
+};
+
+async function loadDevices() {
+  try {
+    const h = await fetch('/api/health').then(r => r.json()).catch(() => null);
+    if (h && h.version) $('sub').textContent += ` · v${h.version}`;
+    renderDevices(await api('GET', '/api/devices'));
+    $('connState').textContent = '已连接';
+  } catch (e) {
+    $('connState').textContent = '失败: ' + e.message;
+    $('devices').innerHTML = '<li class="hint">加载失败，请检查 Token</li>';
+  }
+}
+
+let evtSource = null;
+function watchEvents() {
+  if (evtSource) evtSource.close();
+  evtSource = new WebSocket(`ws://${location.host}/ws/events?token=${encodeURIComponent(token)}`);
+  evtSource.onmessage = ev => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'devices') renderDevices(msg.devices);
+    } catch (_) {}
+  };
+}
+
+$('save').onclick = () => {
+  token = $('token').value.trim();
+  localStorage.setItem('ADBreeze-token', token);
+  loadDevices(); watchEvents();
+};
+
+$('connect').onclick = async () => {
+  const address = $('addr').value.trim();
+  if (!address) return;
+  try { await api('POST', '/api/devices/connect', { address }); loadDevices(); }
+  catch (e) { alert('连接失败: ' + e.message); }
+};
+window.disconnect = async serial => {
+  try { await api('DELETE', '/api/devices/' + encodeURIComponent(serial)); loadDevices(); }
+  catch (e) { alert('断开失败: ' + e.message); }
+};
+
+$('run').onclick = async () => {
+  const serial = $('curSerial').value, command = $('cmd').value.trim();
+  if (!serial || !command) return;
+  $('out').textContent = '# 执行中...';
+  try {
+    const r = await api('POST', `/api/devices/${encodeURIComponent(serial)}/shell`, { command });
+    $('out').textContent = r.output || '(无输出)';
+  } catch (e) { $('out').textContent = '# 错误: ' + e.message; }
+};
+
+// ---------- 投屏 + 反向控制 ----------
+let mirrorWS = null, mirrorDecoder = null, mirrorSerial = null;
+let videoW = 720, videoH = 1280;
+
+window.startMirror = async function (serial) {
+  if (!('VideoDecoder' in window)) { alert('当前浏览器不支持 WebCodecs，请使用 Chrome / Edge 94+'); return; }
+  mirrorSerial = serial;
+  videoW = 720; videoH = 1280;
+  $('mirror').hidden = false;
+  $('mTitle').textContent = serial + ' — 连接中…';
+  $('mStats').textContent = '';
+  showMsg('');
+  $('mCanvas').focus();
+  try {
+    await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`);
+    openVideoWS(serial);
+  } catch (e) {
+    showMsg('启动投屏失败: ' + e.message);
+  }
+};
+
+$('mStop').onclick = () => stopMirror(true);
+document.querySelectorAll('.m-head button[data-op]').forEach(b => {
+  b.onclick = () => wsSend({ type: 'op', name: b.dataset.op });
+});
+document.querySelectorAll('.m-head button[data-clip]').forEach(b => {
+  b.onclick = async () => {
+    if (!mirrorSerial) return;
+    const u = `/api/devices/${encodeURIComponent(mirrorSerial)}/clipboard`;
+    try {
+      if (b.dataset.clip === 'get') {
+        const r = await api('GET', u);
+        if (!r.text) { showMsg('剪贴板为空'); return; }
+        showMsg('设备剪贴板: ' + r.text);
+        try { await navigator.clipboard.writeText(r.text); showMsg('已复制到本机: ' + r.text); } catch (_) {}
+      } else {
+        let text = '';
+        try { text = await navigator.clipboard.readText(); } catch (_) {}
+        if (!text) text = prompt('输入要写入设备剪贴板的文本：') || '';
+        if (!text) return;
+        await api('POST', u, { text, paste: true });
+        showMsg('已写入设备剪贴板并粘贴');
+      }
+    } catch (e) { showMsg('剪贴板操作失败: ' + e.message); }
+  };
+});
+
+function stopMirror(callApi) {
+  if (mirrorWS) { mirrorWS.onclose = null; mirrorWS.close(); mirrorWS = null; }
+  if (mirrorDecoder) { try { mirrorDecoder.close(); } catch (_) {} mirrorDecoder = null; }
+  if (callApi && mirrorSerial) api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {});
+  mirrorSerial = null;
+  $('mirror').hidden = true;
+}
+
+function showMsg(text) {
+  $('mMsg').hidden = !text;
+  $('mMsg').textContent = text;
+}
+
+function wsSend(obj) { if (mirrorWS && mirrorWS.readyState === 1) mirrorWS.send(JSON.stringify(obj)); }
+
+function openVideoWS(serial) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}?token=${encodeURIComponent(token)}`);
+  ws.binaryType = 'arraybuffer';
+  mirrorWS = ws;
+
+  let configData = null, started = false, keySeen = false;
+  let frameCount = 0, byteCount = 0, lastTick = performance.now();
+
+  ws.onmessage = ev => {
+    if (typeof ev.data === 'string') {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'meta') {
+        videoW = msg.width; videoH = msg.height;
+        $('mTitle').textContent = `${msg.device}（${msg.width}×${msg.height}）`;
+      } else if (msg.type === 'resize') {
+        videoW = msg.width; videoH = msg.height;
+        $('mTitle').textContent = $('mTitle').textContent.replace(/（.*）/, `（${msg.width}×${msg.height}）`);
+      }
+      return;
+    }
+    const buf = new Uint8Array(ev.data);
+    if (buf.length < 9) return;
+    const flags = buf[0];
+    const pts = Number(new DataView(buf.buffer, buf.byteOffset).getBigUint64(1));
+    const payload = buf.subarray(9);
+    if (!(flags & 1)) { frameCount++; byteCount += payload.length; }
+    const now = performance.now();
+    if (now - lastTick >= 1000) {
+      $('mStats').textContent = `${frameCount} fps · ${(byteCount * 8 / 1e6).toFixed(1)} Mbps`;
+      frameCount = 0; byteCount = 0; lastTick = now;
+    }
+
+    const isConfig = flags & 1, isKey = flags & 2;
+    if (isConfig) { configData = payload; return; }
+    if (isKey) keySeen = true;
+    if (!keySeen) return;
+
+    if (!started) {
+      let codec = 'avc1.640029';
+      const sps = findNAL(configData, 7);
+      if (sps && sps.length >= 4) {
+        codec = 'avc1.' + [sps[1], sps[2], sps[3]].map(b => b.toString(16).padStart(2, '0')).join('');
+      }
+      mirrorDecoder = new VideoDecoder({
+        output: frame => {
+          const canvas = $('mCanvas');
+          if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+            canvas.width = frame.displayWidth; canvas.height = frame.displayHeight;
+          }
+          canvas.getContext('2d').drawImage(frame, 0, 0);
+          frame.close();
+        },
+        error: e => showMsg('解码错误: ' + e.message),
+      });
+      mirrorDecoder.configure({ codec, optimizeForLatency: true });
+      started = true;
+    }
+    if (mirrorDecoder.state !== 'configured') return;
+    const data = (isKey && configData) ? concat(configData, payload) : payload;
+    try {
+      mirrorDecoder.decode(new EncodedVideoChunk({
+        type: isKey ? 'key' : 'delta',
+        timestamp: pts,
+        data,
+      }));
+    } catch (e) {
+      showMsg('解码异常: ' + e.message);
+    }
+  };
+
+  ws.onclose = ev => {
+    if (mirrorWS !== ws) return;
+    mirrorWS = null;
+    if (mirrorSerial) showMsg(ev.reason || '投屏流已结束');
+  };
+}
+
+// 触摸 / 滚动 / 键盘（视频像素坐标）
+const canvas = $('mCanvas');
+function videoCoords(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: Math.max(0, Math.min(videoW - 1, Math.round((e.clientX - rect.left) * videoW / rect.width))),
+    y: Math.max(0, Math.min(videoH - 1, Math.round((e.clientY - rect.top) * videoH / rect.height))),
+  };
+}
+canvas.addEventListener('pointerdown', e => {
+  canvas.setPointerCapture(e.pointerId);
+  const p = videoCoords(e);
+  wsSend({ type: 'touch', action: 'down', x: p.x, y: p.y, pid: e.pointerId });
+});
+canvas.addEventListener('pointermove', e => {
+  if (e.buttons || (e.pressure && e.pressure > 0)) {
+    const p = videoCoords(e);
+    wsSend({ type: 'touch', action: 'move', x: p.x, y: p.y, pid: e.pointerId });
+  }
+});
+canvas.addEventListener('pointerup', e => {
+  const p = videoCoords(e);
+  wsSend({ type: 'touch', action: 'up', x: p.x, y: p.y, pid: e.pointerId });
+});
+canvas.addEventListener('pointercancel', e => {
+  const p = videoCoords(e);
+  wsSend({ type: 'touch', action: 'up', x: p.x, y: p.y, pid: e.pointerId });
+});
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const p = videoCoords(e);
+  wsSend({ type: 'scroll', x: p.x, y: p.y, dx: Math.sign(e.deltaX), dy: Math.sign(e.deltaY) });
+}, { passive: false });
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// 浏览器按键 → Android keycode
+const KEYMAP = {
+  Enter: 66, Backspace: 67, Tab: 61, Escape: 111,
+  ArrowUp: 19, ArrowDown: 20, ArrowLeft: 21, ArrowRight: 22,
+  Home: 122, End: 123, PageUp: 92, PageDown: 93,
+  Delete: 112, Insert: 124, VolumeUp: 24, VolumeDown: 25,
+};
+function androidKeyFor(e) {
+  if (e.key in KEYMAP) return KEYMAP[e.key];
+  if (e.key.length === 1) {
+    const c = e.key;
+    if (c >= 'a' && c <= 'z') return 29 + c.charCodeAt(0) - 97;
+    if (c >= 'A' && c <= 'Z') return 29 + c.charCodeAt(0) - 65;
+    if (c >= '0' && c <= '9') return 7 + Number(c);
+    if (c === ' ') return 62;
+    if (c === '@') return 77; if (c === '*') return 17; if (c === '#') return 18;
+  }
+  return null;
+}
+function metaOf(e) {
+  let m = 0;
+  if (e.shiftKey) m |= 1; if (e.ctrlKey) m |= 0x1000; if (e.altKey) m |= 2;
+  return m;
+}
+canvas.addEventListener('keydown', e => {
+  const code = androidKeyFor(e);
+  if (code === null) return;
+  e.preventDefault();
+  wsSend({ type: 'key', action: 'down', code, meta: metaOf(e) });
+});
+canvas.addEventListener('keyup', e => {
+  const code = androidKeyFor(e);
+  if (code === null) return;
+  e.preventDefault();
+  wsSend({ type: 'key', action: 'up', code, meta: metaOf(e) });
+});
+
+function findNAL(data, type) {
+  if (!data) return null;
+  for (let i = 0; i + 4 < data.length; i++) {
+    if (data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 1) {
+      const nal = data[i + 3];
+      if ((nal & 0x1f) === type) return data.subarray(i + 3);
+    }
+  }
+  return null;
+}
+function concat(a, b) {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a); out.set(b, a.length);
+  return out;
+}
+
+// ---------- 终端 ----------
+let termWS = null, term = null;
+$('termOpen').onclick = () => {
+  const serial = $('curSerial').value;
+  if (!serial) { $('termState').textContent = '请先选择设备'; return; }
+  if (termWS) termWS.close();
+  if (!term) {
+    if (!window.Terminal) {
+      $('termState').textContent = 'xterm.js 加载失败（CDN 不可达）';
+      return;
+    }
+    term = new window.Terminal({ cursorBlink: true, fontSize: 14, theme: { background: '#101418' } });
+    term.open($('termBox'));
+    term.onData(d => {
+      if (termWS && termWS.readyState === 1) termWS.send(JSON.stringify({ type: 'input', data: d }));
+    });
+  }
+  term.reset();
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/term/${encodeURIComponent(serial)}?token=${encodeURIComponent(token)}`);
+  ws.binaryType = 'arraybuffer';
+  termWS = ws;
+  $('termState').textContent = '连接中…';
+  ws.onopen = () => $('termState').textContent = '已连接 ' + serial;
+  ws.onmessage = ev => {
+    const text = typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(new Uint8Array(ev.data));
+    term.write(text);
+  };
+  ws.onclose = ev => {
+    if (termWS !== ws) return;
+    termWS = null;
+    $('termState').textContent = '已断开' + (ev.reason ? '：' + ev.reason : '');
+  };
+  ws.onerror = () => { $('termState').textContent = '连接失败'; };
+};
+$('termClose').onclick = () => { if (termWS) { termWS.close(); termWS = null; } };
+
+// ---------- 文件管理 ----------
+function fmtSize(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+}
+
+async function listFiles() {
+  const serial = $('curSerial').value;
+  const p = $('filePath').value.trim() || '/';
+  if (!serial) { $('fileTable').tBodies[0].innerHTML = '<tr><td colspan="3" class="hint">请先选择设备</td></tr>'; return; }
+  $('fileTable').tBodies[0].innerHTML = '<tr><td colspan="3" class="hint">加载中…</td></tr>';
+  try {
+    const entries = await api('GET', `/api/devices/${encodeURIComponent(serial)}/files?path=${encodeURIComponent(p)}`);
+    if (!entries.length) { $('fileTable').tBodies[0].innerHTML = '<tr><td colspan="3" class="hint">空目录</td></tr>'; return; }
+    $('fileTable').tBodies[0].innerHTML = entries.map(e => {
+      const full = (p === '/' ? '' : p) + '/' + e.name;
+      const nameCell = e.dir
+        ? `<td class="name" onclick="$('filePath').value='${full}';listFiles()">📁 ${e.name}</td>`
+        : `<td>${e.name}</td>`;
+      const ops = e.dir
+        ? `<button class="ghost" onclick="$('filePath').value='${full}';listFiles()">进入</button>`
+        : `<button class="ghost" onclick="downloadFile('${full}')">下载</button>`;
+      return `<tr>${nameCell}<td>${e.dir ? '目录' : fmtSize(Number(e.size))}</td>
+        <td class="row">${ops}<button class="danger" onclick="deleteFile('${full}')">删除</button></td></tr>`;
+    }).join('');
+  } catch (e) {
+    $('fileTable').tBodies[0].innerHTML = `<tr><td colspan="3" class="hint">失败: ${e.message}</td></tr>`;
+  }
+}
+$('fileRefresh').onclick = listFiles;
+window.listFiles = listFiles;
+
+window.downloadFile = p => {
+  const serial = $('curSerial').value;
+  window.open(`/api/devices/${encodeURIComponent(serial)}/files/content?path=${encodeURIComponent(p)}&token=${encodeURIComponent(token)}`);
+};
+window.deleteFile = async p => {
+  const serial = $('curSerial').value;
+  if (!confirm('删除 ' + p + ' ?')) return;
+  try { await api('DELETE', `/api/devices/${encodeURIComponent(serial)}/files?path=${encodeURIComponent(p)}`); listFiles(); }
+  catch (e) { alert('删除失败: ' + e.message); }
+};
+$('fileMkdir').onclick = async () => {
+  const serial = $('curSerial').value;
+  const name = prompt('目录名：');
+  if (!serial || !name) return;
+  const base = $('filePath').value.trim() || '/';
+  try {
+    await api('POST', `/api/devices/${encodeURIComponent(serial)}/files/mkdir?path=${encodeURIComponent((base === '/' ? '' : base) + '/' + name)}`);
+    listFiles();
+  } catch (e) { alert('创建失败: ' + e.message); }
+};
+$('fileUploadBtn').onclick = () => { if (!$('curSerial').value) { alert('请先选择设备'); return; } $('fileUpload').click(); };
+$('fileUpload').onchange = async () => {
+  const serial = $('curSerial').value;
+  const f = $('fileUpload').files[0];
+  if (!f) return;
+  const base = $('filePath').value.trim() || '/';
+  $('fileUploadBtn').textContent = '上传中…';
+  try {
+    const res = await fetch(`/api/devices/${encodeURIComponent(serial)}/files?path=${encodeURIComponent((base === '/' ? '' : base) + '/' + f.name)}`, {
+      method: 'PUT', headers: { 'X-Auth-Token': token }, body: f,
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status);
+    listFiles();
+  } catch (e) { alert('上传失败: ' + e.message); }
+  $('fileUploadBtn').textContent = '上传文件';
+  $('fileUpload').value = '';
+};
+
+$('curSerial').onchange = () => { listFiles(); };
+
+if (token) { loadDevices(); watchEvents(); }
+</script>
+</body>
+</html>
