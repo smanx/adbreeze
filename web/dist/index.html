@@ -404,6 +404,16 @@ function setupAudio(opusHead) {
     registerProcessor('adbreeze-player', ADBreezePlayer);
   `;
   audioCtx = new AudioContext({ sampleRate });
+  // 自动播放策略可能挂起 Context：挂在 canvas 点击上恢复
+  const resumeAudio = () => {
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  };
+  canvas.addEventListener('click', resumeAudio);
+  $('mStop').addEventListener('click', () => canvas.removeEventListener('click', resumeAudio), { once: true });
+  audioCtx.onstatechange = () => {
+    if (audioCtx && audioCtx.state === 'suspended') showMsg('浏览器限制了自动播放——点击画面即可恢复声音');
+    else showMsg('');
+  };
   audioCtx.resume().catch(() => {});
   const blob = new Blob([workletCode], { type: 'application/javascript' });
   audioCtx.audioWorklet.addModule(URL.createObjectURL(blob)).then(() => {
@@ -416,6 +426,11 @@ function setupAudio(opusHead) {
 function pushAudio(audioData) {
   const n = audioData.numberOfFrames, ch = audioData.numberOfChannels;
   const planes = [];
+  if (audioData.format !== 'f32-planar') {
+    if (!pushAudio.warned) { showMsg('音频格式不支持: ' + audioData.format); pushAudio.warned = true; }
+    audioData.close();
+    return;
+  }
   const src = new Float32Array(audioData.data); // f32-planar
   for (let c = 0; c < ch; c++) {
     planes.push(src.slice(c * n, (c + 1) * n));

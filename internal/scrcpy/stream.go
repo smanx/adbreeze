@@ -387,13 +387,12 @@ func (s *Stream) openForward(deps streamDeps, scid uint32, serverVersion string,
 	}
 
 	// tunnel_forward=true，server 监听等待连入。
-	// 给 app_process 一点启动时间再 dial：过早的 dial 会在 adbd 转发层
-	// 留下半途连接，与 Java 端 accept 序列错位（实测导致 control 错位）。
+	// connectWithDummy 收到 dummy 即代表 server 已监听并 accept 了 video，
+	// 其后的 audio/control dial 必然命中同一个 LocalServerSocket，无需盲等。
 	if err := s.launchServer(deps, scid, serverVersion, opts, true, capture); err != nil {
 		s.Stop()
 		return nil, err
 	}
-	time.Sleep(2 * time.Second)
 
 	conn, err := connectWithDummy(s.tunnelPort, dialAttempts, dialInterval)
 	if err != nil {
