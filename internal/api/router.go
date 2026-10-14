@@ -51,6 +51,7 @@ func New(token, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS 
 	events := http.NewServeMux()
 	events.HandleFunc("GET /ws/events", s.handleEvents)
 	events.HandleFunc("GET /ws/video/{serial}", s.handleVideo)
+	events.HandleFunc("GET /ws/audio/{serial}", s.handleAudio)
 	events.HandleFunc("GET /ws/term/{serial}", s.handleTerm)
 	mux.Handle("/ws/", auth.Middleware(s.token, events))
 

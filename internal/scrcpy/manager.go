@@ -23,6 +23,7 @@ type Options struct {
 	MaxFPS     int    // 帧率上限，0 表示不限
 	BitRate    int    // 视频码率 bps
 	VideoCodec string // 目前仅支持 h264
+	Audio      *bool  // 音频转发（Opus，设备播放声音采集），默认开启
 }
 
 func (o Options) withDefaults() Options {
@@ -37,6 +38,10 @@ func (o Options) withDefaults() Options {
 	}
 	if o.VideoCodec == "" {
 		o.VideoCodec = "h264"
+	}
+	if o.Audio == nil {
+		t := true
+		o.Audio = &t
 	}
 	return o
 }
@@ -190,6 +195,17 @@ func (m *Manager) WaitClipboard(serial string, timeout time.Duration) (string, e
 		return "", err
 	}
 	return s.WaitClipboard(timeout), nil
+}
+
+// SubscribeAudio 订阅设备音频流（Opus）。若音频不可用返回错误。
+func (m *Manager) SubscribeAudio(serial string) (*Subscriber, func(), []byte, error) {
+	m.mu.Lock()
+	s, ok := m.streams[serial]
+	m.mu.Unlock()
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("设备 %s 没有活跃的投屏流", serial)
+	}
+	return s.SubscribeAudio()
 }
 
 // Active 返回有活跃流的设备 serial 列表。

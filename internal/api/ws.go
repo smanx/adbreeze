@@ -139,6 +139,51 @@ func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
 		websocket.FormatCloseMessage(websocket.CloseGoingAway, "stream ended"))
 }
 
+// handleAudio 推送设备音频流（Opus，帧格式与视频一致：[flags][pts][payload]）。
+// 首条 JSON 文本消息: {"type":"meta","codec":"opus"}；配置包为 OpusHead。
+func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	sub, cancel, cachedConfig, err := s.mirror.SubscribeAudio(serial)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	defer cancel()
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	if err := conn.WriteJSON(map[string]any{"type": "meta", "codec": "opus"}); err != nil {
+		return
+	}
+	if cachedConfig != nil {
+		if !sendPacket(conn, scrcpy.Packet{Kind: scrcpy.PacketVideo, Config: true, Data: cachedConfig}) {
+			return
+		}
+	}
+
+	// 读协程：检测客户端主动断开
+	go func() {
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				cancel()
+				return
+			}
+		}
+	}()
+
+	for p := range sub.Chan() {
+		if !sendPacket(conn, p) {
+			return
+		}
+	}
+	_ = conn.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseGoingAway, "audio ended"))
+}
+
 // sendPacket 把一帧按 [flags][pts][payload] 封帧写出。
 func sendPacket(conn *websocket.Conn, p scrcpy.Packet) bool {
 	buf := make([]byte, 9, 9+len(p.Data))

@@ -86,9 +86,9 @@ func (c *Client) Reverse(serial, remote, local string) error {
 	return c.transportHostCommand(serial, "reverse:forward:"+remote+";"+local)
 }
 
-// KillReverse 移除指定反向转发。
+// KillReverse 移除指定反向转发（服务名与官方客户端一致：reverse:killforward）。
 func (c *Client) KillReverse(serial, remote string) error {
-	return c.transportHostCommand(serial, "reverse:remove:"+remote)
+	return c.transportHostCommand(serial, "reverse:killforward:"+remote)
 }
 
 // transportHostCommand 切换到指定设备后执行 host 命令（OKAY 即成功）。

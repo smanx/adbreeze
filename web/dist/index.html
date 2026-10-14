@@ -125,6 +125,7 @@
     <button data-op="rotate">旋转</button>
     <button data-clip="get">取剪贴板</button>
     <button data-clip="paste">粘贴到设备</button>
+    <button id="mMute">🔊 声音</button>
     <button class="danger" id="mStop">停止</button>
   </div>
   <div class="m-body"><canvas id="mCanvas" width="720" height="1280"></canvas></div>
@@ -284,10 +285,136 @@ window.startMirror = async function (serial) {
   try {
     await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`);
     openVideoWS(serial);
+    openAudioWS(serial);
   } catch (e) {
     showMsg('启动投屏失败: ' + e.message);
   }
 };
+
+// ---------- 音频播放（Opus → WebCodecs AudioDecoder → AudioWorklet）----------
+let audioWS = null, audioDecoder = null, audioCtx = null, audioNode = null, audioGain = null;
+
+$('mMute').onclick = () => {
+  if (!audioGain) return;
+  const muted = audioGain.gain.value > 0;
+  audioGain.gain.value = muted ? 0 : 1;
+  $('mMute').textContent = muted ? '🔇 静音' : '🔊 声音';
+};
+
+function openAudioWS(serial) {
+  closeAudio();
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/audio/${encodeURIComponent(serial)}?token=${encodeURIComponent(token)}`);
+  ws.binaryType = 'arraybuffer';
+  audioWS = ws;
+
+  ws.onerror = () => {};
+  ws.onclose = () => { if (audioWS === ws) { audioWS = null; } };
+  ws.onmessage = ev => {
+    if (typeof ev.data === 'string') return; // meta（opus）无需处理
+    const buf = new Uint8Array(ev.data);
+    if (buf.length < 9) return;
+    const flags = buf[0];
+    const pts = Number(new DataView(buf.buffer, buf.byteOffset).getBigUint64(1));
+    const payload = buf.subarray(9);
+
+    if (flags & 1) { // 配置包 = OpusHead
+      setupAudio(payload);
+      return;
+    }
+    if (audioDecoder && audioDecoder.state === 'configured') {
+      try {
+        audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: pts, data: payload }));
+      } catch (_) {}
+    }
+  };
+}
+
+function setupAudio(opusHead) {
+  if (audioDecoder) return; // 只配置一次（旋转不影响音频）
+  if (!('AudioDecoder' in window)) { showMsg('浏览器不支持 WebCodecs 音频解码'); return; }
+  // OpusHead: magic(8) version(1) channels(1) preskip(2 LE) sampleRate(4 LE) gain(2) mapping(1)
+  const channels = opusHead[9];
+  const sampleRate = new DataView(opusHead.buffer, opusHead.byteOffset).getUint32(12, true);
+  if (channels < 1 || channels > 8 || sampleRate < 8000) { showMsg('音频头解析失败'); return; }
+
+  audioDecoder = new AudioDecoder({
+    output: audioData => {
+      if (audioNode) pushAudio(audioData);
+      else audioData.close();
+    },
+    error: e => showMsg('音频解码错误: ' + e.message),
+  });
+  audioDecoder.configure({
+    codec: 'opus',
+    sampleRate,
+    numberOfChannels: channels,
+    description: opusHead.slice(),
+  });
+
+  // AudioWorklet：环形缓冲 + 稳定拉取，抗网络抖动
+  const workletCode = `
+    class ADBreezePlayer extends AudioWorkletProcessor {
+      constructor() {
+        super();
+        this.cap = 32768;
+        this.ring = [new Float32Array(this.cap), new Float32Array(this.cap)];
+        this.w = 0; this.r = 0; this.count = 0;
+        this.port.onmessage = e => {
+          const planes = e.data;
+          const n = planes[0].length;
+          for (let j = 0; j < n; j++) {
+            for (let c = 0; c < planes.length && c < this.ring.length; c++) {
+              this.ring[c][this.w] = planes[c][j];
+            }
+            this.w = (this.w + 1) % this.cap;
+            if (this.count < this.cap) this.count++;
+          }
+        };
+      }
+      process(inputs, outputs) {
+        const out = outputs[0];
+        const frames = out[0].length;
+        for (let j = 0; j < frames; j++) {
+          for (let c = 0; c < out.length && c < this.ring.length; c++) {
+            if (this.count > 0) { out[c][j] = this.ring[c][this.r]; this.r = (this.r + 1) % this.cap; }
+            else out[c][j] = 0;
+          }
+          if (this.count > 0) this.count--;
+        }
+        return true;
+      }
+    }
+    registerProcessor('adbreeze-player', ADBreezePlayer);
+  `;
+  audioCtx = new AudioContext({ sampleRate });
+  audioCtx.resume().catch(() => {});
+  const blob = new Blob([workletCode], { type: 'application/javascript' });
+  audioCtx.audioWorklet.addModule(URL.createObjectURL(blob)).then(() => {
+    audioNode = new AudioWorkletNode(audioCtx, 'adbreeze-player', { outputChannelCount: [channels] });
+    audioGain = audioCtx.createGain();
+    audioNode.connect(audioGain).connect(audioCtx.destination);
+  }).catch(e => showMsg('音频播放初始化失败: ' + e.message));
+}
+
+function pushAudio(audioData) {
+  const n = audioData.numberOfFrames, ch = audioData.numberOfChannels;
+  const planes = [];
+  const src = new Float32Array(audioData.data); // f32-planar
+  for (let c = 0; c < ch; c++) {
+    planes.push(src.slice(c * n, (c + 1) * n));
+  }
+  audioData.close();
+  if (audioNode) audioNode.port.postMessage(planes, planes.map(p => p.buffer));
+}
+
+function closeAudio() {
+  if (audioWS) { audioWS.onclose = null; audioWS.close(); audioWS = null; }
+  if (audioDecoder) { try { audioDecoder.close(); } catch (_) {} audioDecoder = null; }
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+  audioNode = null; audioGain = null;
+  $('mMute').textContent = '🔊 声音';
+}
 
 $('mStop').onclick = () => stopMirror(true);
 document.querySelectorAll('.m-head button[data-op]').forEach(b => {
@@ -318,6 +445,7 @@ document.querySelectorAll('.m-head button[data-clip]').forEach(b => {
 function stopMirror(callApi) {
   if (mirrorWS) { mirrorWS.onclose = null; mirrorWS.close(); mirrorWS = null; }
   if (mirrorDecoder) { try { mirrorDecoder.close(); } catch (_) {} mirrorDecoder = null; }
+  closeAudio();
   if (callApi && mirrorSerial) api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {});
   mirrorSerial = null;
   $('mirror').hidden = true;

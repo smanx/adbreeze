@@ -12,13 +12,14 @@ import (
 
 // server 设备端文件路径（scrcpy 约定路径）。
 const (
-	serverDevicePath = "/data/local/tmp/scrcpy-server.jar"
-	dialAttempts     = 100 // forward 模式重连次数（与 scrcpy 一致）
-	dialInterval     = 100 * time.Millisecond
-	handshakeTimeout = 10 * time.Second       // 设备名/元数据读取上限
-	acceptTimeout    = 15 * time.Second       // reverse 模式等待设备回连上限
-	outputWaitOnFail = 500 * time.Millisecond // 失败时等待 server 错误输出到达
-	outputCapSize    = 8 * 1024
+	serverDevicePath   = "/data/local/tmp/scrcpy-server.jar"
+	dialAttempts       = 100 // forward 模式重连次数（与 scrcpy 一致）
+	dialInterval       = 100 * time.Millisecond
+	handshakeTimeout   = 10 * time.Second       // 设备名/元数据读取上限
+	audioHeaderTimeout = 30 * time.Second       // 音频编码 ID 读取上限（采集初始化慢）
+	acceptTimeout      = 15 * time.Second       // reverse 模式等待设备回连上限
+	outputWaitOnFail   = 500 * time.Millisecond // 失败时等待 server 错误输出到达
+	outputCapSize      = 8 * 1024
 )
 
 // StreamInfo 是投屏流建立后的元信息。
@@ -28,6 +29,7 @@ type StreamInfo struct {
 	Codec      string `json:"codec"`
 	Width      int    `json:"width"`
 	Height     int    `json:"height"`
+	Audio      bool   `json:"audio"` // 音频流是否可用
 }
 
 // Stream 是一台设备上的一条投屏流：负责 server 生命周期、
@@ -37,10 +39,14 @@ type Stream struct {
 	hub  *Hub
 
 	videoConn   net.Conn
+	audioConn   net.Conn
 	controlConn net.Conn
 	controlMu   sync.Mutex
 	shellConn   net.Conn
 	adb         streamDeps
+
+	// 音频流（scrcpy v2 audio，独立于视频扇出）
+	audioHub *Hub
 
 	// 剪贴板（设备端下行 DeviceMessage 更新）
 	clipboardMu  sync.Mutex
@@ -52,6 +58,7 @@ type Stream struct {
 	tunnelMode string // "reverse" | "forward"
 	tunnelPort int
 	socketName string
+	t0         time.Time // 诊断：dial 开始时刻
 
 	stopOnce sync.Once
 }
@@ -94,21 +101,30 @@ func (c *outputCapture) snapshot() string {
 // push jar → 建隧道（reverse 优先，forward 回退）→ 启动 server → 握手 → 读循环。
 // 执行成功时流已在后台运行；任何一步失败都会清理现场并带回 server 输出。
 func start(deps streamDeps, serial string, jarBytes []byte, serverVersion string, opts Options) (*Stream, error) {
-	s := &Stream{hub: NewHub(), adb: deps, info: StreamInfo{Serial: serial}, clipboardNtf: make(chan struct{}, 1)}
+	s := &Stream{hub: NewHub(), audioHub: NewHub(), adb: deps, info: StreamInfo{Serial: serial}, clipboardNtf: make(chan struct{}, 1)}
 
 	// 1. 推送 server jar
 	if err := deps.Push(serial, serverDevicePath, jarBytes, "0644"); err != nil {
 		return nil, fmt.Errorf("推送 scrcpy-server 失败: %w", err)
 	}
 
-	// 2. 建立隧道并启动 server
+	// 2. 建立隧道并启动 server。
+	// 启用音频时直接用 forward 模式：reverse 的多连接转发在部分平台
+	// （Windows adb server 实测）会丢失第 3 个（control）连接；
+	// 纯视频时 reverse 优先（无连接竞态），失败回退 forward。
 	scid := uint32(time.Now().UnixNano()) & 0x7FFFFFFF
 	s.socketName = fmt.Sprintf("scrcpy_%08x", scid)
 	capture := newOutputCapture()
 
-	videoConn, err := s.openReverse(deps, scid, serverVersion, opts, capture)
-	if err != nil {
-		log.Printf("[scrcpy:%s] reverse 隧道不可用，回退 forward: %v", serial, err)
+	var videoConn net.Conn
+	var err error
+	if !audioEnabled(opts) {
+		videoConn, err = s.openReverse(deps, scid, serverVersion, opts, capture)
+		if err != nil {
+			log.Printf("[scrcpy:%s] reverse 隧道不可用，回退 forward: %v", serial, err)
+		}
+	}
+	if videoConn == nil {
 		videoConn, err = s.openForward(deps, scid, serverVersion, opts, capture)
 	}
 	if err != nil {
@@ -144,7 +160,8 @@ func start(deps streamDeps, serial string, jarBytes []byte, serverVersion string
 		Height:     int(binary.BigEndian.Uint32(meta[8:12])),
 	}
 
-	// 4. server 进程退出（设备断开/崩溃）→ 记录输出并结束流
+	// 4. shell 输出消费必须先于一切阻塞读取：adbd 缓冲写满会阻塞
+	//    设备端 server（音频初始化期间卡死的根因）
 	go func() {
 		_, _ = io.Copy(capture, s.shellConn)
 		if out := capture.snapshot(); out != "" {
@@ -153,12 +170,66 @@ func start(deps streamDeps, serial string, jarBytes []byte, serverVersion string
 		s.Stop()
 	}()
 
-	// 5. 控制连接下行：解析设备消息（剪贴板等）
+	// 5. 音频流头（audio socket 已按 video → audio → control 顺序建立）：
+	//    4 字节编码 ID；若设备端禁用音频则写入 0（继续仅视频）或 1（配置错误）
+	//    音频采集初始化较慢，超时放宽到 30s；失败一律降级为仅视频，不让投屏失败
+	if s.audioConn != nil {
+		_ = s.audioConn.SetReadDeadline(time.Now().Add(audioHeaderTimeout))
+		var codec [4]byte
+		if _, err := io.ReadFull(s.audioConn, codec[:]); err != nil {
+			log.Printf("[scrcpy:%s] 音频头读取失败，降级为仅视频: %v (dial 后等待了 %v)", serial, err, time.Since(s.t0))
+			_ = s.audioConn.Close()
+			s.audioConn = nil
+		} else {
+			_ = s.audioConn.SetReadDeadline(time.Time{})
+			switch id := binary.BigEndian.Uint32(codec[:]); id {
+			case 0x6F707573: // "opus"
+				s.info.Audio = true
+				go s.audioReadLoop()
+			case 0:
+				log.Printf("[scrcpy:%s] 设备端禁用了音频，继续仅视频", serial)
+			default:
+				log.Printf("[scrcpy:%s] 音频不可用（编码 ID 0x%08x），继续仅视频", serial, id)
+			}
+		}
+	}
+
+	// 6. 控制连接下行：解析设备消息（剪贴板等）
 	go s.deviceMessageLoop()
 
-	// 6. 读循环
+	// 7. 读循环
 	go s.readLoop()
 	return s, nil
+}
+
+// audioReadLoop 解析音频帧（帧头与视频相同：u64 flags+PTS / u32 size）并广播；
+// 配置包为 OpusHead。出错仅结束音频（视频继续）。
+func (s *Stream) audioReadLoop() {
+	defer s.audioHub.Close()
+	conn := s.audioConn
+	var hdr [12]byte
+	for {
+		if _, err := io.ReadFull(conn, hdr[:]); err != nil {
+			if !isNetClosed(err) {
+				log.Printf("[scrcpy:%s] 音频流读取结束: %v", s.info.Serial, err)
+			}
+			return
+		}
+		ptsFlags := binary.BigEndian.Uint64(hdr[0:8])
+		size := binary.BigEndian.Uint32(hdr[8:12])
+		data := make([]byte, size)
+		if _, err := io.ReadFull(conn, data); err != nil {
+			log.Printf("[scrcpy:%s] 音频数据读取结束: %v", s.info.Serial, err)
+			return
+		}
+		s.audioHub.Broadcast(Packet{
+			Kind:   PacketVideo,
+			Config: ptsFlags&(1<<63) != 0,
+			Key:    ptsFlags&(1<<62) != 0,
+			PTS:    ptsFlags &^ (1<<63 | 1<<62),
+			Data:   data,
+		})
+	}
 }
 
 // deviceMessageLoop 解析控制 socket 的下行 DeviceMessage（scrcpy v2.4 格式）：
@@ -265,28 +336,35 @@ func (s *Stream) openReverse(deps streamDeps, scid uint32, serverVersion string,
 
 	// Accept 无原生超时，用定时器关闭 listener 来解除阻塞
 	timer := time.AfterFunc(acceptTimeout, func() { _ = ln.Close() })
-	conn, err := ln.Accept()
+	for i := 1; ; i++ {
+		conn, err := ln.Accept()
+		if err != nil {
+			s.Stop()
+			return nil, fmt.Errorf("等待设备回连超时: %w", err)
+		}
+		switch i {
+		case 1:
+			s.videoConn = conn
+		case 2:
+			if audioEnabled(opts) {
+				s.audioConn = conn
+			} else {
+				s.controlConn = conn
+			}
+		default:
+			s.controlConn = conn
+		}
+		if (audioEnabled(opts) && i >= 3) || (!audioEnabled(opts) && i >= 2) {
+			break
+		}
+	}
 	timer.Stop()
-	if err != nil {
-		_ = ln.Close()
-		s.Stop()
-		return nil, fmt.Errorf("等待设备回连超时: %w", err)
-	}
-
-	// control socket（reverse 模式下 server 依次连出：video → control）
-	if ctl, err := acceptControl(ln); err != nil {
-		_ = ln.Close()
-		s.Stop()
-		return nil, fmt.Errorf("等待控制连接超时: %w", err)
-	} else {
-		s.controlConn = ctl
-	}
 	_ = ln.Close() // 连接全部建立，关闭 listener
-	return conn, nil
+	return s.videoConn, nil
 }
 
-// acceptControl 在 listener 上接受控制连接。
-func acceptControl(ln net.Listener) (net.Conn, error) {
+// acceptSocket 在 listener 上接受一条连接（带超时）。
+func acceptSocket(ln net.Listener) (net.Conn, error) {
 	timer := time.AfterFunc(acceptTimeout, func() { _ = ln.Close() })
 	defer timer.Stop()
 	return ln.Accept()
@@ -305,31 +383,46 @@ func (s *Stream) openForward(deps streamDeps, scid uint32, serverVersion string,
 		return nil, fmt.Errorf("建立 adb forward 失败: %w", err)
 	}
 
-	// tunnel_forward=true，server 监听等待连入
+	// tunnel_forward=true，server 监听等待连入。
+	// 给 app_process 一点启动时间再 dial：过早的 dial 会在 adbd 转发层
+	// 留下半途连接，与 Java 端 accept 序列错位（实测导致 control 错位）。
 	if err := s.launchServer(deps, scid, serverVersion, opts, true, capture); err != nil {
 		s.Stop()
 		return nil, err
 	}
+	time.Sleep(2 * time.Second)
 
+	s.t0 = time.Now()
 	conn, err := connectWithDummy(s.tunnelPort, dialAttempts, dialInterval)
+	log.Printf("[scrcpy:%s] video dial 完成 (耗时 %v)", s.info.Serial, time.Since(s.t0))
 	if err != nil {
 		s.Stop()
 		return nil, err
 	}
 
-	// control socket：forward 模式下 server 在 accept 视频后等待第二个连接
-	// （dummy 字节只在第一个 socket 上发送，control 无）
-	ctl, err := dialControl(s.tunnelPort, dialAttempts, dialInterval)
+	// server 依次 accept：video → audio（可选）→ control
+	// （dummy 字节只在第一个 socket 上发送，后续无）
+	if audioEnabled(opts) {
+		audio, err := dialSocket(s.tunnelPort, dialAttempts, dialInterval)
+		if err != nil {
+			s.Stop()
+			return nil, fmt.Errorf("audio 连接失败: %w", err)
+		}
+		s.audioConn = audio
+		log.Printf("[scrcpy:%s] audio dial 完成 (耗时 %v)", s.info.Serial, time.Since(s.t0))
+	}
+	ctl, err := dialSocket(s.tunnelPort, dialAttempts, dialInterval)
 	if err != nil {
 		s.Stop()
-		return nil, err
+		return nil, fmt.Errorf("control 连接失败: %w", err)
 	}
 	s.controlConn = ctl
+	log.Printf("[scrcpy:%s] control dial 完成 (耗时 %v)", s.info.Serial, time.Since(s.t0))
 	return conn, nil
 }
 
-// dialControl 连接 forward 隧道的控制 socket。
-func dialControl(port int, attempts int, interval time.Duration) (net.Conn, error) {
+// dialSocket 连接 forward 隧道的一条 socket。
+func dialSocket(port int, attempts int, interval time.Duration) (net.Conn, error) {
 	var lastErr error
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	for i := 0; i < attempts; i++ {
@@ -340,7 +433,12 @@ func dialControl(port int, attempts int, interval time.Duration) (net.Conn, erro
 		lastErr = err
 		time.Sleep(interval)
 	}
-	return nil, fmt.Errorf("control 连接重试 %d 次后仍失败: %v", attempts, lastErr)
+	return nil, fmt.Errorf("重试 %d 次后仍失败: %v", attempts, lastErr)
+}
+
+// audioEnabled 返回是否启用音频转发。
+func audioEnabled(o Options) bool {
+	return o.Audio != nil && *o.Audio
 }
 
 // launchServer 通过 adb shell 启动设备端 server（长驻进程，连接保活期间运行）。
@@ -351,13 +449,14 @@ func (s *Stream) launchServer(deps streamDeps, scid uint32, serverVersion string
 	}
 	cmd := fmt.Sprintf("CLASSPATH=%s app_process / com.genymobile.scrcpy.Server %s "+
 		"scid=%08x%s log_level=warn video_codec=%s max_size=%d video_bit_rate=%d max_fps=%d "+
-		"audio=false control=true clipboard_autosync=false cleanup=false",
+		"audio=%v audio_codec=opus clipboard_autosync=false cleanup=false",
 		serverDevicePath, serverVersion, scid, tf, opts.VideoCodec,
-		opts.MaxSize, opts.BitRate, opts.MaxFPS)
+		opts.MaxSize, opts.BitRate, opts.MaxFPS, audioEnabled(opts))
 	shellConn, err := deps.ShellConn(s.info.Serial, cmd)
 	if err != nil {
 		return fmt.Errorf("启动 scrcpy server 失败: %w", err)
 	}
+	log.Printf("[scrcpy:%s] 启动命令: %s", s.info.Serial, cmd)
 	s.shellConn = shellConn
 	return nil
 }
@@ -376,16 +475,26 @@ func (s *Stream) Stop() {
 		if s.videoConn != nil {
 			_ = s.videoConn.Close()
 		}
+		if s.audioConn != nil {
+			_ = s.audioConn.Close()
+		}
 		if s.controlConn != nil {
 			_ = s.controlConn.Close()
 		}
-		if s.shellConn != nil {
-			_ = s.shellConn.Close()
-		}
 		s.shutdownTunnel()
 		s.hub.Close()
+		s.audioHub.Close()
 		log.Printf("[scrcpy:%s] 流已停止", s.info.Serial)
 	})
+}
+
+// SubscribeAudio 订阅音频流（Opus）。若音频不可用返回错误。
+func (s *Stream) SubscribeAudio() (*Subscriber, func(), []byte, error) {
+	if !s.info.Audio {
+		return nil, nil, nil, fmt.Errorf("该流没有音频")
+	}
+	sub, cancel, cfg := s.audioHub.Add()
+	return sub, cancel, cfg, nil
 }
 
 // SendControl 向设备写入一条 ControlMessage（并发安全）。

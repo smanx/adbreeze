@@ -1,6 +1,7 @@
 package scrcpy
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -15,6 +16,8 @@ import (
 // 按 scrcpy v2.4 协议完成握手并推送测试帧。
 type fakeDeps struct {
 	framesReady chan struct{} // 关闭后假设备才开始发帧
+	withAudio   bool          // 假设备提供音频流（video → audio → control）
+	audioReady  chan struct{} // 关闭后假设备才开始发音频帧
 	ln          net.Listener
 	shellEnd    net.Conn
 }
@@ -56,7 +59,15 @@ func (f *fakeDeps) serve() {
 	if err != nil {
 		return
 	}
-	// control 连接（server 依次连出：video → control），保持打开即可
+	// server 依次连出：video → audio（可选）→ control
+	if f.withAudio {
+		go func() {
+			audio, err := f.ln.Accept()
+			if err == nil {
+				f.serveAudio(audio)
+			}
+		}()
+	}
 	go func() {
 		ctl, err := f.ln.Accept()
 		if err == nil {
@@ -64,6 +75,21 @@ func (f *fakeDeps) serve() {
 		}
 	}()
 	f.serveVideo(conn)
+}
+
+// serveAudio 推送音频流：4B 编码 ID "opus" + OpusHead 配置包 + 音频帧。
+func (f *fakeDeps) serveAudio(conn net.Conn) {
+	defer conn.Close()
+	if _, err := conn.Write([]byte{0x6f, 0x70, 0x75, 0x73}); err != nil { // "opus"
+		return
+	}
+	if f.audioReady != nil {
+		<-f.audioReady
+	}
+	opusHead := append([]byte("OpusHead"), []byte{1, 2, 0x38, 0x01, 0x80, 0xBB, 0x00, 0x00, 0, 0, 0}...)
+	writeFrame(conn, true, false, 0, opusHead)                     // 配置包
+	writeFrame(conn, false, false, 1000, []byte{0xFC, 0xFF, 0xFE}) // 音频帧
+	time.Sleep(3 * time.Second)
 }
 
 func (f *fakeDeps) serveVideo(conn net.Conn) {
@@ -155,6 +181,64 @@ func TestStreamHandshakeAndFanout(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatalf("帧 %d 超时未收到", i)
 		}
+	}
+}
+
+func TestAudioStream(t *testing.T) {
+	deps := &fakeDeps{
+		framesReady: make(chan struct{}),
+		withAudio:   true,
+		audioReady:  make(chan struct{}),
+	}
+	audioOn := true
+	s, err := start(deps, "fake-serial", []byte("jar"), "2.4", Options{Audio: &audioOn})
+	if err != nil {
+		t.Fatalf("start 失败: %v", err)
+	}
+	defer func() {
+		s.Stop()
+		if deps.shellEnd != nil {
+			deps.shellEnd.Close()
+		}
+	}()
+	if !s.Info().Audio {
+		t.Fatal("音频应可用")
+	}
+
+	sub, cancel, cfg, err := s.SubscribeAudio()
+	if err != nil {
+		t.Fatalf("订阅音频失败: %v", err)
+	}
+	defer cancel()
+	if cfg != nil {
+		t.Errorf("订阅早于配置包，缓存应为 nil")
+	}
+	close(deps.audioReady)
+	close(deps.framesReady)
+
+	// 配置包：OpusHead（channels=2, sampleRate=48000）
+	select {
+	case p := <-sub.Chan():
+		if !p.Config || !bytes.HasPrefix(p.Data, []byte("OpusHead")) {
+			t.Fatalf("首个音频包应为 OpusHead 配置包: %x", p.Data)
+		}
+		if ch := p.Data[9]; ch != 2 {
+			t.Errorf("channels = %d, want 2", ch)
+		}
+		if sr := binary.LittleEndian.Uint32(p.Data[12:]); sr != 48000 {
+			t.Errorf("sampleRate = %d, want 48000", sr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("音频配置包超时")
+	}
+	// 音频帧
+	select {
+	case p := <-sub.Chan():
+		if p.Config || p.PTS != 1000 || string(p.Data) != "\xFC\xFF\xFE" {
+			t.Errorf("音频帧错误: %+v %q", p, p.Data)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("音频帧超时")
 	}
 }
 
