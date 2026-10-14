@@ -294,13 +294,15 @@ window.startMirror = async function (serial) {
   try {
     await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`, { deviceAudio });
     openVideoWS(serial);
-    openAudioWS(serial);
+    if (!deviceAudio) openAudioWS(serial); // 手机出声模式下无音频流
   } catch (e) {
     showMsg('启动投屏失败: ' + e.message);
   }
 };
 
-// 切换手机扬声器开关：音频采集源在 server 启动时固定，需重启投屏流（约 1 秒）
+// 切换手机扬声器开关：采集激活时 remote submix 会静音设备扬声器（参考 ya-webadb
+// adb-scrcpy 的 audio 开关），需重启投屏流（约 1 秒）。
+//   手机静音（默认）= audio=true，采集到网页；手机出声 = audio=false，不采集。
 $('mDevAudio').onclick = async () => {
   if (!mirrorSerial || devAudioSwitching) return;
   devAudioSwitching = true;
@@ -317,7 +319,7 @@ $('mDevAudio').onclick = async () => {
     updateDevAudioBtn();
     showMsg('');
     openVideoWS(mirrorSerial);
-    openAudioWS(mirrorSerial);
+    if (!deviceAudio) openAudioWS(mirrorSerial); // 手机出声模式下无音频流
   } catch (e) {
     showMsg('切换失败: ' + e.message);
   }

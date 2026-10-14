@@ -445,15 +445,11 @@ func (s *Stream) launchServer(deps streamDeps, scid uint32, serverVersion string
 	if tunnelForward {
 		tf = " tunnel_forward=true"
 	}
-	audioSrc := ""
-	if opts.AudioSource != "" {
-		audioSrc = " audio_source=" + opts.AudioSource
-	}
 	cmd := fmt.Sprintf("CLASSPATH=%s app_process / com.genymobile.scrcpy.Server %s "+
 		"scid=%08x%s log_level=warn video_codec=%s max_size=%d video_bit_rate=%d max_fps=%d "+
-		"audio=%v audio_codec=opus%s clipboard_autosync=false cleanup=false",
+		"audio=%v audio_codec=opus clipboard_autosync=false cleanup=false",
 		serverDevicePath, serverVersion, scid, tf, opts.VideoCodec,
-		opts.MaxSize, opts.BitRate, opts.MaxFPS, audioEnabled(opts), audioSrc)
+		opts.MaxSize, opts.BitRate, opts.MaxFPS, audioEnabled(opts))
 	shellConn, err := deps.ShellConn(s.info.Serial, cmd)
 	if err != nil {
 		return fmt.Errorf("启动 scrcpy server 失败: %w", err)

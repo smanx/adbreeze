@@ -9,7 +9,8 @@ import (
 
 func (s *Server) startMirror(w http.ResponseWriter, r *http.Request) {
 	serial := r.PathValue("serial")
-	// 请求体可选：{"deviceAudio":true} 切换为回放捕获（设备扬声器正常出声）
+	// 请求体可选：{"deviceAudio":true} = 设备扬声器出声（不采集音频，参考 ya-webadb
+	// adb-scrcpy 的 audio 开关——采集激活时 remote submix 会静音设备扬声器）
 	var req struct {
 		DeviceAudio bool `json:"deviceAudio"`
 	}
@@ -18,7 +19,8 @@ func (s *Server) startMirror(w http.ResponseWriter, r *http.Request) {
 	}
 	opts := scrcpy.Options{}
 	if req.DeviceAudio {
-		opts.AudioSource = "playback"
+		f := false
+		opts.Audio = &f
 	}
 	info, err := s.mirror.Start(serial, opts)
 	if err != nil {
