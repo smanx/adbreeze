@@ -19,11 +19,12 @@ import (
 
 // Options 是投屏参数。
 type Options struct {
-	MaxSize    int    // 视频尺寸上限（较长边），0 表示不限
-	MaxFPS     int    // 帧率上限，0 表示不限
-	BitRate    int    // 视频码率 bps
-	VideoCodec string // 目前仅支持 h264
-	Audio      *bool  // 音频转发（Opus，设备播放声音采集），默认开启
+	MaxSize     int    // 视频尺寸上限（较长边），0 表示不限
+	MaxFPS      int    // 帧率上限，0 表示不限
+	BitRate     int    // 视频码率 bps
+	VideoCodec  string // 目前仅支持 h264
+	Audio       *bool  // 音频转发（Opus，设备播放声音采集），默认开启
+	AudioSource string // 音频采集源：""/"output"（remote submix，设备扬声器静音）；"playback"（回放捕获，设备扬声器正常出声）
 }
 
 func (o Options) withDefaults() Options {

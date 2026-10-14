@@ -126,6 +126,7 @@
     <button data-clip="get">取剪贴板</button>
     <button data-clip="paste">粘贴到设备</button>
     <button id="mMute">🔊 声音</button>
+    <button id="mDevAudio">🔇 手机静音</button>
     <button class="danger" id="mStop">停止</button>
   </div>
   <div class="m-body"><canvas id="mCanvas" width="720" height="1280"></canvas></div>
@@ -271,11 +272,19 @@ $('run').onclick = async () => {
 
 // ---------- 投屏 + 反向控制 ----------
 let mirrorWS = null, mirrorDecoder = null, mirrorSerial = null;
+let deviceAudio = false; // 手机扬声器是否出声（false = 采集静音手机，true = 回放捕获手机正常出声）
+let devAudioSwitching = false;
 let videoW = 720, videoH = 1280;
+
+function updateDevAudioBtn() {
+  $('mDevAudio').textContent = deviceAudio ? '🔊 手机出声' : '🔇 手机静音';
+}
 
 window.startMirror = async function (serial) {
   if (!('VideoDecoder' in window)) { alert('当前浏览器不支持 WebCodecs，请使用 Chrome / Edge 94+'); return; }
   mirrorSerial = serial;
+  deviceAudio = false;
+  updateDevAudioBtn();
   videoW = 720; videoH = 1280;
   $('mirror').hidden = false;
   $('mTitle').textContent = serial + ' — 连接中…';
@@ -283,12 +292,36 @@ window.startMirror = async function (serial) {
   showMsg('');
   $('mCanvas').focus();
   try {
-    await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`);
+    await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`, { deviceAudio });
     openVideoWS(serial);
     openAudioWS(serial);
   } catch (e) {
     showMsg('启动投屏失败: ' + e.message);
   }
+};
+
+// 切换手机扬声器开关：音频采集源在 server 启动时固定，需重启投屏流（约 1 秒）
+$('mDevAudio').onclick = async () => {
+  if (!mirrorSerial || devAudioSwitching) return;
+  devAudioSwitching = true;
+  const target = !deviceAudio;
+  showMsg('正在切换手机声音…');
+  try {
+    // 关闭本页订阅 → 重启服务端流（Start 对已存在的流会直接复用，必须先 Stop）
+    if (mirrorWS) { mirrorWS.onclose = null; mirrorWS.close(); mirrorWS = null; }
+    if (mirrorDecoder) { try { mirrorDecoder.close(); } catch (_) {} mirrorDecoder = null; }
+    closeAudio();
+    await api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {});
+    await api('POST', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`, { deviceAudio: target });
+    deviceAudio = target;
+    updateDevAudioBtn();
+    showMsg('');
+    openVideoWS(mirrorSerial);
+    openAudioWS(mirrorSerial);
+  } catch (e) {
+    showMsg('切换失败: ' + e.message);
+  }
+  devAudioSwitching = false;
 };
 
 // ---------- 音频播放（Opus → WebCodecs AudioDecoder → AudioWorklet）----------
@@ -611,6 +644,7 @@ function stopMirror(callApi) {
   closeAudio();
   if (callApi && mirrorSerial) api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {});
   mirrorSerial = null;
+  deviceAudio = false;
   $('mirror').hidden = true;
 }
 

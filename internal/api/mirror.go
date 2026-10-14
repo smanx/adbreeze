@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"adbreeze/internal/scrcpy"
@@ -8,7 +9,18 @@ import (
 
 func (s *Server) startMirror(w http.ResponseWriter, r *http.Request) {
 	serial := r.PathValue("serial")
-	info, err := s.mirror.Start(serial, scrcpy.Options{})
+	// 请求体可选：{"deviceAudio":true} 切换为回放捕获（设备扬声器正常出声）
+	var req struct {
+		DeviceAudio bool `json:"deviceAudio"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	opts := scrcpy.Options{}
+	if req.DeviceAudio {
+		opts.AudioSource = "playback"
+	}
+	info, err := s.mirror.Start(serial, opts)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
