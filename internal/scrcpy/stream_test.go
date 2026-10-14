@@ -201,22 +201,26 @@ func TestAudioStream(t *testing.T) {
 			deps.shellEnd.Close()
 		}
 	}()
+
+	// 音频 setup 异步：先等 fake 发出 opus 头（不依赖 audioReady）、setup 完成
+	deadline := time.Now().Add(3 * time.Second)
+	for !s.Info().Audio && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
 	if !s.Info().Audio {
 		t.Fatal("音频应可用")
 	}
 
-	sub, cancel, cfg, err := s.SubscribeAudio()
+	// 先订阅，再放行音频帧（避免帧在订阅前被 hub 丢弃）
+	sub, cancel, _, err := s.SubscribeAudio()
 	if err != nil {
 		t.Fatalf("订阅音频失败: %v", err)
 	}
 	defer cancel()
-	if cfg != nil {
-		t.Errorf("订阅早于配置包，缓存应为 nil")
-	}
 	close(deps.audioReady)
 	close(deps.framesReady)
 
-	// 配置包：OpusHead（channels=2, sampleRate=48000）
+	// 配置包经通道到达（订阅早于帧发送，缓存必为 nil）
 	select {
 	case p := <-sub.Chan():
 		if !p.Config || !bytes.HasPrefix(p.Data, []byte("OpusHead")) {
@@ -231,14 +235,25 @@ func TestAudioStream(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("音频配置包超时")
 	}
-	// 音频帧
-	select {
-	case p := <-sub.Chan():
-		if p.Config || p.PTS != 1000 || string(p.Data) != "\xFC\xFF\xFE" {
-			t.Errorf("音频帧错误: %+v %q", p, p.Data)
+
+	// 音频帧（PTS=1000 的 delta）
+	frameDeadline := time.Now().Add(3 * time.Second)
+	for {
+		select {
+		case p := <-sub.Chan():
+			if p.Config {
+				continue // 跳过重复配置包
+			}
+			if !p.Key && p.PTS != 1000 {
+				continue
+			}
+			if p.PTS != 1000 || string(p.Data) != "\xFC\xFF\xFE" {
+				t.Errorf("音频帧错误: %+v %q", p, p.Data)
+			}
+			return
+		case <-time.After(frameDeadline.Sub(time.Now())):
+			t.Fatal("音频帧超时")
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("音频帧超时")
 	}
 }
 

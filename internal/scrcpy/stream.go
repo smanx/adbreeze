@@ -16,7 +16,7 @@ const (
 	dialAttempts       = 100 // forward 模式重连次数（与 scrcpy 一致）
 	dialInterval       = 100 * time.Millisecond
 	handshakeTimeout   = 10 * time.Second       // 设备名/元数据读取上限
-	audioHeaderTimeout = 30 * time.Second       // 音频编码 ID 读取上限（采集初始化慢）
+	audioHeaderTimeout = 60 * time.Second       // 音频编码 ID 读取上限（采集初始化慢）
 	acceptTimeout      = 15 * time.Second       // reverse 模式等待设备回连上限
 	outputWaitOnFail   = 500 * time.Millisecond // 失败时等待 server 错误输出到达
 	outputCapSize      = 8 * 1024
@@ -58,7 +58,6 @@ type Stream struct {
 	tunnelMode string // "reverse" | "forward"
 	tunnelPort int
 	socketName string
-	t0         time.Time // 诊断：dial 开始时刻
 
 	stopOnce sync.Once
 }
@@ -170,36 +169,40 @@ func start(deps streamDeps, serial string, jarBytes []byte, serverVersion string
 		s.Stop()
 	}()
 
-	// 5. 音频流头（audio socket 已按 video → audio → control 顺序建立）：
-	//    4 字节编码 ID；若设备端禁用音频则写入 0（继续仅视频）或 1（配置错误）
-	//    音频采集初始化较慢，超时放宽到 30s；失败一律降级为仅视频，不让投屏失败
-	if s.audioConn != nil {
-		_ = s.audioConn.SetReadDeadline(time.Now().Add(audioHeaderTimeout))
-		var codec [4]byte
-		if _, err := io.ReadFull(s.audioConn, codec[:]); err != nil {
-			log.Printf("[scrcpy:%s] 音频头读取失败，降级为仅视频: %v (dial 后等待了 %v)", serial, err, time.Since(s.t0))
-			_ = s.audioConn.Close()
-			s.audioConn = nil
-		} else {
-			_ = s.audioConn.SetReadDeadline(time.Time{})
-			switch id := binary.BigEndian.Uint32(codec[:]); id {
-			case 0x6F707573: // "opus"
-				s.info.Audio = true
-				go s.audioReadLoop()
-			case 0:
-				log.Printf("[scrcpy:%s] 设备端禁用了音频，继续仅视频", serial)
-			default:
-				log.Printf("[scrcpy:%s] 音频不可用（编码 ID 0x%08x），继续仅视频", serial, id)
-			}
-		}
-	}
-
-	// 6. 控制连接下行：解析设备消息（剪贴板等）
+	// 5. 音频 setup 异步进行（音频采集初始化可能很慢，绝不阻塞视频出画）；
+	//    视频/控制读循环立即启动
 	go s.deviceMessageLoop()
-
-	// 7. 读循环
 	go s.readLoop()
+	go s.setupAudioAsync()
 	return s, nil
+}
+
+// setupAudioAsync 异步读取音频头（audio socket 已按 video → audio → control
+// 顺序建立）：4 字节编码 ID；设备端禁用音频写入 0（继续仅视频）或 1（配置错误）。
+// 音频采集初始化可能较慢，超时放宽到 60s；失败一律降级为仅视频。
+func (s *Stream) setupAudioAsync() {
+	if s.audioConn == nil {
+		return
+	}
+	_ = s.audioConn.SetReadDeadline(time.Now().Add(audioHeaderTimeout))
+	var codec [4]byte
+	if _, err := io.ReadFull(s.audioConn, codec[:]); err != nil {
+		log.Printf("[scrcpy:%s] 音频头读取失败，降级为仅视频: %v", s.info.Serial, err)
+		_ = s.audioConn.Close()
+		s.audioConn = nil
+		return
+	}
+	_ = s.audioConn.SetReadDeadline(time.Time{})
+	switch id := binary.BigEndian.Uint32(codec[:]); id {
+	case 0x6F707573: // "opus"
+		s.info.Audio = true
+		log.Printf("[scrcpy:%s] 音频流就绪 (opus)", s.info.Serial)
+		s.audioReadLoop() // 阻塞消费音频流
+	case 0:
+		log.Printf("[scrcpy:%s] 设备端禁用了音频，继续仅视频", s.info.Serial)
+	default:
+		log.Printf("[scrcpy:%s] 音频不可用（编码 ID 0x%08x），继续仅视频", s.info.Serial, id)
+	}
 }
 
 // audioReadLoop 解析音频帧（帧头与视频相同：u64 flags+PTS / u32 size）并广播；
@@ -392,9 +395,7 @@ func (s *Stream) openForward(deps streamDeps, scid uint32, serverVersion string,
 	}
 	time.Sleep(2 * time.Second)
 
-	s.t0 = time.Now()
 	conn, err := connectWithDummy(s.tunnelPort, dialAttempts, dialInterval)
-	log.Printf("[scrcpy:%s] video dial 完成 (耗时 %v)", s.info.Serial, time.Since(s.t0))
 	if err != nil {
 		s.Stop()
 		return nil, err
@@ -409,7 +410,6 @@ func (s *Stream) openForward(deps streamDeps, scid uint32, serverVersion string,
 			return nil, fmt.Errorf("audio 连接失败: %w", err)
 		}
 		s.audioConn = audio
-		log.Printf("[scrcpy:%s] audio dial 完成 (耗时 %v)", s.info.Serial, time.Since(s.t0))
 	}
 	ctl, err := dialSocket(s.tunnelPort, dialAttempts, dialInterval)
 	if err != nil {
@@ -417,7 +417,6 @@ func (s *Stream) openForward(deps streamDeps, scid uint32, serverVersion string,
 		return nil, fmt.Errorf("control 连接失败: %w", err)
 	}
 	s.controlConn = ctl
-	log.Printf("[scrcpy:%s] control dial 完成 (耗时 %v)", s.info.Serial, time.Since(s.t0))
 	return conn, nil
 }
 

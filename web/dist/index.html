@@ -293,6 +293,7 @@ window.startMirror = async function (serial) {
 
 // ---------- 音频播放（Opus → WebCodecs AudioDecoder → AudioWorklet）----------
 let audioWS = null, audioDecoder = null, audioCtx = null, audioNode = null, audioGain = null;
+let audioRetryTimer = null, audioPackets = 0;
 
 $('mMute').onclick = () => {
   if (!audioGain) return;
@@ -303,13 +304,26 @@ $('mMute').onclick = () => {
 
 function openAudioWS(serial) {
   closeAudio();
+  tryAudioConnect(serial, 0);
+}
+
+// 音频流可能晚于视频就绪（采集初始化慢），持续重试直到投屏结束
+function tryAudioConnect(serial, attempt) {
+  if (mirrorSerial !== serial || attempt > 30) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws/audio/${encodeURIComponent(serial)}?token=${encodeURIComponent(token)}`);
   ws.binaryType = 'arraybuffer';
   audioWS = ws;
 
   ws.onerror = () => {};
-  ws.onclose = () => { if (audioWS === ws) { audioWS = null; } };
+  ws.onclose = () => {
+    if (audioWS !== ws) return;
+    audioWS = null;
+    // 409 = 音频尚未就绪，2s 后重试
+    if (mirrorSerial === serial) {
+      audioRetryTimer = setTimeout(() => tryAudioConnect(serial, attempt + 1), 2000);
+    }
+  };
   ws.onmessage = ev => {
     if (typeof ev.data === 'string') return; // meta（opus）无需处理
     const buf = new Uint8Array(ev.data);
@@ -322,10 +336,12 @@ function openAudioWS(serial) {
       setupAudio(payload);
       return;
     }
+    audioPackets++;
+    if (audioPackets === 1) $('mStats').textContent += ' · 🔊';
     if (audioDecoder && audioDecoder.state === 'configured') {
       try {
         audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: pts, data: payload }));
-      } catch (_) {}
+      } catch (e) { console.warn('音频解码异常', e); }
     }
   };
 }
@@ -409,10 +425,11 @@ function pushAudio(audioData) {
 }
 
 function closeAudio() {
+  if (audioRetryTimer) { clearTimeout(audioRetryTimer); audioRetryTimer = null; }
   if (audioWS) { audioWS.onclose = null; audioWS.close(); audioWS = null; }
   if (audioDecoder) { try { audioDecoder.close(); } catch (_) {} audioDecoder = null; }
   if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
-  audioNode = null; audioGain = null;
+  audioNode = null; audioGain = null; audioPackets = 0;
   $('mMute').textContent = '🔊 声音';
 }
 
