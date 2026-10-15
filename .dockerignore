@@ -1,0 +1,12 @@
+# 缩小 Docker 构建上下文：前端在镜像内构建，Go 侧 embed 内容来自构建产物。
+# vendor-bin/（必需的内嵌资源）与 assets.go 等源文件不在排除之列。
+.git
+.github
+bin/
+web/node_modules/
+node_modules/
+web/dist/
+*.exe
+Dockerfile
+README.md
+scripts/
