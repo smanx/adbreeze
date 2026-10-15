@@ -36,11 +36,19 @@ ADBreeze 服务进程（Go 单二进制）
 
 ## 快速开始
 
+前端产物 `web/dist` 通过 `go:embed` 嵌入二进制，且不随仓库分发（见 `.gitignore`），因此**克隆后首次构建需先构建前端**（依赖用 [pnpm](https://pnpm.io) 管理）：
+
 ```powershell
-# 构建（Go 1.22+）
+# 1. 构建前端（Node 18+ / pnpm 9+）
+cd web
+pnpm install
+pnpm run build
+cd ..
+
+# 2. 构建（Go 1.22+）
 go build -o bin/adbreeze.exe ./cmd/adbreeze
 
-# 运行（token 随机生成并打印在控制台）
+# 3. 运行（token 随机生成并打印在控制台）
 .\bin\adbreeze.exe
 
 # 或指定端口与 token
@@ -48,6 +56,31 @@ go build -o bin/adbreeze.exe ./cmd/adbreeze
 ```
 
 浏览器打开 `http://localhost:8000`，填入 token 即可使用。
+
+### 一键脚本
+
+项目根目录的 `dev.ps1` 串起「前端构建 → Go 编译 → 启动」全流程：
+
+```powershell
+.\dev.ps1                    # 默认 token=admin, addr=:8000
+.\dev.ps1 -Token xxx -Addr :9000
+.\dev.ps1 -SkipWeb           # 前端没改时跳过 pnpm build
+```
+
+### 开发调试（前端热更新）
+
+改前端代码时不必反复 `pnpm run build` + `go build`。Vite dev server 已配置代理（`/api` 与 `/ws` 转发到 `:8000` 的后端），两个终端分离运行即可：
+
+```powershell
+# 终端 1：起后端（exe 已构建过就直接运行）
+.\bin\adbreeze.exe -token admin
+
+# 终端 2：起前端开发服务器
+cd web
+pnpm run dev
+```
+
+浏览器打开 `http://localhost:5173`，token 填 `admin`。此后修改 `web/src` 下的代码保存即生效（HMR 热更新，投屏会话不中断）；只有改动 Go 代码时才需要重启终端 1 的后端。注意 `pnpm run dev` 与 `dev.ps1` 的前端构建不要同时进行（都会写 `web/dist`）。
 
 设备接入：
 

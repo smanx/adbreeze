@@ -1,7 +1,7 @@
 # 一键开发运行：打包前端 -> 编译后端（含前端产物）-> 启动服务
 # 用法：.\dev.ps1              # 默认 token=admin, addr=:8000
 #       .\dev.ps1 -Token xxx -Addr :9000
-#       .\dev.ps1 -SkipWeb    # 前端没改时跳过 npm build
+#       .\dev.ps1 -SkipWeb    # 前端没改时跳过 pnpm build
 param(
     [string]$Token = 'admin',
     [string]$Addr = ':8000',
@@ -21,9 +21,9 @@ if ($conn) {
 
 # 1. 前端构建
 if (-not $SkipWeb) {
-    Write-Host '==> npm run build (web)' -ForegroundColor Cyan
+    Write-Host '==> pnpm run build (web)' -ForegroundColor Cyan
     Push-Location "$root\web"
-    npm run build
+    pnpm run build
     if ($LASTEXITCODE -ne 0) { Pop-Location; throw '前端构建失败' }
     Pop-Location
 } else {
