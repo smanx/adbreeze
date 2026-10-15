@@ -9,21 +9,23 @@ import (
 	"adbreeze/internal/adb"
 	"adbreeze/internal/auth"
 	"adbreeze/internal/scrcpy"
+	"adbreeze/internal/settings"
 	"adbreeze/internal/webrtc"
 )
 
 // Server 承载 HTTP 服务。
 type Server struct {
-	auth    *auth.Authenticator
-	version string
-	mgr     *adb.Manager
-	mirror  *scrcpy.Manager
-	webrtc  *webrtc.Manager
+	auth     *auth.Authenticator
+	version  string
+	mgr      *adb.Manager
+	mirror   *scrcpy.Manager
+	webrtc   *webrtc.Manager
+	settings *settings.Store
 }
 
 // New 组装路由，返回可直接交给 http.Server 的 Handler。
-func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS fs.FS) http.Handler {
-	s := &Server{auth: a, version: version, mgr: mgr, mirror: mirror, webrtc: webrtc.NewManager()}
+func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS fs.FS, st *settings.Store) http.Handler {
+	s := &Server{auth: a, version: version, mgr: mgr, mirror: mirror, webrtc: webrtc.NewManager(), settings: st}
 	mux := http.NewServeMux()
 
 	// 健康检查（无需鉴权）
@@ -63,6 +65,9 @@ func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy
 	authed.HandleFunc("GET /api/devices/{serial}/apps/apk", s.handleAppApk)
 	authed.HandleFunc("GET /api/devices/{serial}/processes", s.handleProcList)
 	authed.HandleFunc("POST /api/devices/{serial}/processes/kill", s.handleProcKill)
+	// 运行时设置（adb 可执行文件路径可随时切换）
+	authed.HandleFunc("GET /api/settings/adb", s.getAdbSettings)
+	authed.HandleFunc("POST /api/settings/adb", s.putAdbSettings)
 	mux.Handle("/api/", a.Middleware(authed))
 
 	// WebSocket（需鉴权，凭 /api/session 签发的会话 cookie）

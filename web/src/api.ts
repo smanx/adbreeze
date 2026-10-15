@@ -39,3 +39,25 @@ export interface DeviceInfo {
 export interface Health {
   version: string
 }
+
+// ---------- 运行时设置（ADB 可执行文件路径） ----------
+
+export interface AdbSettings {
+  /** 当前生效的路径；空字符串表示「默认（从 PATH 查找）」 */
+  path: string
+  /** 当前解析出的默认 adb 路径，供界面提示 */
+  default: string
+  /** 默认路径是否可用（PATH 里有没有 adb） */
+  available: boolean
+  /** 存档文件位置，便于排查 */
+  configFile: string
+}
+
+export interface AdbSettingsSaveResult {
+  message: string
+  path: string
+  /** adb server 是否已用新路径成功重启 */
+  restarted: boolean
+  /** adb version 输出，用于确认切换到了哪个版本 */
+  version: string
+}

@@ -53,9 +53,32 @@ go build -o bin/adbreeze.exe ./cmd/adbreeze
 
 # 或指定端口与账号密码
 .\bin\adbreeze.exe -addr :8000 -user admin -password my-secret
+
+# 需要 HTTPS 时追加 -https（额外在 :8443 开启，与 HTTP 并存）
+.\bin\adbreeze.exe -https
 ```
 
 浏览器打开 `http://localhost:8000`，在弹出的 Basic Auth 登录框输入账号密码即可使用。
+
+### HTTPS（可选，默认关闭）
+
+WebCodecs（`VideoDecoder`）只在**安全上下文**暴露，即 HTTPS 或 `localhost`。用局域网 IP 以 `http://192.168.x.x:8000` 访问时，浏览器不提供该 API，投屏会自动退化到 WebRTC 或 WASM 软解。开启 HTTPS 后，这些访问也能走 WebCodecs 硬解。
+
+```powershell
+# 默认：HTTP 始终开启，不占用额外端口
+.\bin\adbreeze.exe
+
+# 可选：HTTP + HTTPS 并存（HTTP 保底，HTTPS 供 WebCodecs 使用）
+.\bin\adbreeze.exe -https                      # HTTPS 默认 :8443
+.\bin\adbreeze.exe -https -https-addr :9443    # 自定义 HTTPS 端口
+
+# 使用自己的正式证书
+.\bin\adbreeze.exe -https -tls-cert cert.pem -tls-key key.pem
+```
+
+**HTTP 与 HTTPS 是并存关系，不是二选一**：HTTP 始终监听，作为保底入口——自签名证书在浏览器信任之前只能靠它进界面，且 HTTPS 起不来时不会导致完全失联。两者共用同一路由与鉴权，故**必须使用不同端口**（同端口会被启动即拦下并提示）。
+
+未指定 `-tls-cert` / `-tls-key` 时自动生成自签名证书（覆盖 `localhost` 与全部本机 IP，有效期 10 年，已存在则复用不重生成），位置在数据目录的 `tls/` 下。自签名证书首次访问会触发浏览器告警，点「高级 → 继续前往」即可（只需一次）；不想每次告警可将 `cert.pem` 导入系统信任库后重启浏览器。
 
 ### 一键脚本
 
@@ -65,6 +88,8 @@ go build -o bin/adbreeze.exe ./cmd/adbreeze
 go run ./scripts                              # 默认 user=admin, password=admin, addr=:8000
 go run ./scripts -user xxx -password yyy -addr :9000
 go run ./scripts -skip-web                    # 前端没改时跳过 pnpm build
+go run ./scripts -https                       # 额外开启 HTTPS（:8443），供 WebCodecs 安全上下文
+go run ./scripts -https -https-addr :9443     # 自定义 HTTPS 端口
 ```
 
 ### 开发调试（前端热更新）
@@ -149,7 +174,7 @@ HTTP 接口通过 Basic Auth 认证（`Authorization: Basic ...`）。WebSocket 
 
 ## 安全提示
 
-ADB 意味着设备的**完全控制权**。密码务必妥善保管，服务默认面向内网使用；公网部署请置于反向代理之后并启用 TLS（Basic Auth 凭证以 Base64 明文编码传输，切勿裸走 HTTP 暴露到公网）。会话 cookie 签名密钥每次启动随机生成，重启服务后所有已登录 WebSocket 会话需重新认证。
+ADB 意味着设备的**完全控制权**。密码务必妥善保管，服务默认面向内网使用。Basic Auth 凭证以 Base64 明文编码传输，**切勿裸走 HTTP 暴露到公网**——如需公网访问，用内置的 `-https` 直接启用 TLS（自签名证书仅供内网；公网请用 `-tls-cert` / `-tls-key` 指定正式证书），或置于反向代理之后。会话 cookie 签名密钥每次启动随机生成，重启服务后所有已登录 WebSocket 会话需重新认证。
 
 ## 目录结构
 
@@ -161,6 +186,8 @@ adbreeze/
 │   ├── scrcpy/            # 投屏（server 生命周期 / 协议解析 / ControlMessage / SPS）
 │   ├── api/               # REST + WebSocket + 静态前端
 │   ├── auth/              # Basic Auth + 会话 cookie
+│   ├── settings/          # 用户偏好持久化（adb 路径等）
+│   ├── tlsutil/           # 自签名证书生成 / 复用（HTTPS）
 │   └── config/            # 命令行配置
 ├── web/dist/              # 前端（embed 进二进制）
 ├── scripts/               # 跨平台开发脚本（go run ./scripts）

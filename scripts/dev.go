@@ -8,6 +8,7 @@ package main
 //	go run ./scripts                          # 默认 user=admin, password=admin, addr=:8000
 //	go run ./scripts -user xxx -password yyy -addr :9000
 //	go run ./scripts -skip-web                # 前端没改时跳过 pnpm build
+//	go run ./scripts -https                   # 额外开启 HTTPS（:8443），供 WebCodecs 安全上下文
 //
 // 脚本以裸 main 包存在，不参与 go build ./cmd/... 的产物构建。
 
@@ -25,7 +26,9 @@ import (
 func main() {
 	user := flag.String("user", "admin", "Basic Auth 用户名")
 	password := flag.String("password", "admin", "Basic Auth 密码")
-	addr := flag.String("addr", ":8000", "监听地址")
+	addr := flag.String("addr", ":8000", "HTTP 监听地址（始终开启）")
+	https := flag.Bool("https", false, "额外开启 HTTPS（WebCodecs 需安全上下文）")
+	httpsAddr := flag.String("https-addr", ":8443", "HTTPS 监听地址（仅在 -https 时生效）")
 	skipWeb := flag.Bool("skip-web", false, "跳过前端构建（前端没有改动时）")
 	flag.Parse()
 
@@ -34,9 +37,16 @@ func main() {
 		fail(err.Error())
 	}
 
-	// 0. 端口占用保护（Windows 下替换运行中的 exe 会损坏文件，且撞端口必然启动失败）
-	if portInUse(*addr) {
-		fail(fmt.Sprintf("端口 %s 已被占用，请先停止旧进程再运行", *addr))
+	// 0. 端口占用保护（Windows 下替换运行中的 exe 会损坏文件，且撞端口必然启动失败）。
+	// 启用 HTTPS 时两个端口都要查：任一被占用都会让服务起不来。
+	toCheck := []string{*addr}
+	if *https {
+		toCheck = append(toCheck, *httpsAddr)
+	}
+	for _, a := range toCheck {
+		if portInUse(a) {
+			fail(fmt.Sprintf("端口 %s 已被占用，请先停止旧进程再运行", a))
+		}
 	}
 
 	// 1. 前端构建
@@ -63,8 +73,15 @@ func main() {
 	run(root, "go", "build", "-ldflags", "-s -w -X main.version=dev", "-o", exePath, "./cmd/adbreeze")
 
 	// 3. 启动（前台运行，Ctrl+C 退出）
-	fmt.Printf("==> 启动 http://localhost%s (账号: %s / 密码: %s)\n", *addr, *user, *password)
-	run(root, exePath, "-addr", *addr, "-user", *user, "-password", *password)
+	args := []string{"-addr", *addr, "-user", *user, "-password", *password}
+	if *https {
+		args = append(args, "-https", "-https-addr", *httpsAddr)
+		fmt.Printf("==> 启动 http://localhost%s 与 https://localhost%s (账号: %s / 密码: %s)\n",
+			*addr, *httpsAddr, *user, *password)
+	} else {
+		fmt.Printf("==> 启动 http://localhost%s (账号: %s / 密码: %s)\n", *addr, *user, *password)
+	}
+	run(root, exePath, args...)
 }
 
 // projectRoot 定位项目根目录：从当前目录向上找 go.mod（且要求同级存在 web/ 与 cmd/），

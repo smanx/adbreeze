@@ -14,6 +14,9 @@ importers:
       '@xterm/xterm':
         specifier: ^6.0.0
         version: 6.0.0
+      '@yume-chan/h264bsd':
+        specifier: 1.1.1
+        version: 1.1.1
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -482,6 +485,9 @@ packages:
 
   '@xterm/xterm@6.0.0':
     resolution: {integrity: sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==}
+
+  '@yume-chan/h264bsd@1.1.1':
+    resolution: {integrity: sha512-WVx6klhioI8t9aE2d3IeZ/zND40kH24z7vSM33UnXquSXSOkIEPUqBFc9VcdZWOKwFDk5EwOwZFqXrByZMto9w==}
 
   baseline-browser-mapping@2.11.28:
     resolution: {integrity: sha512-br0LOmjJqr6Rt4AEkadbcNf67Zpo7EPwKsWbjnRrJIa1QYFHQBqM4C7F2WTbV8ahTEcg1Eo+Y0aWjjORInYFyA==}
@@ -1029,6 +1035,8 @@ snapshots:
   '@xterm/addon-fit@0.11.0': {}
 
   '@xterm/xterm@6.0.0': {}
+
+  '@yume-chan/h264bsd@1.1.1': {}
 
   baseline-browser-mapping@2.11.28: {}
 

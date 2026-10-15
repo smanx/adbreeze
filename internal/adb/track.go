@@ -78,6 +78,18 @@ func (t *Tracker) withRemembered() []Device {
 // SetEnsureServer 注入 adb server 自愈函数。
 func (t *Tracker) SetEnsureServer(fn func()) { t.ensureServer = fn }
 
+// RememberedWireless 返回记忆中（含当前在线）的无线设备 serial。
+// 重启 adb server 会断开所有 TCP 设备，切换 adb 路径后据此把它们连回来。
+func (t *Tracker) RememberedWireless() []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make([]string, 0, len(t.knownWireless))
+	for serial := range t.knownWireless {
+		out = append(out, serial)
+	}
+	return out
+}
+
 // Devices 返回当前设备快照（含记忆的掉线无线设备），空列表返回 [] 而非 null。
 func (t *Tracker) Devices() []Device {
 	t.mu.RLock()

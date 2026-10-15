@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 
-// 设备列表（PC 侧栏 / 手机抽屉共用）：状态徽标、选中、无线连接（带历史）、断开。
+// 设备列表（PC 侧栏 / 手机抽屉共用）：连接方式、状态徽标、选中、无线连接（带历史）、断开。
 // 掉线的无线设备保留在列表中（offline 灰显），支持一键重连或从列表移除。
+const isWireless = (serial: string) => serial.includes(':')
 export default function DeviceList() {
   const devices = useStore(s => s.devices)
   const selected = useStore(s => s.selected)
@@ -74,6 +75,7 @@ export default function DeviceList() {
         {devices.length === 0 && <div className="hint">无设备</div>}
         {devices.map(d => {
           const offline = d.state !== 'device'
+          const wireless = isWireless(d.serial)
           return (
             <div
               key={d.serial}
@@ -82,7 +84,15 @@ export default function DeviceList() {
             >
               <div className="device-main">
                 <span className="device-serial">{d.serial}</span>
-                <span className={'state-badge ' + d.state}>{offline ? '已断开' : d.state}</span>
+                <span className="device-tags">
+                  {/* ADB 的 serial 自带连接方式：TCP/IP 设备渲染为 host:port（含冒号），
+                      USB 设备就是序列号本身（无冒号）——据此区分，无需后端改动 */}
+                  <span className={'conn-badge ' + (wireless ? 'wireless' : 'usb')}
+                    title={wireless ? '无线连接（TCP/IP）' : '有线连接（USB）'}>
+                    {wireless ? '无线' : '有线'}
+                  </span>
+                  <span className={'state-badge ' + d.state}>{offline ? '已断开' : d.state}</span>
+                </span>
               </div>
               {offline ? (
                 <div className="device-ops">

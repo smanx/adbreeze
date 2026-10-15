@@ -5,23 +5,24 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
 	"time"
 )
 
 // EnsureServer 确保 adb server 已在运行；不可达时用 adb 二进制拉起。
-// adbPath 为空则从 PATH 查找。后续版本将把内置二进制释放到数据目录再执行。
+// adbPath 为空则从 PATH 查找。
 func EnsureServer(ctx context.Context, adbPath string, c *Client) error {
 	if c.Ping() == nil {
 		return nil
 	}
-	path := adbPath
-	if path == "" {
-		p, err := exec.LookPath("adb")
-		if err != nil {
-			return fmt.Errorf("adb server 不可达且未找到 adb 可执行文件: %w", err)
-		}
-		path = p
+	path, err := ResolveAdbPath(adbPath)
+	if err != nil {
+		return err
 	}
 	log.Printf("[adb] 启动 adb server: %s start-server", path)
 	cmd := exec.CommandContext(ctx, path, "start-server")
@@ -40,21 +41,80 @@ func EnsureServer(ctx context.Context, adbPath string, c *Client) error {
 	}
 }
 
+// adbBinaryName 返回当前平台下 adb 可执行文件名（Windows 带 .exe）。
+func adbBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "adb.exe"
+	}
+	return "adb"
+}
+
+// ResolveAdbPath 把用户填写的 adb 路径解析为可直接执行的二进制路径。
+//
+// 用户可能填的是目录（如 D:\platform-tools）而不是可执行文件本身，
+// 这里做一次归一化：目录则拼上平台对应的文件名。空值走 PATH 查找。
+func ResolveAdbPath(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		p, err := exec.LookPath("adb")
+		if err != nil {
+			return "", fmt.Errorf("adb server 不可达且未找到 adb 可执行文件: %w", err)
+		}
+		return p, nil
+	}
+	if fi, err := os.Stat(raw); err == nil && fi.IsDir() {
+		raw = filepath.Join(raw, adbBinaryName())
+	}
+	if _, err := os.Stat(raw); err != nil {
+		return "", fmt.Errorf("adb 可执行文件不存在: %s", raw)
+	}
+	return raw, nil
+}
+
+// ProbeAdb 校验一个 adb 路径是否真的可用：解析成功且能执行 `version`。
+// 设置面板「保存并测试」用它给出即时反馈，避免存下一个跑不通的路径。
+func ProbeAdb(raw string) (string, error) {
+	path, err := ResolveAdbPath(raw)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "version").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("执行 %s version 失败: %v: %s", path, err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// RunAdb 以给定路径执行一条 adb 命令（已解析路径），返回命令输出。
+// 供切换 adb 路径时执行 kill-server / start-server 使用。
+func RunAdb(ctx context.Context, path string, args ...string) error {
+	cmd := exec.CommandContext(ctx, path, args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("adb %s 失败: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // Manager 面向 API 层的封装：server 管理 + 设备跟踪 + 常用设备操作。
 type Manager struct {
 	client  *Client
 	tracker *Tracker
+
+	// mu 保护 adbPath：设置页可在运行时切换 adb 可执行文件
+	mu      sync.RWMutex
 	adbPath string
 }
 
 func NewManager(adbPath, serverAddr string) *Manager {
 	c := NewClient(serverAddr)
 	m := &Manager{client: c, tracker: NewTracker(c), adbPath: adbPath}
-	// 设备跟踪中发现 adb server 消失时自动拉起
+	// 设备跟踪中发现 adb server 消失时自动拉起（读当前生效路径，支持运行时切换）
 	m.tracker.SetEnsureServer(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := EnsureServer(ctx, adbPath, c); err != nil {
+		if err := EnsureServer(ctx, m.AdbPath(), c); err != nil {
 			log.Printf("[adb] 自动拉起 adb server 失败: %v", err)
 		} else {
 			log.Printf("[adb] adb server 已自动恢复")
@@ -63,11 +123,53 @@ func NewManager(adbPath, serverAddr string) *Manager {
 	return m
 }
 
+// AdbPath 返回当前生效的 adb 可执行文件路径（空 = 从 PATH 查找）。
+func (m *Manager) AdbPath() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.adbPath
+}
+
+// SetAdbPath 切换 adb 可执行文件路径。
+// 仅改路径不重启已运行的 server：adb server 与路径并不绑定（同一台机器上
+// 不同 platform-tools 版本共用 5037 端口）。真正生效发生在下次拉起 server 时；
+// 需要立刻换掉运行中的 server 时由调用方显式重启（见 api 层的切换接口）。
+func (m *Manager) SetAdbPath(p string) {
+	m.mu.Lock()
+	m.adbPath = p
+	m.mu.Unlock()
+}
+
+// EnsureServerNow 用当前生效路径立即拉起/校验 adb server，返回错误供接口透出。
+func (m *Manager) EnsureServerNow(ctx context.Context) error {
+	return EnsureServer(ctx, m.AdbPath(), m.client)
+}
+
+// ReconnectWireless 重新连接此前记忆的无线设备。
+// 重启 adb server 会断开所有 TCP 设备（这是 adb 固有行为，USB 设备不受影响），
+// 切换 adb 路径后调用它把设备接回来，避免用户看到一片 offline 需要手动重连。
+// 返回成功获得响应的 serial 列表。
+//
+// 不做「已在线就跳过」的预判：server 刚重启时 tracker 快照是旧的（设备仍显示
+// device），据此跳过反而会把真正断掉的设备漏掉。adb connect 对已连接设备是幂等的
+// （返回 already connected），重复调用无害。
+func (m *Manager) ReconnectWireless() []string {
+	var done []string
+	for _, serial := range m.tracker.RememberedWireless() {
+		if _, err := m.client.Connect(serial); err == nil {
+			done = append(done, serial)
+		} else {
+			log.Printf("[adb] 重连无线设备失败 %s: %v", serial, err)
+		}
+	}
+	return done
+}
+
 // Start 尝试拉起 adb server 并启动设备跟踪。server 暂不可达时返回错误，
 // 跟踪循环仍会在后台持续重试。
 func (m *Manager) Start(ctx context.Context) error {
 	go m.tracker.Run(ctx)
-	return EnsureServer(ctx, m.adbPath, m.client)
+	return EnsureServer(ctx, m.AdbPath(), m.client)
 }
 
 // Client 暴露底层 adb 客户端（供 scrcpy 等模块使用）。

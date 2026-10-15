@@ -1,12 +1,29 @@
 // 投屏控制器：从 legacy 页完整迁移的逻辑（单例，一个标签页一条活跃观看会话）。
 // 保留所有既有修复：双方案降级、iOS touch、观众感知停止、WSOLA 音频、
 // SPS 级别补丁（服务端）、固定 20ms RTP（服务端）、按设备记忆设置。
+//
+// 解码/渲染层移植自 ya-webadb（Tango）：
+//   * WebCodecs 封装带回放缓冲、解码器回收/硬解故障恢复与统计埋点（decoder.ts）
+//   * WebGL 上屏 + 着色器缩放 + rAF 帧门控 + ResizeObserver 重绘（render.ts）
+//   * h264bsd WASM 软解兜底，可在 HTTP 非安全上下文使用（soft-decoder.ts）
 import { api } from '../api'
+import { FrameRenderer, type RenderKind } from './render'
+import { H264Decoder, spsProfileIdc } from './decoder'
+import { SoftH264Decoder, hasWebAssembly } from './soft-decoder'
 
-const MIRROR_DEFAULTS = { mode: 'codecs', audioMode: 'both', bitrateMbps: 8, shortSize: 720, maxFps: 60 } as const
-export type MirrorSettings = { mode: string; audioMode: string; bitrateMbps: number; shortSize: number; maxFps: number }
+const MIRROR_DEFAULTS = {
+  mode: 'auto', audioMode: 'both', bitrateMbps: 8, shortSize: 720, maxFps: 60,
+} as const
+export type MirrorSettings = {
+  /** 投屏方案：auto = 优先 WebCodecs，不可用时降级；codecs / webrtc / wasm 为强制指定 */
+  mode: 'auto' | 'codecs' | 'webrtc' | 'wasm'
+  audioMode: string
+  bitrateMbps: number
+  shortSize: number
+  maxFps: number
+}
 
-const mirrorSettingsKey = (serial: string) => 'ADBreeze-mirror-settings-v3:' + serial
+const mirrorSettingsKey = (serial: string) => 'ADBreeze-mirror-settings-v4:' + serial
 
 export function hasCodecsSupport() {
   // WebCodecs 仅在安全上下文（HTTPS / localhost / 127.0.0.1）暴露，HTTP+IP 访问时
@@ -20,6 +37,10 @@ export function codecsBlockedByInsecureContext() {
 export function hasRTCSupport() {
   return 'RTCPeerConnection' in window
 }
+/** WASM 软解可用：不要求安全上下文，是 HTTP+IP 访问下唯一非 WebRTC 的选择 */
+export function hasSoftDecodeSupport() {
+  return hasWebAssembly()
+}
 
 export function loadMirrorSettings(serial: string | null): MirrorSettings {
   let saved: Partial<MirrorSettings> = {}
@@ -31,8 +52,12 @@ export function loadMirrorSettings(serial: string | null): MirrorSettings {
 export function saveMirrorSettings(serial: string, s: MirrorSettings) {
   try { localStorage.setItem(mirrorSettingsKey(serial), JSON.stringify(s)) } catch { /* 忽略 */ }
 }
+/** 画质相关字段（mode 不属于画质：仅切方案不应重启设备端编码器） */
+function qualityJSON(s: MirrorSettings) {
+  return JSON.stringify([s.audioMode, s.bitrateMbps, s.shortSize, s.maxFps])
+}
 function savedQualityJSON(serial: string | null) {
-  return JSON.stringify(loadMirrorSettings(serial))
+  return qualityJSON(loadMirrorSettings(serial))
 }
 
 export interface MirrorStatus {
@@ -41,6 +66,9 @@ export interface MirrorStatus {
   msg: string
   running: boolean
   muted: boolean
+  /** 生效的解码路径与渲染后端（徽标展示，便于确认是否走软解/降级） */
+  decoderKind: 'webcodecs' | 'wasm' | 'webrtc' | ''
+  renderKind: RenderKind | ''
   // 画面阶段：loading = 等待首帧（画布盖遮罩，避免旧帧造成"已在投"的错觉），
   // ready = 首帧已渲染，failed = 等待超时/启动失败（显示失败提示）
   phase: 'loading' | 'ready' | 'failed'
@@ -56,15 +84,32 @@ let canvasEl: HTMLCanvasElement | null = null
 let audioEl: HTMLAudioElement | null = null
 
 let mirrorWS: WebSocket | null = null
-let mirrorDecoder: VideoDecoder | null = null
 let mirrorSerial: string | null = null
 let deviceAudio = false
 let audioDup = false
 let webrtcMode = false
+/** 用户强制使用 WASM 软解（mode='wasm'） */
+let forcedSoftDecode = false
 let webrtcPC: RTCPeerConnection | null = null
 let videoW = 720
 let videoH = 1280
 let waitingKeyframe = false
+
+// 解码/渲染管线（每次会话重建）
+let renderer: FrameRenderer | null = null
+let hwDecoder: H264Decoder | null = null
+let softDecoder: SoftH264Decoder | null = null
+/** 当前生效的解码路径：软解兜底时为 wasm */
+let decoderKind: MirrorStatus['decoderKind'] = ''
+/** 解码器需要配置包（新流或 codec 变化）：收到 config 帧后重建解码器 */
+let needConfig = true
+/**
+ * 视图旋转角（0/90/180/270）。存在模块层而非只存渲染器里，
+ * 因为渲染器会随画布被 React 换掉而重建，用户设的角度不该跟着丢。
+ */
+let viewDeg = 0
+/** 会话代际：异步回调（软解 wasm 加载）据此判断会话是否已失效 */
+let sessionSeq = 0
 
 let audioWS: WebSocket | null = null
 let audioDecoder: AudioDecoder | null = null
@@ -81,14 +126,34 @@ let frameCount = 0
 let byteCount = 0
 let lastTick = 0
 let configData: Uint8Array | null = null
+/** 最近一次对外广播的状态（含初始空值），供组件重挂载时回放 */
+let lastStatus: Partial<MirrorStatus> = {}
 
-function setStatus(s: Partial<MirrorStatus>) { events?.onStatus(s) }
+function setStatus(s: Partial<MirrorStatus>) {
+  if (events) events.onStatus(s)
+  // 缓存最近状态：React 重挂载（切标签页再回来）后组件 state 归零，
+  // 而会话仍在跑，不回放就会出现「画面在动但按钮全禁用、显示开始投屏」。
+  lastStatus = { ...lastStatus, ...s }
+}
 function showMsg(text: string) { setStatus({ msg: text }) }
+
+let visibleBound = false
 
 export function initController(canvas: HTMLCanvasElement, audio: HTMLAudioElement, ev: Events) {
   canvasEl = canvas
   audioEl = audio
   events = ev
+  ev.onStatus(lastStatus)
+  // 后台标签页：只暂停上屏（省 GPU/合成开销），解码继续，切回即时恢复画面。
+  // 不暂停解码是有意为之：Hub 的「丢最旧保最新」会让暂停期间的帧丢失，
+  // 恢复后要等下一个关键帧（GOP 2s）才有画面，体验倒退。
+  // 只注册一次：本函数随组件重挂载反复调用，重复挂会累积监听器。
+  if (!visibleBound) {
+    visibleBound = true
+    document.addEventListener('visibilitychange', () => {
+      renderer?.setPaused(document.visibilityState === 'hidden')
+    })
+  }
 }
 export function controllerSerial() { return mirrorSerial }
 
@@ -121,13 +186,30 @@ export function sendText(text: string) {
 }
 export function sendOp(name: string) { wsSend({ type: 'op', name }) }
 
+/**
+ * 客户端坐标 → 视频坐标。优先交给渲染器（它掌握视图旋转与画布实际比例），
+ * 渲染器尚未就绪时退回按 videoW/H 的等比映射（未旋转情形两者一致）。
+ */
 function videoCoords(clientX: number, clientY: number) {
+  const viaRenderer = renderer?.clientToVideo(clientX, clientY)
+  if (viaRenderer) return viaRenderer
   if (!canvasEl) return { x: 0, y: 0 }
   const rect = canvasEl.getBoundingClientRect()
   return {
     x: Math.max(0, Math.min(videoW - 1, Math.round((clientX - rect.left) * videoW / rect.width))),
     y: Math.max(0, Math.min(videoH - 1, Math.round((clientY - rect.top) * videoH / rect.height))),
   }
+}
+
+/** 视图旋转（仅旋转网页画面，不旋转设备）：0 → 90 → 180 → 270 循环 */
+export function rotateView() {
+  viewDeg = (viewDeg + 90) % 360
+  renderer?.setViewRotation(viewDeg)
+  return viewDeg
+}
+/** 当前视图旋转角 */
+export function viewRotation(): number {
+  return viewDeg
 }
 
 // ---------- 关键帧提示 ----------
@@ -178,17 +260,209 @@ function firstFrameReady() {
 }
 
 // ---------- 视频帧统计 ----------
+// 渲染/解码计数来自移植的管线（Tango 埋点思路）：积压深度与丢帧数直接反映
+// 「卡在哪里」——decodeQueueSize 增长说明解码跟不上网络，丢帧增长说明
+// 渲染跟不上解码。丢帧按「本秒增量」显示（与 fps 同窗口），累计值无意义。
+// 解码方案与渲染后端不在这里出现：那是徽标的职责，两处都写会重复同一信息。
+let lastDropTotal = 0
 function tickStats() {
   const now = performance.now()
   if (now - lastTick >= 1000) {
-    setStatus({
-      stats: `${frameCount} fps · ${(byteCount * 8 / 1e6).toFixed(1)} Mbps${audioOn ? ' · 🔊' : ''}`,
-    })
+    const parts: string[] = [`${frameCount} fps`, `${(byteCount * 8 / 1e6).toFixed(1)} Mbps`]
+    if (audioOn) parts.push('🔊')
+    if (renderer) {
+      const c = renderer.countersRef
+      const dropTotal = c.skipped + (hwDecoder?.counters.framesDroppedBackpressure ?? 0)
+      const dropDelta = dropTotal - lastDropTotal
+      lastDropTotal = dropTotal
+      if (dropDelta > 0) parts.push(`丢帧 ${dropDelta}`)
+      const q = hwDecoder?.decodeQueueSize ?? 0
+      if (q > 3) parts.push(`积压 ${q}`)
+    }
+    setStatus({ stats: parts.join(' · ') })
     frameCount = 0; byteCount = 0; lastTick = now
   }
 }
 
-// ---------- 视频通道（WS 直推 + WebCodecs） ----------
+// ---------- 视频通道（WS 直推 + WebCodecs / WASM 软解） ----------
+
+/**
+ * 渲染器（跨会话复用；context lost 由其内部降级）。
+ *
+ * React 重挂载（切标签页再回来）会换掉画布节点，旧渲染器绑定的画布已脱离文档，
+ * 继续复用就是「解码统计正常、屏幕一动不动」，尺寸也停在画布的属性默认值上。
+ * 因此发现换脸就重建，视图旋转角由 viewDeg 承载，不随重建丢失。
+ */
+function ensureRenderer(): FrameRenderer | null {
+  if (!canvasEl) return null
+  if (renderer && (renderer.canvasElement !== canvasEl || !canvasEl.isConnected)) {
+    renderer.dispose()
+    renderer = null
+  }
+  if (!renderer) {
+    renderer = new FrameRenderer(canvasEl, {
+      // 同一画布的上下文类型不可更换：WebGL 彻底丢失后 2d/bitmap 也拿不到，
+      // 只能刷新页面重建画布
+      onUnrecoverable: () => setStatus({
+        phase: 'failed',
+        msg: '画面获取失败：GPU 上下文丢失且无法恢复，请刷新页面后重试',
+      }),
+    })
+    if (viewDeg) renderer.setViewRotation(viewDeg)
+  }
+  return renderer
+}
+
+/** 本次会话应使用的解码路径：强制软解、或 WebCodecs 不可用（非安全上下文）时走 WASM */
+function pickDecoderKind(): 'webcodecs' | 'wasm' {
+  if (forcedSoftDecode) return 'wasm'
+  return hasCodecsSupport() ? 'webcodecs' : 'wasm'
+}
+
+/** 软解跑不动时可改选的方案（按浏览器真实能力列，避免推荐一个本机也没有的选项） */
+function decodeAlternatives(): string {
+  const opts: string[] = []
+  if (hasCodecsSupport()) opts.push('「WebCodecs 硬解」')
+  if (hasRTCSupport()) opts.push('「WebRTC」')
+  return opts.length ? opts.join(' 或 ') : '其他可用方案'
+}
+
+/**
+ * 软解啃不动时的失败文案。
+ *
+ * 这里只失败、不换方案：方案选择权归用户，只有「自动」才允许自动切换
+ * （见 resolveMode）。显式选了软解就如实告知能力边界，并指出可改选什么。
+ */
+function softDecodeFailMsg(profile: number | null): string {
+  const codec = profile === null
+    ? '当前码流'
+    : '设备输出的 ' + (profile === 100 ? 'High' : 'profile ' + profile) + ' 码流'
+  return '画面获取失败：' + codec + '超出软解码器能力（仅支持 Baseline profile）。'
+    + '请改选' + decodeAlternatives() + '，或把「投屏方案」设为「自动」交给它自动选择'
+}
+
+/** 重建解码管线（新会话/切换方案/换流）：丢弃解码器、要求新的配置包 */
+function resetPipeline() {
+  sessionSeq++
+  hwDecoder?.close()
+  hwDecoder = null
+  softDecoder?.dispose()
+  softDecoder = null
+  needConfig = true
+  configData = null
+  decoderKind = ''
+  renderer?.newSession()
+}
+
+function reportPipeline() {
+  setStatus({
+    decoderKind,
+    renderKind: renderer ? renderer.renderKind : '',
+  })
+}
+
+/** 解码错误：仍在等首帧则保持 loading 交给超时兜底，否则仅提示 */
+function onDecodeError(message: string) {
+  if (!waitingKeyframe) showMsg(message)
+}
+
+function handleVideoFrame(flags: number, pts: number, payload: Uint8Array) {
+  const isConfig = (flags & 1) !== 0
+  const isKey = (flags & 2) !== 0
+
+  if (isConfig) {
+    configData = payload
+    // 配置包（SPS/PPS）决定 codec 串：重建解码器并等待其后的第一个关键帧
+    hwDecoder?.close()
+    hwDecoder = null
+    softDecoder?.dispose()
+    softDecoder = null
+    needConfig = false
+    const kind = pickDecoderKind()
+    decoderKind = kind
+    if (!ensureRenderer()) return
+    // 解码回调逐帧取渲染器：画布可能在会话中途被 React 换掉（切标签页重挂载），
+    // 闭包抓住旧实例就会把帧画到已脱离文档的画布上——统计正常但屏幕冻结。
+    const paint = (frame: VideoFrame) => {
+      firstFrameReady()
+      const r = ensureRenderer()
+      if (r) r.render(frame) // 所有权移交渲染器（内部 close）
+      else frame.close()
+    }
+    if (kind === 'webcodecs') {
+      hwDecoder = new H264Decoder({
+        onFrame: paint,
+        onError: onDecodeError,
+        // 追帧阈值：队列超过 12 帧（~200ms@60fps）时丢 delta 到下一个关键帧
+        maxQueue: 12,
+      })
+      hwDecoder.setConfiguration(configData)
+    } else {
+      const seq = sessionSeq
+      // 预检 SPS profile：h264bsd 只支持 Baseline(66)，多数 Android 机型输出 High(100)。
+      // 这里刻意「只失败、不换方案」：用户显式选了软解就尊重这个选择，跑不动就摊牌。
+      // profile 解析不到（null）时不拦截，交给运行时检测兜底。
+      const profile = spsProfileIdc(configData)
+      if (profile !== null && profile !== 66) {
+        decoderKind = 'wasm'
+        reportPipeline()
+        disarmFirstFrameTimeout()
+        waitingKeyframe = false
+        setStatus({ phase: 'failed', msg: softDecodeFailMsg(profile) })
+        return
+      }
+      // 软解每输出一幅通知首帧就绪（没有 VideoFrame 回调可挂钩）
+      const sd = new SoftH264Decoder(ensureRenderer, onDecodeError, {
+        onPicture: () => firstFrameReady(),
+        // 运行时二次检测（预检放行但仍解不出时）：同样只失败，不替用户换方案
+        onUnsupported: () => {
+          if (seq !== sessionSeq || softDecoder !== sd) return
+          disarmFirstFrameTimeout()
+          waitingKeyframe = false
+          setStatus({ phase: 'failed', msg: softDecodeFailMsg(configData ? spsProfileIdc(configData) : null) })
+        },
+      })
+      softDecoder = sd
+      // wasm 异步加载完成后才真正开始解码；期间到达的帧被丢弃，
+      // 等下一个关键帧（GOP=2s）自然接上
+      void sd.init().then(() => {
+        if (seq === sessionSeq && softDecoder === sd) reportPipeline()
+      })
+    }
+    reportPipeline()
+    return
+  }
+
+  if (needConfig || (!hwDecoder && !softDecoder)) return // 等首个配置包
+
+  const data = (isKey && configData) ? concat(configData, payload) : payload
+  if (hwDecoder) {
+    hwDecoder.push({ key: isKey, timestamp: pts, duration: 33333, data })
+    return
+  }
+  if (softDecoder?.ready) softDecoder.push(data, isKey) // wasm 仍在加载时丢弃
+}
+
+/** 上一次的设备标题（`设备（宽×高）`）：resize 时只换尺寸，设备名复用这里 */
+let lastTitle = ''
+
+// ---------- 顶部标题 ----------
+// 标题只承载「设备型号（编码尺寸）」。方案名由页头徽标展示，写进标题就是重复——
+// 此前只有 WebRTC 通道在自己的实现里硬编码了【WebRTC】前缀，另外两条路径都没有。
+
+/** meta：设备型号 + 编码尺寸 */
+function setTitleMeta(device: string, w: number, h: number) {
+  lastTitle = `${device}（${w}×${h}）`
+  setStatus({ title: lastTitle })
+}
+
+/** resize：只换尺寸（没有 meta 就不写，否则会把设备名弄丢） */
+function setTitleSize(w: number, h: number) {
+  if (!lastTitle) return
+  lastTitle = lastTitle.replace(/（.*）/, `（${w}×${h}）`)
+  setStatus({ title: lastTitle })
+}
+
 function openVideoWS(serial: string) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}`)
@@ -200,12 +474,10 @@ function openVideoWS(serial: string) {
       const msg = JSON.parse(ev.data)
       if (msg.type === 'meta') {
         videoW = msg.width; videoH = msg.height
-        lastTitle = `${msg.device}（${msg.width}×${msg.height}）`
-        setStatus({ title: lastTitle })
+        setTitleMeta(msg.device, msg.width, msg.height)
       } else if (msg.type === 'resize') {
         videoW = msg.width; videoH = msg.height
-        lastTitle = lastTitle.replace(/（.*）/, `（${msg.width}×${msg.height}）`)
-        setStatus({ title: lastTitle })
+        setTitleSize(msg.width, msg.height)
       }
       return
     }
@@ -216,23 +488,7 @@ function openVideoWS(serial: string) {
     const payload = buf.subarray(9)
     if (!(flags & 1)) { frameCount++; byteCount += payload.length }
     tickStats()
-
-    const isConfig = (flags & 1) !== 0, isKey = (flags & 2) !== 0
-    if (isConfig) { configData = payload; return }
-
-    if (!mirrorDecoder || !started) {
-      if (!configData) return // 等首个 SPS/PPS 配置包再创建解码器（codec 串由 SPS 推导）
-      setupDecoder(configData)
-    }
-    if (mirrorDecoder!.state !== 'configured') return
-    const data = (isKey && configData) ? concat(configData, payload) : payload
-    try {
-      mirrorDecoder!.decode(new EncodedVideoChunk({ type: isKey ? 'key' : 'delta', timestamp: pts, data }))
-    } catch (e) {
-      // 还在等首帧时解码失败（如 delta 先于 key 到达）：保持 loading 由超时/后续关键帧兜底，
-      // 不解除等待（修复：此前只 showMsg 导致一直转圈永不转失败/成功）
-      if (!waitingKeyframe) showMsg('解码异常: ' + (e as Error).message)
-    }
+    handleVideoFrame(flags, pts, payload)
   }
   ws.onclose = ev => {
     if (mirrorWS !== ws) return
@@ -247,51 +503,6 @@ function openVideoWS(serial: string) {
       }
     }
   }
-}
-
-let started = false
-let lastTitle = ''
-
-function setupDecoder(config: Uint8Array | null) {
-  if (!canvasEl) return
-  let codec = 'avc1.640029'
-  const sps = config ? findNAL(config, 7) : null
-  if (sps && sps.length >= 4) {
-    codec = 'avc1.' + [sps[1], sps[2], sps[3]].map(b => b.toString(16).padStart(2, '0')).join('')
-  }
-  mirrorDecoder = new VideoDecoder({
-    output: frame => {
-      firstFrameReady() // 首帧（及后续每帧）到达：解除 loading/超时
-      if (canvasEl) {
-        if (canvasEl.width !== frame.displayWidth || canvasEl.height !== frame.displayHeight) {
-          canvasEl.width = frame.displayWidth
-          canvasEl.height = frame.displayHeight
-        }
-        canvasEl.getContext('2d')!.drawImage(frame, 0, 0)
-      }
-      frame.close()
-    },
-    error: e => {
-      disarmFirstFrameTimeout()
-      waitingKeyframe = false
-      setStatus({ phase: 'failed', msg: '画面获取失败：解码错误 ' + e.message })
-    },
-  })
-  mirrorDecoder.configure({ codec, optimizeForLatency: true })
-  started = true
-}
-
-function findNAL(data: Uint8Array, type: number) {
-  for (let i = 0; i < data.length - 4; i++) {
-    if (data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 0 && data[i + 3] === 1 && (data[i + 4] & 0x1f) === type) {
-      let end = data.length
-      for (let j = i + 4; j < data.length - 3; j++) {
-        if (data[j] === 0 && data[j + 1] === 0 && data[j + 2] === 0 && data[j + 3] === 1) { end = j; break }
-      }
-      return data.subarray(i + 4, end)
-    }
-  }
-  return null
 }
 
 function concat(a: Uint8Array, b: Uint8Array) {
@@ -563,10 +774,10 @@ function openCtrlWS(serial: string) {
     const msg = JSON.parse(ev.data)
     if (msg.type === 'meta') {
       videoW = msg.width; videoH = msg.height
-      setStatus({ title: `【WebRTC】${msg.device}（${msg.width}×${msg.height}）` })
+      setTitleMeta(msg.device, msg.width, msg.height)
     } else if (msg.type === 'resize') {
       videoW = msg.width; videoH = msg.height
-      setStatus({ title: lastTitle.replace(/（.*）/, `（${msg.width}×${msg.height}）`) })
+      setTitleSize(msg.width, msg.height)
     }
   }
   ws.onclose = ev => {
@@ -600,17 +811,18 @@ async function startWebrtcViewer(serial: string) {
       v.muted = true
       v.srcObject = ev.streams && ev.streams[0] ? ev.streams[0] : new MediaStream([ev.track])
       v.play().catch(() => {})
-      // 隐藏 video 的合成器会丢帧导致 rVFC 不触发，用 rAF 循环 drawImage 取解码帧
+      // 隐藏 video 的合成器会丢帧导致 rVFC 不触发，用 rAF 循环取解码帧；
+      // 上屏走统一渲染器（WebGL 时 <video> 直接作为纹理源，零拷贝）
+      decoderKind = 'webrtc'
+      reportPipeline()
       let drewFirst = false
       const drawLoop = () => {
         if (webrtcPC !== pc) return
         if (v.videoWidth && canvasEl) {
-          if (canvasEl.width !== v.videoWidth || canvasEl.height !== v.videoHeight) {
-            canvasEl.width = v.videoWidth
-            canvasEl.height = v.videoHeight
-            videoW = v.videoWidth; videoH = v.videoHeight
-          }
-          canvasEl.getContext('2d')!.drawImage(v, 0, 0, v.videoWidth, v.videoHeight)
+          videoW = v.videoWidth; videoH = v.videoHeight
+          const r = ensureRenderer()
+          if (r) r.renderVideo(v)
+          else canvasEl.getContext('2d')?.drawImage(v, 0, 0, v.videoWidth, v.videoHeight)
           if (!drewFirst) { drewFirst = true; firstFrameReady() } // 首帧真正画上才解除 loading
         }
         requestAnimationFrame(drawLoop)
@@ -620,14 +832,14 @@ async function startWebrtcViewer(serial: string) {
       const statsLoop = async () => {
         let prev = 0
         while (webrtcPC === pc) {
-          await new Promise(r => setTimeout(r, 1000))
+          await new Promise(res => setTimeout(res, 1000))
           if (webrtcPC !== pc) return
           const st = await pc.getStats()
           let decoded = 0
           st.forEach(s => { if (s.type === 'inbound-rtp' && s.kind === 'video') decoded = s.framesDecoded })
           if (decoded > prev) clearKeyframeWait()
-          if (lastDecoded < 0) { lastDecoded = decoded; prev = decoded; continue }
-          setStatus({ stats: `${Math.max(0, decoded - prev)} fps · WebRTC` })
+          // 同 tickStats：方案与渲染后端交给徽标，统计行只报帧率
+          setStatus({ stats: `${Math.max(0, decoded - prev)} fps` })
           prev = decoded
         }
       }
@@ -677,16 +889,12 @@ async function startWebrtcViewer(serial: string) {
   await pc.setRemoteDescription({ type: r.type, sdp: r.sdp })
 }
 
-let lastDecoded = -1
-
 // ---------- 启停与切换 ----------
 function closeViewers() {
   if (mirrorWS) { mirrorWS.onclose = null; mirrorWS.close(); mirrorWS = null }
-  if (mirrorDecoder) { try { mirrorDecoder.close() } catch { /* 已关闭 */ } mirrorDecoder = null }
+  resetPipeline()
   closeWebrtcViewer()
   closeAudio()
-  started = false
-  lastDecoded = -1
 }
 function closeWebrtcViewer() {
   if (webrtcPC) { try { webrtcPC.close() } catch { /* 已关闭 */ } webrtcPC = null }
@@ -696,7 +904,7 @@ function closeWebrtcViewer() {
 export function stopMirror(callApi: boolean) {
   disarmFirstFrameTimeout()
   if (mirrorWS) { mirrorWS.onclose = null; mirrorWS.close(); mirrorWS = null }
-  if (mirrorDecoder) { try { mirrorDecoder.close() } catch { /* 已关闭 */ } mirrorDecoder = null }
+  resetPipeline()
   closeWebrtcViewer()
   closeAudio()
   if (callApi && mirrorSerial) api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {})
@@ -704,12 +912,7 @@ export function stopMirror(callApi: boolean) {
   deviceAudio = false
   audioDup = false
   waitingKeyframe = false
-  started = false
-  if (canvasEl) {
-    const ctx = canvasEl.getContext('2d')
-    if (ctx) ctx.clearRect(0, 0, canvasEl.width, canvasEl.height)
-  }
-  setStatus({ running: false, title: '投屏', stats: '', msg: '', phase: 'loading' })
+  setStatus({ running: false, title: '投屏', stats: '', msg: '', phase: 'loading', decoderKind: '', renderKind: '' })
 }
 
 // 观众感知停止：还有其他观看者时仅断开本页，不停止共享流
@@ -726,13 +929,53 @@ export async function stopMirrorViewerAware() {
   stopMirror(true)
 }
 
-export async function startMirror(serial: string) {
-  const s = loadMirrorSettings(serial)
+/**
+ * 解析期望方案到实际可用方案（降级优先级：WebCodecs → WebRTC → WASM 软解）。
+ * 返回实际方案与降级说明（未降级时为空串）。
+ */
+function resolveMode(want: MirrorSettings['mode']): { mode: 'codecs' | 'webrtc' | 'wasm'; notice: string } {
   const hasCodecs = hasCodecsSupport()
   const hasRTC = hasRTCSupport()
-  if (!hasCodecs && !hasRTC) {
-    alert('当前浏览器不支持 WebCodecs 与 WebRTC，无法投屏。请使用 Chrome / Edge 94+ 或较新的 Safari'
-      + (codecsBlockedByInsecureContext() ? '\n（当前为 HTTP 非安全上下文访问：请改用 localhost 访问，或为服务配置 HTTPS 反向代理）' : ''))
+  const hasSoft = hasSoftDecodeSupport()
+  let mode = want
+  let notice = ''
+  if (mode === 'auto') mode = hasCodecs ? 'codecs' : hasRTC ? 'webrtc' : 'wasm'
+  if (mode === 'codecs' && !hasCodecs) {
+    if (hasRTC) { mode = 'webrtc'; notice = '当前浏览器不支持 WebCodecs（HTTP 非安全上下文或版本过旧），已自动改用 WebRTC 投屏' }
+    else if (hasSoft) { mode = 'wasm'; notice = '当前浏览器不支持 WebCodecs，已自动改用 WASM 软解投屏' }
+  } else if (mode === 'webrtc' && !hasRTC) {
+    if (hasCodecs) { mode = 'codecs'; notice = '当前浏览器不支持 WebRTC，已自动改用 WebCodecs 投屏' }
+    else if (hasSoft) { mode = 'wasm'; notice = '当前浏览器不支持 WebRTC，已改用 WASM 软解投屏' }
+  } else if (mode === 'wasm' && !hasSoft) {
+    mode = hasCodecs ? 'codecs' : 'webrtc'
+    notice = '当前浏览器不支持 WebAssembly，已改用' + (mode === 'codecs' ? ' WebCodecs' : ' WebRTC') + ' 投屏'
+  }
+  return { mode, notice }
+}
+
+/** 建立观看通道（mode 必须已解析）：打开对应的 WS / PeerConnection */
+function openViewer(serial: string, mode: 'codecs' | 'webrtc' | 'wasm') {
+  forcedSoftDecode = mode === 'wasm'
+  webrtcMode = mode === 'webrtc'
+  if (webrtcMode) {
+    openCtrlWS(serial)
+    return startWebrtcViewer(serial)
+  }
+  openVideoWS(serial)
+  if (audioDup || !deviceAudio) openAudioWS(serial)
+}
+
+/** 当前会话实际生效的方案（用于判断切换方案是否需要重建观看通道） */
+function effectiveMode(): 'codecs' | 'webrtc' | 'wasm' {
+  return webrtcMode ? 'webrtc' : decoderKind === 'wasm' ? 'wasm' : 'codecs'
+}
+
+export async function startMirror(serial: string) {
+  const s = loadMirrorSettings(serial)
+  if (!hasCodecsSupport() && !hasRTCSupport() && !hasSoftDecodeSupport()) {
+    alert('当前浏览器不支持 WebCodecs、WebRTC 与 WebAssembly，无法投屏。'
+      + '请使用 Chrome / Edge 94+ 或较新的 Safari'
+      + (codecsBlockedByInsecureContext() ? '\n（当前为 HTTP 非安全上下文访问：WebCodecs 被浏览器禁用，可改用 WebRTC / WASM 软解，或用 localhost 访问、为服务配置 HTTPS 反向代理）' : ''))
     return
   }
   // 一个标签页只投一台：切换设备前先干净结束当前会话（不删服务端流）
@@ -741,32 +984,18 @@ export async function startMirror(serial: string) {
   deviceAudio = s.audioMode === 'device'
   audioDup = s.audioMode === 'both'
   videoW = 720; videoH = 1280
-  let mode = s.mode || 'codecs'
-  if (mode === 'codecs' && !hasCodecs) {
-    mode = 'webrtc'
-    showMsg('当前浏览器不支持 WebCodecs，已自动改用 WebRTC 投屏')
-  } else if (mode === 'webrtc' && !hasRTC) {
-    mode = 'codecs'
-    showMsg('当前浏览器不支持 WebRTC，已自动改用 WebCodecs 投屏')
-  }
-  webrtcMode = mode === 'webrtc'
-  setStatus({ running: true, title: serial + ' — 连接中…', stats: '', phase: 'loading' })
-  if (mode === (s.mode || 'codecs')) showMsg('')
+
+  const { mode, notice } = resolveMode(s.mode || 'auto')
+  setStatus({ running: true, title: serial + ' — 连接中…', stats: '', phase: 'loading', decoderKind: '', renderKind: '' })
+  showMsg(notice)
   // 清掉上一次的画面：等待新首帧前不能让旧帧造成"已在投"的错觉
-  if (canvasEl) {
-    const ctx = canvasEl.getContext('2d')
-    if (ctx) ctx.clearRect(0, 0, canvasEl.width, canvasEl.height)
-  }
+  resetPipeline()
   canvasEl?.focus()
   try {
-    await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`, loadMirrorSettings(serial))
-    if (webrtcMode) {
-      openCtrlWS(serial)
-      await startWebrtcViewer(serial)
-    } else {
-      openVideoWS(serial)
-      if (!deviceAudio) openAudioWS(serial)
-    }
+    await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`, {
+      audioMode: s.audioMode, bitrateMbps: s.bitrateMbps, shortSize: s.shortSize, maxFps: s.maxFps,
+    })
+    openViewer(serial, mode)
     armFirstFrameTimeout() // 启动请求成功但迟迟无首帧 → 超时失败
   } catch (e) {
     setStatus({ phase: 'failed', msg: '画面获取失败：启动投屏失败 ' + (e as Error).message })
@@ -776,28 +1005,18 @@ export async function startMirror(serial: string) {
 // 设置应用：仅切方案 → 轻量重建观看通道；画质/音频变更 → 重启设备端流
 export async function applySettings(serial: string, next: MirrorSettings) {
   if (!mirrorSerial || mirrorRestarting || mirrorSerial !== serial) return
-  const qualityChanged = JSON.stringify(next) !== savedQualityJSON(serial)
-  const modeChanged = (next.mode === 'webrtc') !== webrtcMode
+  const { mode } = resolveMode(next.mode)
+  const qualityChanged = qualityJSON(next) !== savedQualityJSON(serial)
+  const modeChanged = mode !== effectiveMode()
   saveMirrorSettings(serial, next)
   if (!qualityChanged && !modeChanged) return
   if (!qualityChanged) {
     mirrorRestarting = true
-    // 切换方案：清画面 + loading，等新方案首帧
-    if (canvasEl) {
-      const ctx = canvasEl.getContext('2d')
-      if (ctx) ctx.clearRect(0, 0, canvasEl.width, canvasEl.height)
-    }
+    // 切换方案：设备端流不动，只重建观看通道
     waitKeyframe()
     try {
       closeViewers()
-      webrtcMode = next.mode === 'webrtc'
-      if (webrtcMode) {
-        openCtrlWS(serial)
-        await startWebrtcViewer(serial)
-      } else {
-        openVideoWS(serial)
-        if (audioDup || !deviceAudio) openAudioWS(serial)
-      }
+      openViewer(serial, mode)
     } catch (e) {
       setStatus({ phase: 'failed', msg: '画面获取失败：切换投屏方案失败 ' + (e as Error).message })
     } finally {
@@ -805,7 +1024,6 @@ export async function applySettings(serial: string, next: MirrorSettings) {
     }
     return
   }
-  webrtcMode = next.mode === 'webrtc'
   await restartStream()
 }
 
@@ -813,29 +1031,20 @@ async function restartStream() {
   const serial = mirrorSerial
   if (!serial || mirrorRestarting) return
   mirrorRestarting = true
-  // 参数切换（码率/分辨率/帧率/声音）：清画面 + loading，等新参数流的首帧
-  if (canvasEl) {
-    const ctx = canvasEl.getContext('2d')
-    if (ctx) ctx.clearRect(0, 0, canvasEl.width, canvasEl.height)
-  }
+  // 参数切换（码率/分辨率/帧率/声音）：清画面 + loading，等新参数流首帧
   setStatus({ phase: 'loading', msg: '正在应用新参数…' })
   try {
     closeViewers()
     await api('DELETE', `/api/devices/${encodeURIComponent(serial)}/mirror`).catch(() => {})
     const s = loadMirrorSettings(serial)
+    const { mode } = resolveMode(s.mode)
     await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`, {
       audioMode: s.audioMode, bitrateMbps: s.bitrateMbps, shortSize: s.shortSize, maxFps: s.maxFps,
     })
     deviceAudio = s.audioMode === 'device'
     audioDup = s.audioMode === 'both'
     waitKeyframe()
-    if (webrtcMode) {
-      openCtrlWS(serial)
-      await startWebrtcViewer(serial)
-    } else {
-      openVideoWS(serial)
-      if (audioDup || !deviceAudio) openAudioWS(serial)
-    }
+    openViewer(serial, mode)
   } catch (e) {
     setStatus({ phase: 'failed', msg: '画面获取失败：重启投屏流失败 ' + (e as Error).message })
   } finally {

@@ -2,12 +2,17 @@ import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import {
   androidKeyFor, applySettings, clipboardGet, clipboardSet, codecsBlockedByInsecureContext, controllerSerial,
-  hasCodecsSupport, hasRTCSupport, initController, loadMirrorSettings, sendKey, sendOp, sendScroll, sendText,
-  sendTouch, setPageMuted, startMirror, stopMirror, stopMirrorViewerAware, type MirrorSettings,
+  hasCodecsSupport, hasRTCSupport, hasSoftDecodeSupport, initController, loadMirrorSettings, rotateView, sendKey, sendOp, sendScroll, sendText,
+  sendTouch, setPageMuted, startMirror, stopMirror, stopMirrorViewerAware, viewRotation, type MirrorSettings,
 } from '../mirror/controller'
 
 const isAppleTouch = /iP(hone|ad|od)/i.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+
+/** 生效方案 → 展示名。与设置面板下拉的选项文案保持一致，避免两处说法打架 */
+function planLabel(kind: string): string {
+  return kind === 'webcodecs' ? 'WebCodecs' : kind === 'wasm' ? 'WASM 软解' : kind === 'webrtc' ? 'WebRTC' : kind
+}
 
 export default function MirrorPanel() {
   const selected = useStore(s => s.selected)
@@ -17,6 +22,8 @@ export default function MirrorPanel() {
   const [msg, setMsg] = useState('')
   const [muted, setMuted] = useState(false)
   const [phase, setPhase] = useState<'loading' | 'ready' | 'failed'>('loading')
+  const [decoderKind, setDecoderKind] = useState('')
+  const [renderKind, setRenderKind] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settings, setSettings] = useState<MirrorSettings>(loadMirrorSettings(selected))
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -24,6 +31,7 @@ export default function MirrorPanel() {
   const stageRef = useRef<HTMLDivElement>(null)
   const activePointers = useRef(new Set<number>())
   const [fsOn, setFsOn] = useState(false)
+  const [maxed, setMaxed] = useState(false)
   const [fsSupported] = useState(() =>
     typeof HTMLElement !== 'undefined' && typeof HTMLElement.prototype.requestFullscreen === 'function')
 
@@ -33,6 +41,24 @@ export default function MirrorPanel() {
     document.addEventListener('fullscreenchange', onChange)
     return () => document.removeEventListener('fullscreenchange', onChange)
   }, [])
+
+  // 最大化：只隐藏应用自身的外壳（顶栏/设备栏/工具栏），画面占满浏览器窗口。
+  // 与「全屏显示」的区别：最大化仍在浏览器窗口内（浏览器 UI 还在），
+  // 全屏走原生 Fullscreen API（连浏览器 UI 一起让出）；两者可叠加。
+  useEffect(() => {
+    document.body.classList.toggle('mirror-max', maxed)
+    return () => document.body.classList.remove('mirror-max')
+  }, [maxed])
+
+  // 最大化时工具栏已收起，补一个 Esc 退出（全屏下 Esc 归浏览器，此处不抢）
+  useEffect(() => {
+    if (!maxed) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !document.fullscreenElement) setMaxed(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [maxed])
 
   // 全屏显示：让舞台（画布+遮罩）进入浏览器原生全屏；请求被拒时兜底提示
   const toggleFullscreen = async () => {
@@ -54,6 +80,8 @@ export default function MirrorPanel() {
         if (s.running !== undefined) setRunning(s.running)
         if (s.muted !== undefined) setMuted(s.muted)
         if (s.phase !== undefined) setPhase(s.phase)
+        if (s.decoderKind !== undefined) setDecoderKind(s.decoderKind)
+        if (s.renderKind !== undefined) setRenderKind(s.renderKind)
       },
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -178,10 +206,17 @@ export default function MirrorPanel() {
     return () => canvas.removeEventListener('pointerup', refocus)
   }, [])
 
-  const ops = ['back', 'home', 'menu', 'notify', 'power', 'rotate'] as const
+  // 设备操作按钮（不含旋转：旋转只转网页画面，见 rotateView）
+  const ops = ['back', 'home', 'menu', 'notify', 'power'] as const
   const opLabel: Record<string, string> = {
-    back: '返回', home: '主页', menu: '菜单', notify: '通知', power: '电源', rotate: '旋转',
+    back: '返回', home: '主页', menu: '菜单', notify: '通知', power: '电源',
   }
+
+  // 视图旋转角：0 → 90 → 180 → 270 → 0 循环（角度存在 controller，这里只做展示）
+  const [viewDeg, setViewDeg] = useState(viewRotation())
+  const rotateViewClick = () => setViewDeg(rotateView())
+  // 切标签页会让本组件重挂载、state 归零而角度仍在 controller 里，故同步一次
+  useEffect(() => { setViewDeg(viewRotation()) }, [running])
 
   const clipboardGetClick = async () => {
     if (!selected) return
@@ -222,15 +257,33 @@ export default function MirrorPanel() {
       <div className="mirror-head">
         <span className="m-title">{title}</span>
         <span className="m-stats">{stats}</span>
+        {running && decoderKind && (
+          <span className="m-badge" title={'方案：' + planLabel(decoderKind) + '（解码 ' + decoderKind + ' / 渲染 ' + renderKind + '）'}>
+            {/* 显示实际生效的方案名（与设置面板下拉一致）：硬解/软解是手段，
+                不是用户选的方案，写出来反而与下拉对不上 */}
+            {planLabel(decoderKind)}
+            {/* 渲染后端三方案共用同一条管线，正常都是 WebGL——写出来只是噪音，
+                只有退回 2D（无 WebGL2 的浏览器）时才值得提示 */}
+            {renderKind === 'canvas2d' ? ' · 2D' : ''}
+          </span>
+        )}
         <span className="spacer" />
         {ops.map(op => (
           <button key={op} className="btn tiny ghost" disabled={!running} onClick={() => sendOp(op)}>{opLabel[op]}</button>
         ))}
+        <button className="btn tiny ghost" disabled={!running} onClick={rotateViewClick}
+          title="只旋转网页上的画面，不改变手机方向（点击循环 0°→90°→180°→270°）">
+          ⟳ 旋转画面 {viewDeg}°
+        </button>
         <button className="btn tiny ghost" disabled={!running} onClick={clipboardGetClick}>取剪贴板</button>
         <button className="btn tiny ghost" disabled={!running} onClick={clipboardPasteClick}>粘贴到设备</button>
         <button className="btn tiny" onClick={muteClick}>{muted ? '🔇 已静音' : '🔊 声音'}</button>
         <button className="btn tiny ghost" onClick={toggleFullscreen} disabled={!fsSupported}>
           {!fsSupported ? '⛶ 不支持' : fsOn ? '⛶ 退出全屏' : '⛶ 全屏显示'}
+        </button>
+        <button className="btn tiny ghost" onClick={() => setMaxed(v => !v)}
+          title="隐藏页面外壳，让画面占满浏览器窗口（浏览器界面仍在）">
+          {maxed ? '⤡ 退出最大化' : '⤢ 最大化窗口'}
         </button>
         <button className="btn tiny ghost" onClick={() => setSettingsOpen(v => !v)}>⚙ 设置</button>
         {running
@@ -242,11 +295,21 @@ export default function MirrorPanel() {
         <div className="mirror-settings">
           <label>投屏方案
             <select value={settings.mode} onChange={e => set('mode', e.target.value)}>
-              <option value="codecs" disabled={!hasCodecsSupport()}>
-                WebCodecs（WS 直推）{hasCodecsSupport() ? '' : codecsBlockedByInsecureContext() ? '（需 HTTPS 或 localhost 访问）' : '（浏览器不支持）'}
+              {/* 选项只留方案名：括号里的描述会和实际语义打架（「自动」不是一定硬解、
+                  「WASM 软解」也兜不住非 Baseline 码流），不可用的原因挪到 title */}
+              <option value="auto">自动</option>
+              <option value="codecs" disabled={!hasCodecsSupport()}
+                title={hasCodecsSupport() ? undefined
+                  : codecsBlockedByInsecureContext() ? '需 HTTPS 或 localhost 访问' : '当前浏览器不支持 WebCodecs'}>
+                WebCodecs
               </option>
-              <option value="webrtc" disabled={!hasRTCSupport()}>
-                WebRTC（原生低延迟）{hasRTCSupport() ? '' : '（浏览器不支持）'}
+              <option value="webrtc" disabled={!hasRTCSupport()}
+                title={hasRTCSupport() ? undefined : '当前浏览器不支持 WebRTC'}>
+                WebRTC
+              </option>
+              <option value="wasm" disabled={!hasSoftDecodeSupport()}
+                title={hasSoftDecodeSupport() ? undefined : '当前浏览器不支持 WebAssembly'}>
+                WASM 软解
               </option>
             </select>
           </label>
@@ -300,6 +363,12 @@ export default function MirrorPanel() {
         </div>
         <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
       </div>
+      {/* 最大化时工具栏整体收起，留这个悬浮按钮退出（在 .mirror-head 之外，不会被一起藏） */}
+      {maxed && (
+        <button className="btn tiny ghost max-exit" onClick={() => setMaxed(false)}>
+          ⤡ 退出最大化
+        </button>
+      )}
       {msg && <div className="mirror-msg">{msg}</div>}
       {!selected && <div className="hint" style={{ padding: '6px 2px' }}>请先在设备列表中选择设备。</div>}
     </div>

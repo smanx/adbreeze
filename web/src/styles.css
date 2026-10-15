@@ -103,6 +103,14 @@ input, select {
 .device-serial {
   font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.device-tags { display: flex; align-items: center; gap: 4px; }
+/* 连接方式徽标：无线（TCP/IP）与有线（USB）用不同色调区分，一眼可辨 */
+.conn-badge {
+  font-size: 11px; width: fit-content; padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
+}
+.conn-badge.wireless { background: #e6f0fd; color: #1a56b3; border-color: #bcd4f5; }
+.conn-badge.usb { background: #f1f3f5; color: #4a5259; }
 .state-badge {
   font-size: 11px; width: fit-content; padding: 1px 6px; border-radius: 4px;
   background: #e8eaed; color: var(--muted);
@@ -122,31 +130,58 @@ input, select {
 .settings-row { display: flex; gap: 8px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
 .settings-row input { flex: 1; min-width: 200px; }
 
+/* 设置页的分块：ADB 路径等运行时设置 */
+.settings-block {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px; margin-bottom: 16px;
+}
+.settings-block h3 { margin: 0 0 6px; font-size: 15px; }
+.adb-path-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0 4px; }
+.adb-path-row input { flex: 1; min-width: 240px; font-family: ui-monospace, Consolas, monospace; }
+.settings-panel .hint code {
+  font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+  background: #eef1f4; padding: 1px 5px; border-radius: 4px; word-break: break-all;
+}
+.hint.ok-text { color: var(--primary); }
+
 /* ---------- 投屏面板 ---------- */
-.mirror-panel { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
+/* 面板占满内容区高度：头部/设置为固定高度，画面区 flex:1 吃掉剩余空白，
+   这样舞台才有「与画布无关的确定尺寸」供渲染器测量（否则画布尺寸←盒子尺寸
+   ←画布尺寸 循环，画面只能缩在中间）。 */
+.mirror-panel { height: 100%; display: flex; flex-direction: column; gap: 8px; }
 .mirror-head {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px;
 }
 .m-title { font-weight: 600; }
 .m-stats { color: var(--muted); font-size: 12px; }
+/* 解码/渲染路径徽标：一眼看出当前走硬解还是软解、WebGL 是否生效 */
+.m-badge {
+  color: var(--muted); font-size: 11px; padding: 1px 7px;
+  border: 1px solid var(--border); border-radius: 999px; white-space: nowrap;
+}
 .mirror-settings {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px;
 }
 .mirror-settings label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 .mirror-body {
-  background: #000; border-radius: 8px; display: flex; justify-content: center;
-  padding: 8px; min-height: 200px;
+  background: #000; border-radius: 8px; display: flex;
+  padding: 8px; flex: 1 1 auto; min-height: 0;
 }
-/* 画布 + 遮罩的定位容器 */
-.mirror-stage { position: relative; display: flex; justify-content: center; max-width: 100%; }
-/* 全屏：舞台铺满屏幕，画布在可用区内等比缩放 */
+/* 画布 + 遮罩的定位容器。flex:1 撑满 mirror-body 的内容区，
+   与画布自身尺寸无关——渲染器据此计算可用空间并把画面等比 fit 进去。
+   overflow:hidden：首帧到达前画布仍是 HTML 上的初始大尺寸（720×1280），
+   不裁剪会撑破布局、顶出滚动条。 */
+.mirror-stage {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  flex: 1 1 auto; min-height: 0; min-width: 0; overflow: hidden;
+}
+/* 全屏：舞台铺满屏幕，画布由渲染器按屏幕尺寸重新 fit */
 .mirror-stage:fullscreen {
   width: 100vw; height: 100vh; background: #000;
   align-items: center; justify-content: center;
 }
-.mirror-stage:fullscreen #mirror-canvas { max-width: 100vw; max-height: 100vh; }
 .mirror-overlay {
   position: absolute; inset: 0; z-index: 5;
   background: #0b0e12ee; border-radius: 6px;
@@ -162,8 +197,10 @@ input, select {
   animation: spin 0.9s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* 画布尺寸（CSS 盒 + 内部分辨率）全部由渲染器按舞台可用空间等比计算后写入，
+   这里不得再设 max-width/max-height——那会只夹住一个方向，破坏宽高比。 */
 #mirror-canvas {
-  max-width: 100%; max-height: 72vh; background: #000; border-radius: 6px;
+  display: block; background: #000; border-radius: 6px;
   touch-action: none; outline: none;
 }
 .mirror-msg {
@@ -480,6 +517,28 @@ input, select {
 
 /* ---------- 底部 TabBar（仅手机） ---------- */
 .tabbar { display: none; }
+
+/* ---------- 投屏最大化（只留画面，占满浏览器窗口） ----------
+   作用在 body 上而不是面板上：顶栏与设备栏是 Shell 的兄弟节点，
+   只有从根节点下手才能让投屏面板吃到整个视口。
+   用 class 而非 hidden 属性，避免被各元素自身的 display 规则覆盖。 */
+body.mirror-max .topbar,
+body.mirror-max .sidebar,
+body.mirror-max .tabbar,
+body.mirror-max .drawer,
+body.mirror-max .drawer-mask,
+body.mirror-max .mirror-head,
+body.mirror-max .mirror-settings,
+body.mirror-max .mirror-msg { display: none !important; }
+body.mirror-max .content { padding: 0; overflow: hidden; }
+body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
+
+/* 最大化后工具栏也收起，靠这个悬浮按钮退出。常态半透明不挡画面，悬停才显眼 */
+.max-exit {
+  position: fixed; top: 10px; right: 10px; z-index: 60;
+  opacity: 0.3; transition: opacity 0.15s;
+}
+.max-exit:hover, .max-exit:focus-visible { opacity: 1; }
 
 /* ---------- 手机断点 ---------- */
 @media (max-width: 880px) {
