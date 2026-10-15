@@ -2,5 +2,9 @@
 bin/
 *.exe
 
+# 前端打包输出（go:embed 资源，构建前需先 npm run build）
+web/dist/
+node_modules/
+
 # 注：vendor-bin/scrcpy-server-v2.4 为构建必需的内嵌资源，随仓库分发
 # （来源：https://github.com/Genymobile/scrcpy/releases/tag/v2.4，Apache-2.0）
