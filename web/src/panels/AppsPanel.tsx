@@ -142,9 +142,8 @@ export default function AppsPanel() {
     setMenu(null)
     setBusyPkg(app.package); setHint('导出 APK…')
     try {
-      const blob = await fetch(`/api/devices/${encodeURIComponent(selected!)}/apps/apk?package=${encodeURIComponent(app.package)}`, {
-        headers: { 'X-Auth-Token': useStore.getState().token },
-      }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob() })
+      const blob = await fetch(`/api/devices/${encodeURIComponent(selected!)}/apps/apk?package=${encodeURIComponent(app.package)}`)
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob() })
       const a = document.createElement('a')
       a.href = URL.createObjectURL(blob)
       // AYA 同款命名：包名-版本.apk

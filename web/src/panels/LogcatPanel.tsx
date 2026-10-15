@@ -35,7 +35,6 @@ function parseLine(raw: string): LogEntry | null {
 
 export default function LogcatPanel() {
   const selected = useStore(s => s.selected)
-  const token = useStore(s => s.token)
   const [lines, setLines] = useState<LogEntry[]>([])
   const [connected, setConnected] = useState(false)
   const [status, setStatus] = useState('')
@@ -67,7 +66,7 @@ export default function LogcatPanel() {
     setLines([])
     setStatus('连接中…')
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${proto}://${location.host}/ws/logcat/${encodeURIComponent(selected)}?token=${encodeURIComponent(token)}`)
+    const ws = new WebSocket(`${proto}://${location.host}/ws/logcat/${encodeURIComponent(selected)}`)
     wsRef.current = ws
     ws.onopen = () => { setConnected(true); setStatus('') }
     ws.onmessage = ev => { if (typeof ev.data === 'string') append(ev.data) }
@@ -78,7 +77,7 @@ export default function LogcatPanel() {
       setStatus(ev.reason || ev.code === 4000 ? `已断开：${ev.reason || 'logcat 连接中断'}` : '已断开（设备离线？）')
     }
     return () => { ws.onclose = null; ws.close(); wsRef.current = null; setConnected(false) }
-  }, [selected, token, append])
+  }, [selected, append])
 
   // 自动滚动
   useEffect(() => {

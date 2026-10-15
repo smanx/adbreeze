@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { clearReconnectTimer, useStore } from '../store'
+import { clearSession } from '../api'
 import { Placeholder, TABS } from '../panels'
 import DeviceList from './DeviceList'
 import MirrorPanel from '../panels/MirrorPanel'
@@ -23,13 +24,35 @@ export default function Shell() {
   const serverConnected = useStore(s => s.serverConnected)
   const version = useStore(s => s.version)
   const watchEvents = useStore(s => s.watchEvents)
-  const setToken = useStore(s => s.setToken)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [loggedOut, setLoggedOut] = useState(false)
 
   useEffect(() => {
+    if (loggedOut) return
     watchEvents()
     return () => { clearReconnectTimer() }
-  }, [])
+  }, [loggedOut])
+
+  // 退出：清除后端会话 cookie 并断开事件通道。
+  // Basic 凭证由浏览器按源缓存、无法由脚本清除，故此处仅做降级退出提示。
+  const logout = async () => {
+    if (!confirm('退出将结束当前会话（浏览器记住的登录凭证需关闭标签页后才会失效），确定？')) return
+    clearReconnectTimer()
+    await clearSession()
+    setLoggedOut(true)
+  }
+
+  if (loggedOut) {
+    return (
+      <div className="auth-page">
+        <div className="auth-card">
+          <h1>已退出</h1>
+          <p className="auth-sub">会话已结束。关闭此标签页即可彻底清除浏览器保存的登录凭证。</p>
+          <button className="btn primary" onClick={() => location.reload()}>重新登录</button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="app-shell">
@@ -50,7 +73,7 @@ export default function Shell() {
           ))}
         </nav>
         <a className="btn ghost" href="./legacy.html" target="_blank" rel="noreferrer">旧版页面</a>
-        <button className="btn ghost" onClick={() => { if (confirm('退出将清除 Token，确定？')) { localStorage.removeItem('ADBreeze-token'); setToken(''); clearReconnectTimer() } }}>退出</button>
+        <button className="btn ghost" onClick={logout}>退出</button>
       </header>
 
       <div className="app-body">
@@ -100,19 +123,14 @@ export default function Shell() {
 }
 
 function SettingsPanel() {
-  const token = useStore(s => s.token)
-  const setToken = useStore(s => s.setToken)
-  const [value, setValue] = useState(token)
-
   return (
     <div className="panel settings-panel">
       <h2>设置</h2>
-      <div className="settings-row">
-        <label>API Token</label>
-        <input value={value} onChange={e => setValue(e.target.value)} />
-        <button className="btn" onClick={() => setToken(value.trim())}>保存</button>
-      </div>
-      <p className="hint">修改 Token 后立即生效（存储于本机浏览器）。投屏画质/声音等设置在投屏面板内按设备单独保存。</p>
+      <p className="hint">
+        登录使用浏览器自带的 Basic Auth（账号密码由服务启动时配置，浏览器按站点缓存）。
+        修改密码需重启服务并指定 -password；切换账号或彻底退出需关闭标签页 / 清除浏览器站点数据。
+        投屏画质/声音等设置在投屏面板内按设备单独保存。
+      </p>
     </div>
   )
 }

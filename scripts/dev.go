@@ -5,9 +5,9 @@ package main
 //
 // 用法（项目根目录）：
 //
-//	go run ./scripts                      # 默认 token=admin, addr=:8000
-//	go run ./scripts -token xxx -addr :9000
-//	go run ./scripts -skip-web            # 前端没改时跳过 pnpm build
+//	go run ./scripts                          # 默认 user=admin, password=admin, addr=:8000
+//	go run ./scripts -user xxx -password yyy -addr :9000
+//	go run ./scripts -skip-web                # 前端没改时跳过 pnpm build
 //
 // 脚本以裸 main 包存在，不参与 go build ./cmd/... 的产物构建。
 
@@ -23,7 +23,8 @@ import (
 )
 
 func main() {
-	token := flag.String("token", "admin", "访问 token")
+	user := flag.String("user", "admin", "Basic Auth 用户名")
+	password := flag.String("password", "admin", "Basic Auth 密码")
 	addr := flag.String("addr", ":8000", "监听地址")
 	skipWeb := flag.Bool("skip-web", false, "跳过前端构建（前端没有改动时）")
 	flag.Parse()
@@ -62,8 +63,8 @@ func main() {
 	run(root, "go", "build", "-ldflags", "-s -w -X main.version=dev", "-o", exePath, "./cmd/adbreeze")
 
 	// 3. 启动（前台运行，Ctrl+C 退出）
-	fmt.Printf("==> 启动 http://localhost%s (Token: %s)\n", *addr, *token)
-	run(root, exePath, "-addr", *addr, "-token", *token)
+	fmt.Printf("==> 启动 http://localhost%s (账号: %s / 密码: %s)\n", *addr, *user, *password)
+	run(root, exePath, "-addr", *addr, "-user", *user, "-password", *password)
 }
 
 // projectRoot 定位项目根目录：从当前目录向上找 go.mod（且要求同级存在 web/ 与 cmd/），

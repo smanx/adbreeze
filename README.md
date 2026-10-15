@@ -32,7 +32,7 @@ ADBreeze 服务进程（Go 单二进制）
 
 - **ADB 层**：不依赖 `adb` 子进程（除启动 server 外），原生实现 smart socket（`host:transport` / `host:track-devices` / forward / reverse）与 sync 协议（SEND/DATA/DONE、LIST/RECV）
 - **投屏**：嵌入 `scrcpy-server` v2.4，reverse 隧道优先（无连接竞态）、forward 自动回退；视频流经 Hub 扇出给多个 WebSocket 订阅者，新订阅者自动补发 SPS/PPS 并对齐关键帧
-- **鉴权**：全接口 token 校验（constant-time 比较），WebSocket 走 query 参数
+- **鉴权**：HTTP Basic Auth（浏览器自带登录弹窗），WebSocket 凭登录后签发的短期会话 cookie
 
 ## 快速开始
 
@@ -48,23 +48,23 @@ cd ..
 # 2. 构建（Go 1.22+）
 go build -o bin/adbreeze.exe ./cmd/adbreeze
 
-# 3. 运行（token 随机生成并打印在控制台）
+# 3. 运行（密码随机生成并打印在控制台，用户名默认 admin）
 .\bin\adbreeze.exe
 
-# 或指定端口与 token
-.\bin\adbreeze.exe -addr :8000 -token my-secret
+# 或指定端口与账号密码
+.\bin\adbreeze.exe -addr :8000 -user admin -password my-secret
 ```
 
-浏览器打开 `http://localhost:8000`，填入 token 即可使用。
+浏览器打开 `http://localhost:8000`，在弹出的 Basic Auth 登录框输入账号密码即可使用。
 
 ### 一键脚本
 
 项目内的跨平台开发脚本 `scripts/dev.go`（Go 编写，Windows / macOS / Linux 通用）串起「前端构建 → Go 编译 → 启动」全流程：
 
 ```bash
-go run ./scripts                       # 默认 token=admin, addr=:8000
-go run ./scripts -token xxx -addr :9000
-go run ./scripts -skip-web             # 前端没改时跳过 pnpm build
+go run ./scripts                              # 默认 user=admin, password=admin, addr=:8000
+go run ./scripts -user xxx -password yyy -addr :9000
+go run ./scripts -skip-web                    # 前端没改时跳过 pnpm build
 ```
 
 ### 开发调试（前端热更新）
@@ -73,14 +73,14 @@ go run ./scripts -skip-web             # 前端没改时跳过 pnpm build
 
 ```bash
 # 终端 1：起后端（或直接 go run ./scripts -skip-web）
-./bin/adbreeze -token admin        # Windows 为 .\bin\adbreeze.exe
+./bin/adbreeze -user admin -password admin        # Windows 为 .\bin\adbreeze.exe
 
 # 终端 2：起前端开发服务器
 cd web
 pnpm run dev
 ```
 
-浏览器打开 `http://localhost:5173`，token 填 `admin`。此后修改 `web/src` 下的代码保存即生效（HMR 热更新，投屏会话不中断）；只有改动 Go 代码时才需要重启终端 1 的后端。注意 `pnpm run dev` 与一键脚本的前端构建不要同时进行（都会写 `web/dist`）。
+浏览器打开 `http://localhost:5173`，在 Basic Auth 弹窗输入 `admin` / `admin`。此后修改 `web/src` 下的代码保存即生效（HMR 热更新，投屏会话不中断）；只有改动 Go 代码时才需要重启终端 1 的后端。注意 `pnpm run dev` 与一键脚本的前端构建不要同时进行（都会写 `web/dist`）。
 
 设备接入：
 
@@ -93,7 +93,7 @@ adb connect 192.168.1.20:5555   # 网络设备（也可在网页上连接）
 
 ```bash
 docker build -t adbreeze .
-docker run -p 8000:8000 adbreeze -token my-secret
+docker run -p 8000:8000 adbreeze -user admin -password my-secret
 # 容器内自带 adb，可 adb connect 管理网络设备
 ```
 
@@ -113,7 +113,7 @@ adb connect 127.0.0.1:5555      # 无线调试自连
 
 ## API 概览
 
-所有接口需 Header `X-Auth-Token`（或 query `?token=`）。
+HTTP 接口通过 Basic Auth 认证（`Authorization: Basic ...`）。WebSocket 不支持 Basic 弹窗，需先 `POST /api/session` 换取短期会话 cookie，握手时由浏览器自动携带。`/api/health` 与 `/api/session` 之外的接口均受保护。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -131,7 +131,7 @@ adb connect 127.0.0.1:5555      # 无线调试自连
 
 ## 安全提示
 
-ADB 意味着设备的**完全控制权**。token 务必妥善保管，服务默认面向内网使用；公网部署请置于反向代理之后并启用 TLS。
+ADB 意味着设备的**完全控制权**。密码务必妥善保管，服务默认面向内网使用；公网部署请置于反向代理之后并启用 TLS（Basic Auth 凭证以 Base64 明文编码传输，切勿裸走 HTTP 暴露到公网）。会话 cookie 签名密钥每次启动随机生成，重启服务后所有已登录 WebSocket 会话需重新认证。
 
 ## 目录结构
 
@@ -142,7 +142,7 @@ adbreeze/
 │   ├── adb/               # adb server 协议（smart socket + sync）
 │   ├── scrcpy/            # 投屏（server 生命周期 / 协议解析 / ControlMessage / SPS）
 │   ├── api/               # REST + WebSocket + 静态前端
-│   ├── auth/              # token 鉴权
+│   ├── auth/              # Basic Auth + 会话 cookie
 │   └── config/            # 命令行配置
 ├── web/dist/              # 前端（embed 进二进制）
 ├── scripts/               # 跨平台开发脚本（go run ./scripts）

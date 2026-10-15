@@ -49,7 +49,7 @@ export default function ToolsPanel() {
     try {
       const body = await file.arrayBuffer()
       const r = await fetch(`/api/devices/${encodeURIComponent(selected)}/install`, {
-        method: 'POST', headers: { 'X-Auth-Token': useStore.getState().token }, body,
+        method: 'POST', body,
       })
       const data = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(data.error || 'HTTP ' + r.status)
@@ -61,9 +61,8 @@ export default function ToolsPanel() {
     if (!selected) { setHint('请先选择设备'); return }
     setBusy(true); setHint('截图…')
     try {
-      const blob = await fetch(`/api/devices/${encodeURIComponent(selected)}/screenshot`, {
-        headers: { 'X-Auth-Token': useStore.getState().token },
-      }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob() })
+      const blob = await fetch(`/api/devices/${encodeURIComponent(selected)}/screenshot`)
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob() })
       setShot({
         url: URL.createObjectURL(blob),
         filename: `${selected}-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '')}.png`,

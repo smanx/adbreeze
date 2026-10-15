@@ -175,7 +175,7 @@ function tickStats() {
 // ---------- 视频通道（WS 直推 + WebCodecs） ----------
 function openVideoWS(serial: string) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}?token=${encodeURIComponent(getToken())}`)
+  const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}`)
   ws.binaryType = 'arraybuffer'
   mirrorWS = ws
 
@@ -291,7 +291,7 @@ function openAudioWS(serial: string) {
 function tryAudioConnect(serial: string, attempt: number) {
   if (mirrorSerial !== serial || attempt > 30) return
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  const ws = new WebSocket(`${proto}://${location.host}/ws/audio/${encodeURIComponent(serial)}?token=${encodeURIComponent(getToken())}`)
+  const ws = new WebSocket(`${proto}://${location.host}/ws/audio/${encodeURIComponent(serial)}`)
   ws.binaryType = 'arraybuffer'
   audioWS = ws
 
@@ -538,7 +538,7 @@ function closeAudio() {
 // ---------- WebRTC 方案 ----------
 function openCtrlWS(serial: string) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}?mode=ctrl&token=${encodeURIComponent(getToken())}`)
+  const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}?mode=ctrl`)
   mirrorWS = ws
   ws.onmessage = ev => {
     if (typeof ev.data !== 'string') return
@@ -843,6 +843,3 @@ function androidKeyFor(key: string): number | null {
 }
 export { androidKeyFor }
 
-function getToken() {
-  return localStorage.getItem('ADBreeze-token') || ''
-}

@@ -14,6 +14,7 @@ import (
 	"adbreeze"
 	"adbreeze/internal/adb"
 	"adbreeze/internal/api"
+	"adbreeze/internal/auth"
 	"adbreeze/internal/config"
 	"adbreeze/internal/scrcpy"
 )
@@ -28,7 +29,7 @@ func main() {
 		return
 	}
 	log.Printf("ADBreeze %s 启动，监听 %s", version, cfg.Addr)
-	log.Printf("API Token: %s", cfg.Token)
+	log.Printf("登录账号: %s / 密码: %s", cfg.Username, cfg.Password)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -49,7 +50,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           api.New(cfg.Token, version, mgr, mirror, webFS),
+		Handler:           api.New(auth.New(cfg.Username, cfg.Password), version, mgr, mirror, webFS),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

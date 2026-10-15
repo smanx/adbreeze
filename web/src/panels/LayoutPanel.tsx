@@ -68,7 +68,6 @@ function walk(n: UINode, fn: (n: UINode) => void) {
 
 export default function LayoutPanel() {
   const selected = useStore(s => s.selected)
-  const token = useStore(s => s.token)
   const [root, setRoot] = useState<UINode | null>(null)
   const [xmlRaw, setXmlRaw] = useState('')
   const [shotURL, setShotURL] = useState('')
@@ -86,16 +85,15 @@ export default function LayoutPanel() {
     try {
       // 并发：截图 + dump
       const [shot, dump] = await Promise.all([
-        fetch(`/api/devices/${encodeURIComponent(selected)}/screenshot`, {
-          headers: { 'X-Auth-Token': token },
-        }).then(r => { if (!r.ok) throw new Error('截图失败 HTTP ' + r.status); return r.blob() }),
+        fetch(`/api/devices/${encodeURIComponent(selected)}/screenshot`)
+          .then(r => { if (!r.ok) throw new Error('截图失败 HTTP ' + r.status); return r.blob() }),
         api<{ xml: string; rotation: string }>('GET', `/api/devices/${encodeURIComponent(selected)}/ui-dump`),
       ])
       setShotURL(URL.createObjectURL(shot))
       setXmlRaw(dump.xml)
       setRoot(parseXML(dump.xml).root)
     } catch (e) { setErr((e as Error).message) } finally { setLoading(false) }
-  }, [selected, token])
+  }, [selected])
 
   useEffect(() => { setRoot(null); setShotURL(''); refresh() }, [refresh])
 

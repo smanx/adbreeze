@@ -113,9 +113,9 @@ export default function FilesPanel() {
   const download = (e: FileEntry) => {
     if (!selected) return
     const full = joinPath(path, e.name)
-    // <a download> 导航无法携带自定义请求头，token 走 query（auth 中间件支持）
+    // 同源导航自动携带 Basic 凭证/会话 cookie，无需再拼 token
     const url = `/api/devices/${encodeURIComponent(selected)}/files/content?path=${encodeURIComponent(full)}` +
-      (e.dir ? '&zip=1' : '') + `&token=${encodeURIComponent(useStore.getState().token)}`
+      (e.dir ? '&zip=1' : '')
     const a = document.createElement('a')
     a.href = url
     a.download = e.dir ? e.name + '.zip' : e.name
@@ -184,7 +184,6 @@ export default function FilesPanel() {
     setXfers(q => [x, ...q].slice(0, 30)) // 队列最多显示 30 条
     const xhr = new XMLHttpRequest()
     xhr.open('PUT', `/api/devices/${encodeURIComponent(selected!)}/files?path=${encodeURIComponent(joinPath(destDir, file.name))}`)
-    xhr.setRequestHeader('X-Auth-Token', useStore.getState().token)
     xhr.upload.onprogress = ev => {
       if (ev.lengthComputable) {
         setXfers(q => q.map(t => t.id === id ? { ...t, loaded: ev.loaded } : t))

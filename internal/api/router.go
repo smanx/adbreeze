@@ -14,7 +14,7 @@ import (
 
 // Server 承载 HTTP 服务。
 type Server struct {
-	token   string
+	auth    *auth.Authenticator
 	version string
 	mgr     *adb.Manager
 	mirror  *scrcpy.Manager
@@ -22,12 +22,15 @@ type Server struct {
 }
 
 // New 组装路由，返回可直接交给 http.Server 的 Handler。
-func New(token, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS fs.FS) http.Handler {
-	s := &Server{token: token, version: version, mgr: mgr, mirror: mirror, webrtc: webrtc.NewManager()}
+func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS fs.FS) http.Handler {
+	s := &Server{auth: a, version: version, mgr: mgr, mirror: mirror, webrtc: webrtc.NewManager()}
 	mux := http.NewServeMux()
 
 	// 健康检查（无需鉴权）
 	mux.HandleFunc("GET /api/health", s.health)
+	// WebSocket 会话 cookie 签发/清除（走 Basic 校验，浏览器自动带凭证）
+	mux.HandleFunc("POST /api/session", a.IssueSession)
+	mux.HandleFunc("DELETE /api/session", a.ClearSession)
 
 	// REST API（需鉴权）
 	authed := http.NewServeMux()
@@ -60,19 +63,19 @@ func New(token, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS 
 	authed.HandleFunc("GET /api/devices/{serial}/apps/apk", s.handleAppApk)
 	authed.HandleFunc("GET /api/devices/{serial}/processes", s.handleProcList)
 	authed.HandleFunc("POST /api/devices/{serial}/processes/kill", s.handleProcKill)
-	mux.Handle("/api/", auth.Middleware(s.token, authed))
+	mux.Handle("/api/", a.Middleware(authed))
 
-	// WebSocket（需鉴权，token 走 query 参数）
+	// WebSocket（需鉴权，凭 /api/session 签发的会话 cookie）
 	events := http.NewServeMux()
 	events.HandleFunc("GET /ws/events", s.handleEvents)
 	events.HandleFunc("GET /ws/video/{serial}", s.handleVideo)
 	events.HandleFunc("GET /ws/audio/{serial}", s.handleAudio)
 	events.HandleFunc("GET /ws/term/{serial}", s.handleTerm)
 	events.HandleFunc("GET /ws/logcat/{serial}", s.handleLogcat)
-	mux.Handle("/ws/", auth.Middleware(s.token, events))
+	mux.Handle("/ws/", a.WSMiddleware(events))
 
-	// 静态前端（embed 进二进制）
-	mux.Handle("/", http.FileServerFS(webFS))
+	// 静态前端（embed 进二进制）——同样受保护，浏览器在加载页面即弹出登录框
+	mux.Handle("/", a.Middleware(http.FileServerFS(webFS)))
 
 	return logRequest(mux)
 }

@@ -58,9 +58,7 @@
   <section>
     <h2>鉴权</h2>
     <div class="row">
-      <input id="token" placeholder="API Token（服务启动时打印）" style="width:340px">
-      <button id="save">保存</button>
-      <span class="hint" id="connState"></span>
+      <span class="hint" id="connState">登录使用浏览器 Basic Auth，若弹出登录框请输入服务配置的账号密码。</span>
     </div>
   </section>
 
@@ -168,20 +166,24 @@
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-let token = localStorage.getItem('ADBreeze-token') || '';
-$('token').value = token;
 let devices = [];
 
 async function api(method, url, body, raw) {
   const res = await fetch(url, {
     method,
-    headers: { 'X-Auth-Token': token, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: body !== undefined && !raw ? JSON.stringify(body) : body,
   });
   if (raw) return res;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
   return data;
+}
+
+// WebSocket 无法触发 Basic 弹窗，握手前先用浏览器缓存的凭证换取会话 cookie
+async function ensureSession() {
+  try { return (await fetch('/api/session', { method: 'POST' })).ok; }
+  catch (_) { return false; }
 }
 
 // ---------- 设备列表 ----------
@@ -211,7 +213,7 @@ window.useSerial = s => { $('curSerial').value = s; };
 
 // ---------- 截图 / APK 安装 ----------
 window.screenshot = serial => {
-  window.open(`/api/devices/${encodeURIComponent(serial)}/screenshot?token=${encodeURIComponent(token)}`);
+  window.open(`/api/devices/${encodeURIComponent(serial)}/screenshot`);
 };
 window.installApk = serial => {
   $('apkFile').value = '';
@@ -222,7 +224,7 @@ window.installApk = serial => {
     $('batchHint').textContent = '安装中…';
     try {
       const res = await fetch(`/api/devices/${encodeURIComponent(serial)}/install`, {
-        method: 'POST', headers: { 'X-Auth-Token': token }, body: f,
+        method: 'POST', body: f,
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || res.status);
@@ -259,14 +261,16 @@ async function loadDevices() {
     $('connState').textContent = '已连接';
   } catch (e) {
     $('connState').textContent = '失败: ' + e.message;
-    $('devices').innerHTML = '<li class="hint">加载失败，请检查 Token</li>';
+    $('devices').innerHTML = '<li class="hint">加载失败，请确认已登录（浏览器 Basic Auth）</li>';
   }
 }
 
 let evtSource = null;
-function watchEvents() {
+async function watchEvents() {
+  if (!(await ensureSession())) { $('connState').textContent = '登录凭证失效，请刷新页面重新登录'; return; }
   if (evtSource) evtSource.close();
-  evtSource = new WebSocket(`ws://${location.host}/ws/events?token=${encodeURIComponent(token)}`);
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  evtSource = new WebSocket(`${proto}://${location.host}/ws/events`);
   evtSource.onmessage = ev => {
     try {
       const msg = JSON.parse(ev.data);
@@ -274,12 +278,6 @@ function watchEvents() {
     } catch (_) {}
   };
 }
-
-$('save').onclick = () => {
-  token = $('token').value.trim();
-  localStorage.setItem('ADBreeze-token', token);
-  loadDevices(); watchEvents();
-};
 
 // ---------- 无线 ADB 连接地址历史（localStorage 记忆，最新在前，最多 10 条） ----------
 const ADB_ADDR_KEY = 'ADBreeze-adb-addresses';
@@ -497,7 +495,7 @@ function openAudioWS(serial) {
 function tryAudioConnect(serial, attempt) {
   if (mirrorSerial !== serial || attempt > 30) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws/audio/${encodeURIComponent(serial)}?token=${encodeURIComponent(token)}`);
+  const ws = new WebSocket(`${proto}://${location.host}/ws/audio/${encodeURIComponent(serial)}`);
   ws.binaryType = 'arraybuffer';
   audioWS = ws;
 
@@ -826,7 +824,7 @@ document.querySelectorAll('.m-head button[data-clip]').forEach(b => {
 // 控制通道：/ws/video?mode=ctrl（仅 meta/resize + 控制事件，无视频帧）
 function openCtrlWS(serial) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}?mode=ctrl&token=${encodeURIComponent(token)}`);
+  const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}?mode=ctrl`);
   mirrorWS = ws;
   ws.onmessage = ev => {
     if (typeof ev.data !== 'string') return;
@@ -960,7 +958,7 @@ function wsSend(obj) { if (mirrorWS && mirrorWS.readyState === 1) mirrorWS.send(
 
 function openVideoWS(serial) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}?token=${encodeURIComponent(token)}`);
+  const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}`);
   ws.binaryType = 'arraybuffer';
   mirrorWS = ws;
 
@@ -1204,7 +1202,7 @@ $('termOpen').onclick = () => {
   }
   term.reset();
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws/term/${encodeURIComponent(serial)}?token=${encodeURIComponent(token)}`);
+  const ws = new WebSocket(`${proto}://${location.host}/ws/term/${encodeURIComponent(serial)}`);
   ws.binaryType = 'arraybuffer';
   termWS = ws;
   $('termState').textContent = '连接中…';
@@ -1258,7 +1256,7 @@ window.listFiles = listFiles;
 
 window.downloadFile = p => {
   const serial = $('curSerial').value;
-  window.open(`/api/devices/${encodeURIComponent(serial)}/files/content?path=${encodeURIComponent(p)}&token=${encodeURIComponent(token)}`);
+  window.open(`/api/devices/${encodeURIComponent(serial)}/files/content?path=${encodeURIComponent(p)}`);
 };
 window.deleteFile = async p => {
   const serial = $('curSerial').value;
@@ -1285,7 +1283,7 @@ $('fileUpload').onchange = async () => {
   $('fileUploadBtn').textContent = '上传中…';
   try {
     const res = await fetch(`/api/devices/${encodeURIComponent(serial)}/files?path=${encodeURIComponent((base === '/' ? '' : base) + '/' + f.name)}`, {
-      method: 'PUT', headers: { 'X-Auth-Token': token }, body: f,
+      method: 'PUT', body: f,
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status);
     listFiles();
@@ -1296,7 +1294,7 @@ $('fileUpload').onchange = async () => {
 
 $('curSerial').onchange = () => { listFiles(); };
 
-if (token) { loadDevices(); watchEvents(); }
+loadDevices(); watchEvents();
 </script>
 </body>
 </html>

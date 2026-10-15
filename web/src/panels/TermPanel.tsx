@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Terminal } from '@xterm/xterm'
+import { ensureSession } from '../api'
 import { useStore } from '../store'
 
 // 交互式终端：/ws/term/{serial} PTY（上行 JSON input，下行二进制 ANSI 输出）
 export default function TermPanel() {
   const selected = useStore(s => s.selected)
-  const token = useStore(s => s.token)
   const boxRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -31,9 +31,10 @@ export default function TermPanel() {
     try {
       const term = await ensureXterm()
       term.clear()
+      await ensureSession() // WS 凭会话 cookie 鉴权，握手前确保有效
       const proto = location.protocol === 'https:' ? 'wss' : 'ws'
       const ws = new WebSocket(
-        `${proto}://${location.host}/ws/term/${encodeURIComponent(selected)}?token=${encodeURIComponent(token)}`,
+        `${proto}://${location.host}/ws/term/${encodeURIComponent(selected)}`,
       )
       ws.binaryType = 'arraybuffer'
       wsRef.current = ws
