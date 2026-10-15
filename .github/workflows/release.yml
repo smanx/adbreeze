@@ -124,6 +124,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          # 双架构：同一 tag 下发布 amd64 + arm64（OCI index），拉取时按主机架构自动选择
+          platforms: linux/amd64,linux/arm64
+          # 关闭 SLSA 证明，index 里只保留两个架构镜像，不出现 unknown/unknown 条目
+          provenance: false
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

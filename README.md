@@ -91,10 +91,28 @@ adb connect 192.168.1.20:5555   # 网络设备（也可在网页上连接）
 
 ### Docker
 
+预构建镜像已发布到 GHCR（`linux/amd64` + `linux/arm64` 双架构，拉取时自动匹配本机架构），直接运行即可：
+
+```bash
+docker pull ghcr.io/smanx/adbreeze:latest
+docker run -d --name adbreeze -p 8000:8000 ghcr.io/smanx/adbreeze:latest -user admin -password my-secret
+```
+
+浏览器打开 `http://localhost:8000` 登录使用。容器内自带 adb，可 `adb connect` 管理网络设备（进入容器执行，或在网页上连接）。需要 USB 直连设备时追加设备透传参数：
+
+```bash
+docker run -d --name adbreeze -p 8000:8000 \
+  --privileged -v /dev/bus/usb:/dev/bus/usb \
+  ghcr.io/smanx/adbreeze:latest -user admin -password my-secret
+```
+
+版本标签与 Release 一致（如 `ghcr.io/smanx/adbreeze:v0.2.0`），`:latest` 始终指向最新发布。
+
+也可从源码自行构建：
+
 ```bash
 docker build -t adbreeze .
-docker run -p 8000:8000 adbreeze -user admin -password my-secret
-# 容器内自带 adb，可 adb connect 管理网络设备
+docker run -d --name adbreeze -p 8000:8000 adbreeze -user admin -password my-secret
 ```
 
 ### 交叉编译（六平台单文件）
