@@ -16,11 +16,13 @@ func (s *Server) startMirror(w http.ResponseWriter, r *http.Request) {
 	//              both(两边都出声，v5 audio_dup，需 Android 13+)
 	//   bitrateMbps/shortSize/maxFps 画质参数（编码器参数在设备端，需重启流生效；0 = 用默认值）
 	//   shortSize 为"短边"目标值，内部按设备物理分辨率换算成 scrcpy 的长边上限 max_size
+	//   softwareEncoder=true 时改用设备端软件编码器（输出 Baseline 档，供浏览器 WASM 软解）
 	var req struct {
-		AudioMode   string `json:"audioMode"`
-		BitRateMbps int    `json:"bitrateMbps"`
-		ShortSize   int    `json:"shortSize"`
-		MaxFPS      int    `json:"maxFps"`
+		AudioMode       string `json:"audioMode"`
+		BitRateMbps     int    `json:"bitrateMbps"`
+		ShortSize       int    `json:"shortSize"`
+		MaxFPS          int    `json:"maxFps"`
+		SoftwareEncoder bool   `json:"softwareEncoder"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -42,6 +44,7 @@ func (s *Server) startMirror(w http.ResponseWriter, r *http.Request) {
 	if req.MaxFPS > 0 {
 		opts.MaxFPS = req.MaxFPS
 	}
+	opts.PreferSoftwareEncoder = req.SoftwareEncoder
 	info, err := s.mirror.Start(serial, opts)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())

@@ -54,7 +54,10 @@ export function saveMirrorSettings(serial: string, s: MirrorSettings) {
 }
 /** 画质相关字段（mode 不属于画质：仅切方案不应重启设备端编码器） */
 function qualityJSON(s: MirrorSettings) {
-  return JSON.stringify([s.audioMode, s.bitrateMbps, s.shortSize, s.maxFps])
+  // 但「是否需要软件编码器」要纳入：切到软解时设备端编码器必须换成软件编码器
+  // （否则码流是 h264bsd 啃不动的 High 档），属编码器参数变更，必须重启流，
+  // 不能像普通切方案那样只重建观看通道。
+  return JSON.stringify([s.audioMode, s.bitrateMbps, s.shortSize, s.maxFps, needsSoftwareEncoder(s.mode)])
 }
 function savedQualityJSON(serial: string | null) {
   return qualityJSON(loadMirrorSettings(serial))
@@ -953,6 +956,15 @@ function resolveMode(want: MirrorSettings['mode']): { mode: 'codecs' | 'webrtc' 
   return { mode, notice }
 }
 
+/**
+ * 该设置下是否会走 WASM 软解（进而需要设备端软件编码器）。
+ * 必须按 resolveMode 解析后的实际方案判断：「自动」在无 WebCodecs 时也会落到软解，
+ * 那时同样得换软编，否则码流是软解啃不动的 High 档。
+ */
+function needsSoftwareEncoder(mode: MirrorSettings['mode']): boolean {
+  return resolveMode(mode).mode === 'wasm'
+}
+
 /** 建立观看通道（mode 必须已解析）：打开对应的 WS / PeerConnection */
 function openViewer(serial: string, mode: 'codecs' | 'webrtc' | 'wasm') {
   forcedSoftDecode = mode === 'wasm'
@@ -994,6 +1006,7 @@ export async function startMirror(serial: string) {
   try {
     await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`, {
       audioMode: s.audioMode, bitrateMbps: s.bitrateMbps, shortSize: s.shortSize, maxFps: s.maxFps,
+      softwareEncoder: needsSoftwareEncoder(s.mode),
     })
     openViewer(serial, mode)
     armFirstFrameTimeout() // 启动请求成功但迟迟无首帧 → 超时失败
@@ -1040,6 +1053,7 @@ async function restartStream() {
     const { mode } = resolveMode(s.mode)
     await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`, {
       audioMode: s.audioMode, bitrateMbps: s.bitrateMbps, shortSize: s.shortSize, maxFps: s.maxFps,
+      softwareEncoder: needsSoftwareEncoder(s.mode),
     })
     deviceAudio = s.audioMode === 'device'
     audioDup = s.audioMode === 'both'

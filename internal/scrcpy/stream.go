@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -117,6 +118,17 @@ func start(deps streamDeps, serial string, jarBytes []byte, serverVersion string
 	// 可供新订阅者解码，表现为启动后长时间黑屏
 	if _, err := deps.Shell(serial, "input keyevent KEYCODE_WAKEUP"); err != nil {
 		log.Printf("[scrcpy:%s] 唤醒屏幕失败: %v", serial, err)
+	}
+
+	// 1.6 需要软解（h264bsd 只吃 Baseline）时，探测设备端软件编码器并按名指定：
+	// 硬编码器普遍输出 High，软解啃不动；软件编码器只输出 Baseline，是唯一可靠路径。
+	if opts.PreferSoftwareEncoder && opts.VideoEncoder == "" {
+		if name := probeSoftwareEncoder(deps, serial, serverVersion); name != "" {
+			opts.VideoEncoder = name
+			log.Printf("[scrcpy:%s] 软解模式：改用设备端软件编码器 %s", serial, name)
+		} else {
+			log.Printf("[scrcpy:%s] 软解模式：未探测到软件 H.264 编码器，仍由设备自选（软解可能失败）", serial)
+		}
 	}
 
 	// 2. 建立隧道并启动 server。
@@ -472,6 +484,9 @@ func (s *Stream) launchServer(deps streamDeps, scid uint32, serverVersion string
 		"audio=%v audio_codec=opus clipboard_autosync=false stay_awake=true cleanup=false",
 		serverDevicePath, serverVersion, scid, tf, opts.VideoCodec,
 		opts.MaxSize, opts.BitRate, opts.MaxFPS, audioEnabled(opts))
+	if opts.VideoEncoder != "" { // 软解模式：指定软件编码器以强制 Baseline 档
+		cmd += " video_encoder=" + opts.VideoEncoder
+	}
 	if opts.AudioDup { // 两边都出声：回放捕获 + 设备扬声器继续播放（v5，Android 13+）
 		cmd += " audio_source=playback audio_dup=true"
 	}
@@ -486,6 +501,27 @@ func (s *Stream) launchServer(deps streamDeps, scid uint32, serverVersion string
 
 // Info 返回流元信息。
 func (s *Stream) Info() StreamInfo { return s.info }
+
+// probeSoftwareEncoder 通过 server 的 list_encoders 列出设备编码器，
+// 返回可用的软件 H.264 编码器名（无则空串）。软件编码器只输出 Baseline 档，
+// 是浏览器端 h264bsd 软解唯一能接受的档位；名字随 ROM 而异，故运行时探测而非硬编码。
+func probeSoftwareEncoder(deps streamDeps, serial, serverVersion string) string {
+	// 必须带 cleanup=false：list_encoders 模式打印完列表就退出，默认 cleanup=true 会顺手
+	// 删掉设备上的 server jar，让紧接其后的正式启动以 ClassNotFoundException 崩溃。
+	cmd := fmt.Sprintf("CLASSPATH=%s app_process / com.genymobile.scrcpy.Server %s list_encoders=true cleanup=false",
+		serverDevicePath, serverVersion)
+	out, err := deps.Shell(serial, cmd)
+	if err != nil {
+		log.Printf("[scrcpy:%s] 列出编码器失败: %v", serial, err)
+		return ""
+	}
+	// 输出形如：    --video-codec=h264 --video-encoder=c2.android.avc.encoder         (sw)
+	re := regexp.MustCompile(`--video-codec=h264\s+--video-encoder=(\S+)\s+\(sw\)`)
+	if m := re.FindStringSubmatch(out); m != nil {
+		return m[1]
+	}
+	return ""
+}
 
 // Viewers 返回当前视频观看者数量（每个观看页占一个订阅）。
 func (s *Stream) Viewers() int { return s.hub.Count() }

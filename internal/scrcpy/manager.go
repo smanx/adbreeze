@@ -27,6 +27,13 @@ type Options struct {
 	// 采集激活时设备扬声器会被 remote submix 静音；关闭则设备扬声器正常出声
 	// （参考 ya-webadb adb-scrcpy 各版本 Options 的 audio 开关）。
 	AudioDup bool // audio_dup（v5，需 audio_source=playback，Android 13+）：采集的同时设备扬声器也出声
+
+	// VideoEncoder 指定设备端视频编码器名（如 c2.android.avc.encoder）；空则由设备自选（通常为硬编）。
+	// 调用方一般不直接填，需要软解能吃的 Baseline 码流时置 PreferSoftwareEncoder 由 start() 探测回填。
+	VideoEncoder string
+	// PreferSoftwareEncoder 为 true 时改用设备端软件 H.264 编码器：它只输出 Baseline 档，
+	// 是浏览器端 h264bsd 软解唯一能接受的档位（硬编码器普遍输出 High，软解啃不动）。
+	PreferSoftwareEncoder bool
 }
 
 func (o Options) withDefaults() Options {
