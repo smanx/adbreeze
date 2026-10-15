@@ -7,8 +7,12 @@ const CACHE = 'adbreeze-shell-v1'
 const PRECACHE = ['./', './index.html', './manifest.webmanifest', './icons/icon.svg']
 
 self.addEventListener('install', (e) => {
+  // 逐个缓存并各自吞掉失败：addAll 是「全成或全败」，
+  // 单个资源（如入口页在鉴权就绪前）失败会让整个 install 被拒，SW 永不激活。
   e.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting())
+    caches.open(CACHE)
+      .then((c) => Promise.all(PRECACHE.map((u) => c.add(u).catch(() => {}))))
+      .then(() => self.skipWaiting())
   )
 })
 

@@ -86,8 +86,16 @@ func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy
 	events.HandleFunc("GET /ws/logcat/{serial}", s.handleLogcat)
 	mux.Handle("/ws/", a.WSMiddleware(events))
 
-	// 静态前端（embed 进二进制）——同样受保护，浏览器在加载页面即弹出登录框
-	mux.Handle("/", a.Middleware(http.FileServerFS(webFS)))
+	// 静态前端（embed 进二进制）。
+	// PWA 外壳资源必须免鉴权：浏览器抓取 manifest 时默认不带 Basic 凭证
+	// （同源也不例外——需要凭证的 manifest 得显式声明 crossorigin="use-credentials"），
+	// 否则一律 401，Chrome 里表现为「manifest 加载失败 / 无法安装 PWA」；图标同理。
+	// 这些是品牌性静态资源，不含敏感信息，公开无妨；应用本体与全部 API / WS 仍受保护。
+	web := http.FileServerFS(webFS)
+	mux.Handle("GET /manifest.webmanifest", web)
+	mux.Handle("GET /sw.js", web)
+	mux.Handle("GET /icons/", web)
+	mux.Handle("/", a.Middleware(web))
 
 	return logRequest(mux)
 }
