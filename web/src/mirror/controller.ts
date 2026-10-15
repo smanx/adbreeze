@@ -9,7 +9,13 @@ export type MirrorSettings = { mode: string; audioMode: string; bitrateMbps: num
 const mirrorSettingsKey = (serial: string) => 'ADBreeze-mirror-settings-v3:' + serial
 
 export function hasCodecsSupport() {
-  return 'VideoDecoder' in window && 'EncodedVideoChunk' in window
+  // WebCodecs 仅在安全上下文（HTTPS / localhost / 127.0.0.1）暴露，HTTP+IP 访问时
+  // Chrome/Edge/Android 直接不提供 VideoDecoder——这不是浏览器版本问题
+  return window.isSecureContext && 'VideoDecoder' in window && 'EncodedVideoChunk' in window
+}
+// 非安全上下文导致 WebCodecs 不可用（浏览器本身支持，只是 HTTP+IP 访问被禁用）
+export function codecsBlockedByInsecureContext() {
+  return !window.isSecureContext
 }
 export function hasRTCSupport() {
   return 'RTCPeerConnection' in window
@@ -137,17 +143,26 @@ function clearKeyframeWait() {
 
 // ---------- 首帧等待 ----------
 // 首帧到达前 phase=loading（遮罩盖住旧画面）；超时 12 秒视为失败。
+// 超时判定不依赖 waitingKeyframe（startMirror 路径不会设置它），用 firstFrameShown 标记：
+// 只要超时时刻首帧还没画上，就必须转失败——修复 WebRTC 无帧时无限卡在 loading 的问题。
 const FIRST_FRAME_TIMEOUT = 12000
 let firstFrameTimer: ReturnType<typeof setTimeout> | null = null
+let firstFrameShown = false
 
 function armFirstFrameTimeout() {
   disarmFirstFrameTimeout()
+  waitingKeyframe = true
+  firstFrameShown = false
   firstFrameTimer = setTimeout(() => {
     firstFrameTimer = null
-    if (waitingKeyframe) {
-      waitingKeyframe = false
-      setStatus({ phase: 'failed', msg: '画面获取失败：等待首帧超时（设备可能离线或编码器未响应）' })
-    }
+    if (firstFrameShown || !mirrorSerial) return
+    waitingKeyframe = false
+    setStatus({
+      phase: 'failed',
+      msg: webrtcMode
+        ? '画面获取失败：WebRTC 等待首帧超时（设备编码器可能未推流或 ICE 连接失败），可重试或改用 WebCodecs 方案'
+        : '画面获取失败：等待首帧超时（设备可能离线、熄屏或编码器未响应）',
+    })
   }, FIRST_FRAME_TIMEOUT)
 }
 function disarmFirstFrameTimeout() {
@@ -156,6 +171,7 @@ function disarmFirstFrameTimeout() {
 
 // 首帧成功：解除等待状态（WebCodecs 在解码输出回调、WebRTC 在 ontrack 里调用）
 function firstFrameReady() {
+  firstFrameShown = true
   disarmFirstFrameTimeout()
   if (waitingKeyframe) { waitingKeyframe = false; showMsg('') }
   setStatus({ phase: 'ready' })
@@ -256,6 +272,8 @@ function setupDecoder(config: Uint8Array | null) {
       frame.close()
     },
     error: e => {
+      disarmFirstFrameTimeout()
+      waitingKeyframe = false
       setStatus({ phase: 'failed', msg: '画面获取失败：解码错误 ' + e.message })
     },
   })
@@ -554,7 +572,14 @@ function openCtrlWS(serial: string) {
   ws.onclose = ev => {
     if (mirrorWS !== ws) return
     mirrorWS = null
-    if (mirrorSerial) showMsg(ev.reason || '投屏流已结束')
+    if (!mirrorSerial) return
+    if (!firstFrameShown) {
+      // 首帧到达前通道断开：明确转失败，不能停在 loading
+      disarmFirstFrameTimeout()
+      setStatus({ phase: 'failed', msg: '画面获取失败：' + (ev.reason || 'WebRTC 控制通道断开') })
+    } else {
+      showMsg(ev.reason || '投屏流已结束')
+    }
   }
 }
 
@@ -614,8 +639,19 @@ async function startWebrtcViewer(serial: string) {
     }
   }
   pc.onconnectionstatechange = () => {
-    if (webrtcPC === pc && ['failed', 'disconnected'].includes(pc.connectionState) && mirrorSerial) {
-      if (waitingKeyframe) {
+    if (webrtcPC !== pc || !mirrorSerial) return
+    if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+      if (!firstFrameShown) {
+        // 首帧前连接失败：立即转失败并说明原因（如 ICE 不通），不等 12 秒超时
+        disarmFirstFrameTimeout()
+        waitingKeyframe = false
+        setStatus({ phase: 'failed', msg: '画面获取失败：WebRTC 连接失败（ICE 无法连通，检查网络/防火墙），可重试或改用 WebCodecs 方案' })
+      } else {
+        showMsg('WebRTC 连接断开')
+      }
+    } else if (pc.connectionState === 'disconnected') {
+      if (!firstFrameShown) {
+        disarmFirstFrameTimeout()
         waitingKeyframe = false
         setStatus({ phase: 'failed', msg: '画面获取失败：WebRTC 连接断开' })
       } else {
@@ -695,7 +731,8 @@ export async function startMirror(serial: string) {
   const hasCodecs = hasCodecsSupport()
   const hasRTC = hasRTCSupport()
   if (!hasCodecs && !hasRTC) {
-    alert('当前浏览器不支持 WebCodecs 与 WebRTC，无法投屏。请使用 Chrome / Edge 94+ 或较新的 Safari')
+    alert('当前浏览器不支持 WebCodecs 与 WebRTC，无法投屏。请使用 Chrome / Edge 94+ 或较新的 Safari'
+      + (codecsBlockedByInsecureContext() ? '\n（当前为 HTTP 非安全上下文访问：请改用 localhost 访问，或为服务配置 HTTPS 反向代理）' : ''))
     return
   }
   // 一个标签页只投一台：切换设备前先干净结束当前会话（不删服务端流）

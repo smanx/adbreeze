@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import {
-  androidKeyFor, applySettings, clipboardGet, clipboardSet, controllerSerial, hasCodecsSupport,
-  initController, loadMirrorSettings, sendKey, sendOp, sendScroll, sendText, sendTouch,
-  setPageMuted, startMirror, stopMirror, stopMirrorViewerAware, type MirrorSettings,
+  androidKeyFor, applySettings, clipboardGet, clipboardSet, codecsBlockedByInsecureContext, controllerSerial,
+  hasCodecsSupport, hasRTCSupport, initController, loadMirrorSettings, sendKey, sendOp, sendScroll, sendText,
+  sendTouch, setPageMuted, startMirror, stopMirror, stopMirrorViewerAware, type MirrorSettings,
 } from '../mirror/controller'
 
 const isAppleTouch = /iP(hone|ad|od)/i.test(navigator.userAgent)
@@ -243,9 +243,11 @@ export default function MirrorPanel() {
           <label>投屏方案
             <select value={settings.mode} onChange={e => set('mode', e.target.value)}>
               <option value="codecs" disabled={!hasCodecsSupport()}>
-                WebCodecs（WS 直推）{hasCodecsSupport() ? '' : '（浏览器不支持）'}
+                WebCodecs（WS 直推）{hasCodecsSupport() ? '' : codecsBlockedByInsecureContext() ? '（需 HTTPS 或 localhost 访问）' : '（浏览器不支持）'}
               </option>
-              <option value="webrtc">WebRTC（原生低延迟）</option>
+              <option value="webrtc" disabled={!hasRTCSupport()}>
+                WebRTC（原生低延迟）{hasRTCSupport() ? '' : '（浏览器不支持）'}
+              </option>
             </select>
           </label>
           <label>手机声音
