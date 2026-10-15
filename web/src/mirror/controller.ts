@@ -563,6 +563,10 @@ async function startWebrtcViewer(serial: string) {
   const pc = new RTCPeerConnection()
   webrtcPC = pc
   const a = audioEl!
+  // 必须先声明接收轨：否则 createOffer 产出的 SDP 没有任何 m= 行，
+  // 浏览器不启动 ICE gathering（offer 无 ice-ufrag），pion 直接拒绝协商
+  pc.addTransceiver('video', { direction: 'recvonly' })
+  pc.addTransceiver('audio', { direction: 'recvonly' })
 
   pc.ontrack = ev => {
     if (ev.track.kind === 'video') {
