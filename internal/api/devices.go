@@ -15,6 +15,15 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// readJSONBody 解码 JSON 请求体，失败时写 400 并返回 false。
+func readJSONBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		writeErr(w, http.StatusBadRequest, "无效的请求体")
+		return false
+	}
+	return true
+}
+
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": s.version})
 }
@@ -48,6 +57,14 @@ func (s *Server) disconnectDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "已断开"})
+}
+
+// forgetDevice DELETE /api/devices/{serial}/remember
+// 将掉线设备从列表记忆中移除（仅对 offline 状态的设备有意义）。
+func (s *Server) forgetDevice(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	s.mgr.ForgetDevice(serial)
+	writeJSON(w, http.StatusOK, map[string]string{"message": "已从列表移除"})
 }
 
 type shellReq struct {

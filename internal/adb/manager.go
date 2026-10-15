@@ -73,8 +73,11 @@ func (m *Manager) Start(ctx context.Context) error {
 // Client 暴露底层 adb 客户端（供 scrcpy 等模块使用）。
 func (m *Manager) Client() *Client { return m.client }
 
-// Devices 返回当前设备快照。
+// Devices 返回当前设备快照（含记忆的掉线无线设备，状态 offline）。
 func (m *Manager) Devices() []Device { return m.tracker.Devices() }
+
+// ForgetDevice 将掉线设备从列表记忆中移除。
+func (m *Manager) ForgetDevice(serial string) { m.tracker.ForgetDevice(serial) }
 
 // Subscribe 订阅设备列表变更。
 func (m *Manager) Subscribe() (<-chan []Device, func()) { return m.tracker.Subscribe() }

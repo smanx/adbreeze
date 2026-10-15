@@ -34,6 +34,7 @@ func New(token, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS 
 	authed.HandleFunc("GET /api/devices", s.listDevices)
 	authed.HandleFunc("POST /api/devices/connect", s.connectDevice)
 	authed.HandleFunc("DELETE /api/devices/{serial}", s.disconnectDevice)
+	authed.HandleFunc("DELETE /api/devices/{serial}/remember", s.forgetDevice)
 	authed.HandleFunc("POST /api/devices/{serial}/shell", s.shell)
 	authed.HandleFunc("POST /api/devices/{serial}/mirror", s.startMirror)
 	authed.HandleFunc("GET /api/devices/{serial}/mirror", s.mirrorInfo)
@@ -45,10 +46,20 @@ func New(token, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS 
 	authed.HandleFunc("GET /api/devices/{serial}/files/content", s.downloadFile)
 	authed.HandleFunc("DELETE /api/devices/{serial}/files", s.deleteFile)
 	authed.HandleFunc("POST /api/devices/{serial}/files/mkdir", s.mkdir)
+	authed.HandleFunc("POST /api/devices/{serial}/files/rename", s.renameFile)
 	authed.HandleFunc("GET /api/devices/{serial}/clipboard", s.getClipboard)
 	authed.HandleFunc("POST /api/devices/{serial}/clipboard", s.setClipboard)
 	authed.HandleFunc("GET /api/devices/{serial}/screenshot", s.screenshot)
 	authed.HandleFunc("POST /api/devices/{serial}/install", s.installAPK)
+	authed.HandleFunc("GET /api/devices/{serial}/overview", s.handleOverview)
+	authed.HandleFunc("GET /api/devices/{serial}/perf", s.handlePerf)
+	authed.HandleFunc("GET /api/devices/{serial}/ui-dump", s.handleUIDump)
+	authed.HandleFunc("GET /api/devices/{serial}/apps", s.handleAppList)
+	authed.HandleFunc("GET /api/devices/{serial}/apps/info", s.handleAppInfo)
+	authed.HandleFunc("POST /api/devices/{serial}/apps/action", s.handleAppAction)
+	authed.HandleFunc("GET /api/devices/{serial}/apps/apk", s.handleAppApk)
+	authed.HandleFunc("GET /api/devices/{serial}/processes", s.handleProcList)
+	authed.HandleFunc("POST /api/devices/{serial}/processes/kill", s.handleProcKill)
 	mux.Handle("/api/", auth.Middleware(s.token, authed))
 
 	// WebSocket（需鉴权，token 走 query 参数）
@@ -57,6 +68,7 @@ func New(token, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS 
 	events.HandleFunc("GET /ws/video/{serial}", s.handleVideo)
 	events.HandleFunc("GET /ws/audio/{serial}", s.handleAudio)
 	events.HandleFunc("GET /ws/term/{serial}", s.handleTerm)
+	events.HandleFunc("GET /ws/logcat/{serial}", s.handleLogcat)
 	mux.Handle("/ws/", auth.Middleware(s.token, events))
 
 	// 静态前端（embed 进二进制）

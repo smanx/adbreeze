@@ -1,0 +1,1302 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADBreeze</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, "Segoe UI", "PingFang SC", sans-serif; margin: 0; background: #f6f7f9; color: #1c1e21; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #65676b; font-size: 13px; margin: 0 0 24px; }
+  section { background: #fff; border: 1px solid #e4e6eb; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  input, select { padding: 7px 10px; border: 1px solid #ccd0d5; border-radius: 6px; font-size: 14px; margin: 4px 8px 4px 0; }
+  input { width: 260px; }
+  button { padding: 7px 14px; border: 0; border-radius: 6px; background: #0f9d58; color: #fff; font-size: 14px; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: #e4e6eb; color: #1c1e21; }
+  button.danger { background: #e8463a; }
+  ul { list-style: none; padding: 0; margin: 8px 0 0; }
+  li { padding: 8px 10px; border-bottom: 1px solid #f0f2f5; font-size: 14px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .state { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #e8f5e9; color: #1b5e20; }
+  .state.off { background: #fbe9e7; color: #b71c1c; }
+  pre { background: #f6f7f9; border: 1px solid #e4e6eb; border-radius: 6px; padding: 10px; font-size: 13px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .hint { font-size: 12px; color: #8a8d91; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td, th { padding: 6px 8px; border-bottom: 1px solid #f0f2f5; text-align: left; }
+  td.name { cursor: pointer; color: #0b57d0; }
+
+  /* 投屏浮层 */
+  #mirror { position: fixed; inset: 0; background: rgba(0,0,0,.86); display: flex; flex-direction: column; z-index: 10; }
+  #mirror[hidden] { display: none; }
+  .m-head { display: flex; align-items: center; gap: 8px; padding: 10px 16px; color: #fff; flex-wrap: wrap; }
+  .m-title { font-size: 15px; flex: 1; min-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-head button { background: #2c2e31; color: #e8eaed; }
+  .m-head button.danger { background: #e8463a; color: #fff; }
+  .m-stats { font-size: 12px; color: #9fe8bf; font-variant-numeric: tabular-nums; }
+  .m-body { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 0 16px 16px; }
+  #mCanvas { max-width: 100%; max-height: 100%; background: #000; border-radius: 6px; touch-action: none; outline: none; }
+  .m-msg { color: #ffd7d2; font-size: 14px; text-align: center; padding: 12px; }
+  #mSettings { display: flex; align-items: center; gap: 12px; padding: 8px 16px; color: #e8eaed; font-size: 13px; flex-wrap: wrap; background: rgba(30,32,35,.9); }
+  #mSettings[hidden] { display: none; }
+  #mSettings label { display: flex; align-items: center; gap: 6px; }
+  #mSettings select { background: #2c2e31; color: #e8eaed; border: 1px solid #444; border-radius: 4px; padding: 2px 4px; }
+  #mSettings button { background: #1a73e8; color: #fff; }
+  .m-term-wrap { height: 380px; padding: 0 16px 16px; }
+  .m-term-wrap > div { height: 100%; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ADBreeze 控制台</h1>
+  <p class="sub" id="sub">M4：投屏控制 / 终端 / 文件 / 剪贴板 / 截图 / APK 安装 / 批量命令。</p>
+
+  <section>
+    <h2>鉴权</h2>
+    <div class="row">
+      <input id="token" placeholder="API Token（服务启动时打印）" style="width:340px">
+      <button id="save">保存</button>
+      <span class="hint" id="connState"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>设备列表 <span class="hint">（实时推送）</span></h2>
+    <ul id="devices"><li>未连接</li></ul>
+    <div class="row" style="margin-top:12px">
+      <input id="addr" placeholder="192.168.1.20:5555" list="addrHistory" autocomplete="off">
+      <datalist id="addrHistory"></datalist>
+      <button id="connect">连接网络设备</button>
+      <span class="hint">当前设备：</span>
+      <select id="curSerial" style="width:220px"><option value="">— 选择设备 —</option></select>
+      <input type="file" id="apkFile" accept=".apk" style="display:none">
+      <button id="batchBtn" class="ghost">批量命令</button>
+    </div>
+    <div id="batchBox" hidden style="margin-top:10px; background:#f6f7f9; border:1px solid #e4e6eb; border-radius:6px; padding:10px;">
+      <div class="row">
+        <input id="batchCmd" placeholder="对勾选设备并行执行的命令" style="width:340px">
+        <button id="batchRun">执行</button>
+        <span class="hint" id="batchHint"></span>
+      </div>
+      <pre id="batchOut" style="max-height:180px"># 勾选设备后执行</pre>
+    </div>
+  </section>
+
+  <section>
+    <h2>终端</h2>
+    <div class="row">
+      <button id="termOpen">打开终端</button>
+      <button id="termClose" class="ghost">关闭</button>
+      <span class="hint" id="termState"></span>
+    </div>
+    <div id="termBox" style="height:360px; margin-top:8px; border:1px solid #e4e6eb; border-radius:6px; padding:4px;"></div>
+  </section>
+
+  <section>
+    <h2>文件管理</h2>
+    <div class="row">
+      <input id="filePath" placeholder="/sdcard" style="width:320px" value="/sdcard">
+      <button id="fileRefresh">刷新</button>
+      <button id="fileMkdir" class="ghost">新建目录</button>
+      <input type="file" id="fileUpload" style="display:none">
+      <button id="fileUploadBtn" class="ghost">上传文件</button>
+    </div>
+    <table id="fileTable"><thead><tr><th>名称</th><th>大小</th><th>操作</th></tr></thead><tbody><tr><td colspan="3" class="hint">选择设备后刷新</td></tr></tbody></table>
+  </section>
+
+  <section>
+    <h2>Shell（一次性命令）</h2>
+    <div class="row">
+      <input id="cmd" placeholder="如 getprop ro.product.model" style="width:420px">
+      <button id="run">执行</button>
+    </div>
+    <pre id="out"># 输出</pre>
+  </section>
+</div>
+
+<!-- 投屏浮层 -->
+<div id="mirror" hidden>
+  <div class="m-head">
+    <span class="m-title" id="mTitle">投屏</span>
+    <span class="m-stats" id="mStats"></span>
+    <button data-op="back">返回</button>
+    <button data-op="home">主页</button>
+    <button data-op="menu">菜单</button>
+    <button data-op="notify">通知</button>
+    <button data-op="power">电源</button>
+    <button data-op="rotate">旋转</button>
+    <button data-clip="get">取剪贴板</button>
+    <button data-clip="paste">粘贴到设备</button>
+    <button id="mMute">🔊 声音</button>
+    <button id="mSettingsBtn">⚙ 设置</button>
+    <button class="danger" id="mStop">停止</button>
+  </div>
+  <div id="mSettings" hidden>
+    <label>投屏方案 <select id="sMode">
+      <option value="codecs">WebCodecs（WS 直推）</option>
+      <option value="webrtc">WebRTC（原生低延迟）</option>
+    </select></label>
+    <label>手机声音 <select id="sDevAudio">
+      <option value="both" selected>�🔊 两边都出声（默认）</option>
+      <option value="mute">� 静音（采集到网页）</option>
+      <option value="device">🔊 出声（设备扬声器）</option>
+    </select></label>
+    <label>码率 <select id="sBitrate">
+      <option value="2">2 Mbps</option><option value="4">4 Mbps</option>
+      <option value="8" selected>8 Mbps</option><option value="16">16 Mbps</option><option value="20">20 Mbps</option>
+    </select></label>
+    <label>分辨率（短边） <select id="sSize">
+      <option value="1440">1440（原生以上）</option><option value="1280">1280</option>
+      <option value="1080">1080</option><option value="900">900</option>
+      <option value="720" selected>720（默认）</option><option value="480">480</option>
+    </select></label>
+    <label>帧率 <select id="sFps">
+      <option value="15">15 fps</option><option value="30">30 fps</option>
+      <option value="60" selected>60 fps</option><option value="120">120 fps</option>
+    </select></label>
+    <button id="sApply">应用（重启投屏）</button>
+    <span class="hint" style="color:#9aa0a6">改编码器参数需重启流，约 1 秒</span>
+  </div>
+  <div class="m-body"><canvas id="mCanvas" width="720" height="1280"></canvas><video id="mVideo" playsinline autoplay muted style="position:absolute;opacity:0;pointer-events:none;width:2px;height:2px;"></video><audio id="mAudio" autoplay style="display:none"></audio></div>
+  <div class="m-msg" id="mMsg" hidden></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let token = localStorage.getItem('ADBreeze-token') || '';
+$('token').value = token;
+let devices = [];
+
+async function api(method, url, body, raw) {
+  const res = await fetch(url, {
+    method,
+    headers: { 'X-Auth-Token': token, 'Content-Type': 'application/json' },
+    body: body !== undefined && !raw ? JSON.stringify(body) : body,
+  });
+  if (raw) return res;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+// ---------- 设备列表 ----------
+function renderDevices(devs) {
+  devices = devs || [];
+  if (!devices.length) { $('devices').innerHTML = '<li class="hint">无设备</li>'; }
+  else {
+    $('devices').innerHTML = devices.filter(d => d.state === 'device').map(d =>
+      `<li><span><input type="checkbox" class="devchk" value="${d.serial}">
+        ${d.serial}</span>
+        <span class="row">
+          ${d.model ? `<span class="hint">${d.model}</span>` : ''}
+          <span class="state">device</span>
+          <button onclick="startMirror('${d.serial}')">投屏</button>
+          <button class="ghost" onclick="screenshot('${d.serial}')">截图</button>
+          <button class="ghost" onclick="installApk('${d.serial}')">装APK</button>
+          ${d.serial.includes(':') ? `<button class="danger" onclick="disconnect('${d.serial}')">断开</button>` : ''}
+        </span></li>`).join('') || '<li class="hint">无在线设备</li>';
+  }
+  const sel = $('curSerial');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— 选择设备 —</option>' +
+    devices.filter(d => d.state === 'device').map(d => `<option value="${d.serial}">${d.serial}</option>`).join('');
+  if (cur) sel.value = cur;
+}
+window.useSerial = s => { $('curSerial').value = s; };
+
+// ---------- 截图 / APK 安装 ----------
+window.screenshot = serial => {
+  window.open(`/api/devices/${encodeURIComponent(serial)}/screenshot?token=${encodeURIComponent(token)}`);
+};
+window.installApk = serial => {
+  $('apkFile').value = '';
+  $('apkFile').onchange = async () => {
+    const f = $('apkFile').files[0];
+    if (!f) return;
+    if (!confirm(`安装 ${f.name} (${(f.size / 1048576).toFixed(1)} MB) 到 ${serial} ?`)) return;
+    $('batchHint').textContent = '安装中…';
+    try {
+      const res = await fetch(`/api/devices/${encodeURIComponent(serial)}/install`, {
+        method: 'POST', headers: { 'X-Auth-Token': token }, body: f,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.status);
+      alert('安装完成：' + (data.output || '').trim());
+    } catch (e) { alert('安装失败: ' + e.message); }
+  };
+  $('apkFile').click();
+};
+
+// ---------- 批量命令 ----------
+$('batchBtn').onclick = () => { $('batchBox').hidden = !$('batchBox').hidden; };
+$('batchRun').onclick = async () => {
+  const cmd = $('batchCmd').value.trim();
+  const serials = [...document.querySelectorAll('.devchk:checked')].map(c => c.value);
+  if (!cmd || !serials.length) { $('batchHint').textContent = '勾选设备并输入命令'; return; }
+  $('batchHint').textContent = `并行执行于 ${serials.length} 台设备…`;
+  $('batchOut').textContent = '';
+  await Promise.all(serials.map(async serial => {
+    try {
+      const r = await api('POST', `/api/devices/${encodeURIComponent(serial)}/shell`, { command: cmd });
+      $('batchOut').textContent += `\n==== ${serial} ====\n${r.output || '(无输出)'}`;
+    } catch (e) {
+      $('batchOut').textContent += `\n==== ${serial} ====\n[错误] ${e.message}`;
+    }
+  }));
+  $('batchHint').textContent = '完成';
+};
+
+async function loadDevices() {
+  try {
+    const h = await fetch('/api/health').then(r => r.json()).catch(() => null);
+    if (h && h.version) $('sub').textContent += ` · v${h.version}`;
+    renderDevices(await api('GET', '/api/devices'));
+    $('connState').textContent = '已连接';
+  } catch (e) {
+    $('connState').textContent = '失败: ' + e.message;
+    $('devices').innerHTML = '<li class="hint">加载失败，请检查 Token</li>';
+  }
+}
+
+let evtSource = null;
+function watchEvents() {
+  if (evtSource) evtSource.close();
+  evtSource = new WebSocket(`ws://${location.host}/ws/events?token=${encodeURIComponent(token)}`);
+  evtSource.onmessage = ev => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'devices') renderDevices(msg.devices);
+    } catch (_) {}
+  };
+}
+
+$('save').onclick = () => {
+  token = $('token').value.trim();
+  localStorage.setItem('ADBreeze-token', token);
+  loadDevices(); watchEvents();
+};
+
+// ---------- 无线 ADB 连接地址历史（localStorage 记忆，最新在前，最多 10 条） ----------
+const ADB_ADDR_KEY = 'ADBreeze-adb-addresses';
+function loadAddrHistory() {
+  try { return JSON.parse(localStorage.getItem(ADB_ADDR_KEY)) || []; } catch (_) { return []; }
+}
+function renderAddrHistory() {
+  $('addrHistory').innerHTML = loadAddrHistory()
+    .map(a => `<option value="${a.replace(/"/g, '&quot;')}"></option>`).join('');
+}
+function rememberAddr(address) {
+  const list = loadAddrHistory().filter(a => a !== address);
+  list.unshift(address);
+  try { localStorage.setItem(ADB_ADDR_KEY, JSON.stringify(list.slice(0, 10))); } catch (_) {}
+  renderAddrHistory();
+}
+renderAddrHistory();
+
+$('connect').onclick = async () => {
+  const address = $('addr').value.trim();
+  if (!address) return;
+  try { await api('POST', '/api/devices/connect', { address }); rememberAddr(address); loadDevices(); }
+  catch (e) { alert('连接失败: ' + e.message); }
+};
+window.disconnect = async serial => {
+  try { await api('DELETE', '/api/devices/' + encodeURIComponent(serial)); loadDevices(); }
+  catch (e) { alert('断开失败: ' + e.message); }
+};
+
+$('run').onclick = async () => {
+  const serial = $('curSerial').value, command = $('cmd').value.trim();
+  if (!serial || !command) return;
+  $('out').textContent = '# 执行中...';
+  try {
+    const r = await api('POST', `/api/devices/${encodeURIComponent(serial)}/shell`, { command });
+    $('out').textContent = r.output || '(无输出)';
+  } catch (e) { $('out').textContent = '# 错误: ' + e.message; }
+};
+
+// ---------- 投屏 + 反向控制 ----------
+let mirrorWS = null, mirrorDecoder = null, mirrorSerial = null;
+let deviceAudio = false; // 设备扬声器是否出声（device 模式：不采集，扬声器正常）
+let audioDup = false;    // 两边都出声（both 模式：采集到网页 + 设备扬声器也响）
+let webrtcMode = false, webrtcPC = null;
+let videoW = 720, videoH = 1280;
+
+window.startMirror = async function (serial) {
+  const s = loadMirrorSettings(serial);
+  // 能力探测：WebCodecs 不可用时自动降级 WebRTC，两者都不可用才报错
+  const hasCodecs = 'VideoDecoder' in window && 'EncodedVideoChunk' in window;
+  const hasRTC = 'RTCPeerConnection' in window;
+  if (!hasCodecs && !hasRTC) {
+    alert('当前浏览器不支持 WebCodecs 与 WebRTC，无法投屏。请使用 Chrome / Edge 94+ 或较新的 Safari');
+    return;
+  }
+  // 一个标签页只投一台：切换设备前先干净结束当前会话（不删服务端流，仅断开
+  // 本页观看通道），避免全局状态被新设备覆盖后旧会话悬挂、互相干扰
+  if (mirrorSerial) stopMirror(false);
+  mirrorSerial = serial;
+  deviceAudio = s.audioMode === 'device';
+  audioDup = s.audioMode === 'both';
+  videoW = 720; videoH = 1280;
+  let mode = s.mode || 'codecs';
+  if (mode === 'codecs' && !hasCodecs) {
+    mode = 'webrtc';
+    showMsg('当前浏览器不支持 WebCodecs，已自动改用 WebRTC 投屏');
+  } else if (mode === 'webrtc' && !hasRTC) {
+    mode = 'codecs';
+    showMsg('当前浏览器不支持 WebRTC，已自动改用 WebCodecs 投屏');
+  }
+  webrtcMode = mode === 'webrtc';
+  $('mirror').hidden = false;
+  $('mTitle').textContent = serial + ' — 连接中…';
+  $('mStats').textContent = '';
+  if (mode === (s.mode || 'codecs')) showMsg('');
+  $('mCanvas').focus();
+  try {
+    await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`, loadMirrorSettings(serial));
+    if (webrtcMode) {
+      openCtrlWS(serial);
+      await startWebrtcViewer(serial);
+    } else {
+      openVideoWS(serial);
+      if (!deviceAudio) openAudioWS(serial); // 手机出声模式下无音频流
+    }
+  } catch (e) {
+    showMsg('启动投屏失败: ' + e.message);
+  }
+};
+
+// ---------- 投屏画质与方案设置（按设备保存在 localStorage，无存档用默认值） ----------
+const MIRROR_DEFAULTS = { mode: 'codecs', audioMode: 'both', bitrateMbps: 8, shortSize: 720, maxFps: 60 };
+const mirrorSettingsKey = serial => 'ADBreeze-mirror-settings-v3:' + serial;
+function loadMirrorSettings(serial = mirrorSerial) {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(mirrorSettingsKey(serial))) || {}; } catch (_) {}
+  return { ...MIRROR_DEFAULTS, ...saved };
+}
+function saveMirrorSettings(serial, s) {
+  try { localStorage.setItem(mirrorSettingsKey(serial), JSON.stringify(s)); } catch (_) {}
+}
+function savedQualityJSON() {
+  return JSON.stringify(loadMirrorSettings(mirrorSerial));
+}
+function fillMirrorSettingsUI() {
+  const s = loadMirrorSettings();
+  // 浏览器不支持 WebCodecs 时禁用该选项（启动时会自动降级 WebRTC）
+  const hasCodecs = 'VideoDecoder' in window && 'EncodedVideoChunk' in window;
+  const codecsOpt = $('sMode').querySelector('option[value="codecs"]');
+  codecsOpt.disabled = !hasCodecs;
+  codecsOpt.textContent = hasCodecs ? 'WebCodecs（WS 直推）' : 'WebCodecs（浏览器不支持）';
+  $('sMode').value = s.mode || 'codecs';
+  $('sDevAudio').value = s.audioMode || 'both';
+  $('sBitrate').value = s.bitrateMbps || 8;
+  $('sSize').value = s.shortSize || 720;
+  $('sFps').value = s.maxFps || 60;
+}
+function currentMirrorSettings() {
+  return {
+    mode: $('sMode').value,
+    audioMode: $('sDevAudio').value,
+    bitrateMbps: +$('sBitrate').value,
+    shortSize: +$('sSize').value,
+    maxFps: +$('sFps').value,
+  };
+}
+$('mSettingsBtn').onclick = () => { fillMirrorSettingsUI(); $('mSettings').hidden = !$('mSettings').hidden; };
+
+let mirrorRestarting = false;
+// 等待关键帧提示：中途加入的观看者要等设备编码器的下一个关键帧（GOP 约 2 秒）
+let waitingKeyframe = false;
+function waitKeyframe() {
+  waitingKeyframe = true;
+  showMsg('正在等待画面关键帧…（编码器 GOP 约 2 秒，静止画面下个别机型可能更久）');
+}
+function clearKeyframeWait() {
+  if (waitingKeyframe) { waitingKeyframe = false; showMsg(''); }
+}
+// 关闭本页观看通道（WS/WebRTC 订阅），供重建或重启前调用
+function closeViewers() {
+  if (mirrorWS) { mirrorWS.onclose = null; mirrorWS.close(); mirrorWS = null; }
+  if (mirrorDecoder) { try { mirrorDecoder.close(); } catch (_) {} mirrorDecoder = null; }
+  closeWebrtcViewer();
+  closeAudio();
+}
+// 按当前 webrtcMode 重建观看通道（不触碰设备端流）
+async function reopenViewer(serial) {
+  if (webrtcMode) {
+    openCtrlWS(serial);
+    await startWebrtcViewer(serial);
+  } else {
+    openVideoWS(serial);
+    if (audioDup || !deviceAudio) openAudioWS(serial); // device 模式无音频流，其余都有
+  }
+}
+// 重启投屏流：编码器参数（画质/音频采集）都在设备端，任何改动都需走此路径
+async function restartStream(overrides = {}) {
+  if (!mirrorSerial || mirrorRestarting) return false;
+  mirrorRestarting = true;
+  showMsg('正在重启投屏流…');
+  try {
+    closeViewers();
+    await api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {});
+    const s = loadMirrorSettings();
+    const params = { audioMode: s.audioMode, bitrateMbps: s.bitrateMbps, shortSize: s.shortSize, maxFps: s.maxFps, ...overrides };
+    await api('POST', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`, params);
+    deviceAudio = params.audioMode === 'device';
+    audioDup = params.audioMode === 'both';
+    waitKeyframe();
+    await reopenViewer(mirrorSerial);
+    return true;
+  } catch (e) {
+    showMsg('重启投屏流失败: ' + e.message);
+    return false;
+  } finally {
+    mirrorRestarting = false;
+  }
+}
+$('sApply').onclick = async () => {
+  if (!mirrorSerial || mirrorRestarting) return;
+  const next = currentMirrorSettings();
+  const qualityChanged = JSON.stringify(next) !== savedQualityJSON();
+  const modeChanged = (next.mode === 'webrtc') !== webrtcMode;
+  saveMirrorSettings(mirrorSerial, next);
+  if (!qualityChanged && !modeChanged) return;
+  if (!qualityChanged) {
+    // 仅切换方案：scrcpy 流共享，重建观看通道即可（秒级，无需重启设备端流）
+    mirrorRestarting = true;
+    waitKeyframe();
+    try {
+      closeViewers();
+      webrtcMode = next.mode === 'webrtc';
+      await reopenViewer(mirrorSerial);
+    } catch (e) {
+      showMsg('切换投屏方案失败: ' + e.message);
+    } finally {
+      mirrorRestarting = false;
+    }
+    return;
+  }
+  webrtcMode = next.mode === 'webrtc'; // 画质与方案同时变更：重启时按新方案重连
+  restartStream();
+};
+
+// ---------- 音频播放（Opus → WebCodecs AudioDecoder → AudioWorklet）----------
+let audioWS = null, audioDecoder = null, audioCtx = null, audioNode = null, audioGain = null;
+let audioRetryTimer = null, audioPackets = 0, audioOn = false;
+
+function openAudioWS(serial) {
+  closeAudio();
+  tryAudioConnect(serial, 0);
+}
+
+// 音频流可能晚于视频就绪（采集初始化慢），持续重试直到投屏结束
+function tryAudioConnect(serial, attempt) {
+  if (mirrorSerial !== serial || attempt > 30) return;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/audio/${encodeURIComponent(serial)}?token=${encodeURIComponent(token)}`);
+  ws.binaryType = 'arraybuffer';
+  audioWS = ws;
+
+  ws.onerror = () => {};
+  ws.onclose = ev => {
+    if (audioWS !== ws) return;
+    audioWS = null;
+    // 4003 = 设备端已明确禁用音频（如 audio_dup 需 Android 13+），不再重试
+    if (ev.code === 4003) {
+      if (mirrorSerial === serial) showMsg('设备端音频不可用（audio_dup 需 Android 13+），已按仅视频继续');
+      return;
+    }
+    // 409 = 音频尚未就绪，300ms 后重试（切换模式时音频采集就绪有 1~2 秒延迟，
+    // 固定 2 秒重试会让声音迟到 1~2 秒）
+    if (mirrorSerial === serial) {
+      audioRetryTimer = setTimeout(() => tryAudioConnect(serial, attempt + 1), 300);
+    }
+  };
+  ws.onmessage = ev => {
+    if (typeof ev.data === 'string') return; // meta（opus）无需处理
+    const buf = new Uint8Array(ev.data);
+    if (buf.length < 9) return;
+    const flags = buf[0];
+    const pts = Number(new DataView(buf.buffer, buf.byteOffset).getBigUint64(1));
+    const payload = buf.subarray(9);
+
+    if (flags & 1) { // 配置包 = OpusHead
+      setupAudio(payload);
+      return;
+    }
+    audioPackets++;
+    if (audioPackets === 1) { audioOn = true; }
+    if (audioDecoder && audioDecoder.state === 'configured') {
+      try {
+        audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: pts, data: payload }));
+      } catch (e) { console.warn('音频解码异常', e); }
+    }
+  };
+}
+
+function setupAudio(opusHead) {
+  if (audioDecoder) return; // 只配置一次（旋转不影响音频）
+  if (!('AudioDecoder' in window)) { showMsg('浏览器不支持 WebCodecs 音频解码'); return; }
+  // OpusHead: magic(8) version(1) channels(1) preskip(2 LE) sampleRate(4 LE) gain(2) mapping(1)
+  const channels = opusHead[9];
+  const sampleRate = new DataView(opusHead.buffer, opusHead.byteOffset).getUint32(12, true);
+  if (channels < 1 || channels > 8 || sampleRate < 8000) { showMsg('音频头解析失败'); return; }
+
+  audioDecoder = new AudioDecoder({
+    output: audioData => {
+      if (audioNode) pushAudio(audioData);
+      else audioData.close();
+    },
+    error: e => showMsg('音频解码错误: ' + e.message),
+  });
+  audioDecoder.configure({
+    codec: 'opus',
+    sampleRate,
+    numberOfChannels: channels,
+    description: opusHead.slice(),
+  });
+
+  // AudioWorklet：移植 ya-webadb（Tango）pcm-player 的实现
+  // （https://github.com/yume-chan/ya-webadb libraries/pcm-player/worker/worker.ts）：
+  //   1. 预缓冲 0.1s 起播，消除开头断续
+  //   2. 积压 > 0.25s 时以 0.9×（WSOLA 加窗重叠）压缩播放，追到 0.15s 恢复正常
+  //   3. 积压 > 0.35s 直接丢弃最旧数据
+  // 三者配合把延迟稳定约束在 100~350ms，网络抖动不会永久抬升延迟。
+  const workletCode = `
+    const INPUT_HOP_SIZE = 3000;
+    const SCALE = 0.9;
+    const OUTPUT_HOP_SIZE = (INPUT_HOP_SIZE * SCALE) | 0;
+    const WINDOW_SIZE = 6000;
+    const WINDOW_WEIGHT_TABLE = new Float32Array(WINDOW_SIZE);
+    for (let i = 0; i < WINDOW_SIZE / 2; i++) {
+      WINDOW_WEIGHT_TABLE[i] = Math.sin((i / WINDOW_SIZE) * Math.PI);
+      WINDOW_WEIGHT_TABLE[WINDOW_SIZE - i - 1] = WINDOW_WEIGHT_TABLE[i];
+    }
+
+    class ADBreezePlayer extends AudioWorkletProcessor {
+      constructor(options) {
+        super();
+        this.channelCount = options.outputChannelCount[0];
+        this.chunks = [];      // 各音频块的 planar 通道数组
+        this.chunkCounts = []; // 每块帧数
+        this.total = 0;        // 当前缓冲总帧数
+        this.starting = true;
+        this.speedUp = false;
+        this.readOffset = 0;
+        this.inputOffset = 0;
+        this.outputOffset = 0;
+        this.readBuf = new Float32Array(this.channelCount);
+        this.port.onmessage = e => {
+          while (this.total > 0.35 * 48000) { // 超限丢帧
+            this.total -= this.chunkCounts.shift();
+            this.chunks.shift();
+          }
+          const planes = e.data.map(b => new Float32Array(b));
+          this.chunks.push(planes);
+          const n = planes[0].length;
+          this.chunkCounts.push(n);
+          this.total += n;
+          if (!this.speedUp && this.total > 0.25 * 48000) {
+            this.speedUp = true;
+            this.readOffset = 0;
+            this.inputOffset = 0;
+            this.outputOffset = 0;
+          }
+        };
+      }
+      process(inputs, outputs) {
+        const out = outputs[0];
+        const frames = out[0].length;
+        if (this.starting) {
+          if (this.total < 0.1 * 48000) return true; // 预缓冲
+          this.starting = false;
+        }
+        if (this.speedUp && this.total < 0.15 * 48000) {
+          this.speedUp = false;
+          this.starting = true;
+        }
+        if (this.speedUp) this.renderSpeedUp(out, frames);
+        else this.renderPlain(out, frames);
+        return true;
+      }
+      // 正常播放：按序拷贝
+      renderPlain(out, frames) {
+        let i = 0;
+        while (this.chunks.length > 0 && i < frames) {
+          const planes = this.chunks[0];
+          const avail = planes[0].length;
+          let src = 0;
+          while (src < avail && i < frames) {
+            for (let c = 0; c < out.length && c < planes.length; c++) out[c][i] = planes[c][src];
+            src++; i++;
+          }
+          if (src < avail) { // 输出满，切片保留剩余
+            for (let c = 0; c < planes.length; c++) this.chunks[0][c] = planes[c].subarray(src);
+            this.chunkCounts[0] -= src;
+            this.total -= src;
+            return;
+          }
+          this.total -= src;
+          this.chunks.shift();
+          this.chunkCounts.shift();
+        }
+      }
+      // 读取跨块的第 offset 帧（相对缓冲窗口起点）
+      readSample(offset) {
+        for (let i = 0; i < this.chunks.length; i++) {
+          const len = this.chunkCounts[i];
+          if (offset < len) {
+            const planes = this.chunks[i];
+            for (let c = 0; c < this.readBuf.length && c < planes.length; c++) this.readBuf[c] = planes[c][offset];
+            return;
+          }
+          offset -= len;
+        }
+        this.readBuf.fill(0);
+      }
+      // 追帧模式：WSOLA 加窗重叠，输入消费速度 1/0.9
+      renderSpeedUp(out, frames) {
+        for (let i = 0; i < frames; i++) {
+          let weightSum = 0;
+          const firstWindow = Math.max(0, Math.floor((this.outputOffset - WINDOW_SIZE) / OUTPUT_HOP_SIZE) + 1);
+          let inWindowIndex = this.outputOffset - firstWindow * OUTPUT_HOP_SIZE;
+          let inputIndex = firstWindow * INPUT_HOP_SIZE + inWindowIndex;
+          while (inputIndex > 0 && inWindowIndex >= 0) {
+            this.readSample(inputIndex - this.readOffset);
+            const weight = WINDOW_WEIGHT_TABLE[inWindowIndex];
+            for (let c = 0; c < out.length && c < this.readBuf.length; c++) out[c][i] += this.readBuf[c] * weight;
+            weightSum += weight;
+            inputIndex += INPUT_HOP_SIZE - OUTPUT_HOP_SIZE;
+            inWindowIndex -= OUTPUT_HOP_SIZE;
+          }
+          if (weightSum > 0) {
+            for (let c = 0; c < out.length && c < this.readBuf.length; c++) out[c][i] /= weightSum;
+          }
+          this.outputOffset += 1;
+          if (firstWindow > 0) {
+            this.outputOffset -= OUTPUT_HOP_SIZE;
+            this.readOffset -= INPUT_HOP_SIZE;
+            this.inputOffset += (1 - SCALE) * INPUT_HOP_SIZE;
+          }
+        }
+        this.inputOffset += frames;
+        if (this.chunks.length > 0 && this.inputOffset >= this.chunkCounts[0]) {
+          this.total -= this.chunkCounts[0];
+          this.readOffset += this.chunkCounts[0];
+          this.inputOffset -= this.chunkCounts[0];
+          this.chunks.shift();
+          this.chunkCounts.shift();
+        }
+      }
+    }
+    registerProcessor('adbreeze-player', ADBreezePlayer);
+  `;
+  audioCtx = new AudioContext({ latencyHint: 'interactive', sampleRate });
+  // 自动播放策略可能挂起 Context：挂在 canvas 点击上恢复
+  const resumeAudio = () => {
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  };
+  canvas.addEventListener('click', resumeAudio);
+  $('mStop').addEventListener('click', () => canvas.removeEventListener('click', resumeAudio), { once: true });
+  audioCtx.onstatechange = () => {
+    if (audioCtx && audioCtx.state === 'suspended') showMsg('浏览器限制了自动播放——点击画面即可恢复声音');
+    else showMsg('');
+  };
+  audioCtx.resume().catch(() => {});
+  const blob = new Blob([workletCode], { type: 'application/javascript' });
+  audioCtx.audioWorklet.addModule(URL.createObjectURL(blob)).then(() => {
+    audioNode = new AudioWorkletNode(audioCtx, 'adbreeze-player', {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [channels],
+    });
+    audioGain = audioCtx.createGain();
+    audioGain.gain.value = pageMuted ? 0 : 1; // 静音先于音频就绪时同样生效
+    audioNode.connect(audioGain).connect(audioCtx.destination);
+  }).catch(e => showMsg('音频播放初始化失败: ' + e.message));
+}
+
+function pushAudio(audioData) {
+  const n = audioData.numberOfFrames, ch = audioData.numberOfChannels;
+  const planes = [];
+  if (audioData.copyTo) {
+    // 新版 Chrome 移除了 AudioData.data，统一用 copyTo 请求 f32-planar
+    // （浏览器自动完成交错→平面转换与格式归一）
+    for (let c = 0; c < ch; c++) {
+      const size = audioData.allocationSize({ planeIndex: c, format: 'f32-planar' });
+      const p = new Float32Array(size >> 2);
+      audioData.copyTo(p, { planeIndex: c, format: 'f32-planar' });
+      planes.push(p);
+    }
+  } else if (audioData.format === 'f32-planar') {
+    const src = new Float32Array(audioData.data);
+    for (let c = 0; c < ch; c++) {
+      planes.push(src.slice(c * n, (c + 1) * n));
+    }
+  } else if (audioData.format === 'f32') {
+    // 交错排列 [L0,R0,L1,R1,...] → 去交错为 planar
+    const src = new Float32Array(audioData.data);
+    for (let c = 0; c < ch; c++) {
+      const p = new Float32Array(n);
+      for (let j = 0; j < n; j++) p[j] = src[j * ch + c];
+      planes.push(p);
+    }
+  } else if (audioData.format === 's16') {
+    const src = new Int16Array(audioData.data);
+    for (let c = 0; c < ch; c++) {
+      const p = new Float32Array(n);
+      for (let j = 0; j < n; j++) p[j] = src[j * ch + c] / 32768;
+      planes.push(p);
+    }
+  } else {
+    if (!pushAudio.warned) { showMsg('音频格式不支持: ' + audioData.format); pushAudio.warned = true; }
+    audioData.close();
+    return;
+  }
+  audioData.close();
+  // 传输通道 buffer（worklet 端 new Float32Array(b) 重建 planar 视图）
+  const buffers = planes.map(p => p.buffer);
+  if (audioNode) audioNode.port.postMessage(buffers, buffers);
+}
+
+function closeAudio() {
+  if (audioRetryTimer) { clearTimeout(audioRetryTimer); audioRetryTimer = null; }
+  if (audioWS) { audioWS.onclose = null; audioWS.close(); audioWS = null; }
+  if (audioDecoder) { try { audioDecoder.close(); } catch (_) {} audioDecoder = null; }
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+  audioNode = null; audioGain = null; audioPackets = 0; audioOn = false;
+}
+
+// 「停止」观众感知：还有其他页面/用户在看同一条流时，仅断开本页（不停止推流）；
+// 只剩自己时才真正停止设备端投屏
+$('mStop').onclick = async () => {
+  if (mirrorSerial) {
+    try {
+      const info = await api('GET', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`);
+      if ((info.viewers ?? 1) > 1) {
+        stopMirror(false);
+        alert('其他页面仍在观看该设备，已仅断开本页（设备端投屏流保持运行）');
+        return;
+      }
+    } catch (_) { /* 查询失败按原行为停止 */ }
+  }
+  stopMirror(true);
+};
+
+// 页面静音：只控制本页是否出声（WS 路径走 audioGain，WebRTC 路径走 mAudio.muted），
+// 不影响服务端是否推送音频流
+let pageMuted = false;
+function applyPageMute() {
+  if (audioGain) audioGain.gain.value = pageMuted ? 0 : 1;
+  $('mAudio').muted = pageMuted;
+  $('mMute').textContent = pageMuted ? '🔇 已静音' : '🔊 声音';
+}
+$('mMute').onclick = () => { pageMuted = !pageMuted; applyPageMute(); };
+document.querySelectorAll('.m-head button[data-op]').forEach(b => {
+  b.onclick = () => wsSend({ type: 'op', name: b.dataset.op });
+});
+document.querySelectorAll('.m-head button[data-clip]').forEach(b => {
+  b.onclick = async () => {
+    if (!mirrorSerial) return;
+    const u = `/api/devices/${encodeURIComponent(mirrorSerial)}/clipboard`;
+    try {
+      if (b.dataset.clip === 'get') {
+        const r = await api('GET', u);
+        if (!r.text) { showMsg('剪贴板为空'); return; }
+        showMsg('设备剪贴板: ' + r.text);
+        try { await navigator.clipboard.writeText(r.text); showMsg('已复制到本机: ' + r.text); } catch (_) {}
+      } else {
+        let text = '';
+        try { text = await navigator.clipboard.readText(); } catch (_) {}
+        if (!text) text = prompt('输入要写入设备剪贴板的文本：') || '';
+        if (!text) return;
+        await api('POST', u, { text, paste: true });
+        showMsg('已写入设备剪贴板并粘贴');
+      }
+    } catch (e) { showMsg('剪贴板操作失败: ' + e.message); }
+  };
+});
+
+// ---------- WebRTC 方案（信令 → pion 推流 → 浏览器原生解码） ----------
+
+// 控制通道：/ws/video?mode=ctrl（仅 meta/resize + 控制事件，无视频帧）
+function openCtrlWS(serial) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}?mode=ctrl&token=${encodeURIComponent(token)}`);
+  mirrorWS = ws;
+  ws.onmessage = ev => {
+    if (typeof ev.data !== 'string') return;
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'meta') {
+      videoW = msg.width; videoH = msg.height;
+      $('mTitle').textContent = `【WebRTC】${msg.device}（${msg.width}×${msg.height}）`;
+    } else if (msg.type === 'resize') {
+      videoW = msg.width; videoH = msg.height;
+      $('mTitle').textContent = $('mTitle').textContent.replace(/（.*）/, `（${msg.width}×${msg.height}）`);
+    }
+  };
+  ws.onclose = ev => {
+    if (mirrorWS !== ws) return;
+    mirrorWS = null;
+    if (mirrorSerial) showMsg(ev.reason || '投屏流已结束');
+  };
+}
+
+// 建立观看端 PeerConnection：视频轨经 requestVideoFrameCallback 绘制到 canvas
+// （复用触摸/键盘/坐标逻辑），音频轨走隐藏 audio 元素。
+async function startWebrtcViewer(serial) {
+  const pc = new RTCPeerConnection();
+  webrtcPC = pc;
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.addTransceiver('audio', { direction: 'recvonly' });
+
+  const v = $('mVideo'), a = $('mAudio');
+  let lastDecoded = -1;
+  pc.ontrack = ev => {
+    if (webrtcPC !== pc) return;
+    // pion answer 可能不带 msid，ev.streams 可能为空，直接用 track 构造流
+    const stream = ev.streams[0] || new MediaStream([ev.track]);
+    if (ev.track.kind === 'video') {
+      v.srcObject = stream;
+      v.play().catch(() => {});
+      // 隐藏 video 的合成器会丢帧导致 rVFC 不触发，用 rAF 循环 drawImage 取解码帧
+      const drawLoop = () => {
+        if (webrtcPC !== pc) return;
+        if (v.videoWidth) {
+          const canvas = $('mCanvas');
+          if (canvas.width !== v.videoWidth || canvas.height !== v.videoHeight) {
+            canvas.width = v.videoWidth; canvas.height = v.videoHeight;
+            videoW = v.videoWidth; videoH = v.videoHeight;
+          }
+          canvas.getContext('2d').drawImage(v, 0, 0, v.videoWidth, v.videoHeight);
+        }
+        requestAnimationFrame(drawLoop);
+      };
+      requestAnimationFrame(drawLoop);
+      // 帧率统计：getStats 的 framesDecoded 增量（隐藏 video 的 totalVideoFrames
+      // 受合成器丢帧影响不可靠；rAF 回调频率也 ≠ 视频帧率）
+      const statsLoop = async () => {
+        let prev = 0;
+        while (webrtcPC === pc) {
+          await new Promise(r => setTimeout(r, 1000));
+          if (webrtcPC !== pc) return;
+          const st = await pc.getStats();
+          let decoded = 0;
+          st.forEach(s => { if (s.type === 'inbound-rtp' && s.kind === 'video') decoded = s.framesDecoded; });
+          if (decoded > prev) clearKeyframeWait();
+          if (lastDecoded < 0) { lastDecoded = decoded; prev = decoded; continue; }
+          $('mStats').textContent = `${Math.max(0, decoded - prev)} fps · WebRTC`;
+          prev = decoded;
+        }
+      };
+      statsLoop();
+    } else {
+      a.srcObject = stream;
+      a.muted = pageMuted; // 静音先于音频就绪时同样生效
+      a.play().catch(() => {});
+    }
+  };
+  pc.onconnectionstatechange = () => {
+    if (webrtcPC === pc && ['failed', 'disconnected'].includes(pc.connectionState) && mirrorSerial) {
+      showMsg('WebRTC 连接断开');
+    }
+  };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  // 非 trickle：等 ICE gathering 完成再发 offer（内网 host candidate 直连）
+  await new Promise(res => {
+    if (pc.iceGatheringState === 'complete') return res();
+    const t = setTimeout(res, 2000);
+    pc.addEventListener('icegatheringstatechange', () => {
+      if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); }
+    });
+  });
+  const r = await api('POST', `/api/devices/${encodeURIComponent(serial)}/webrtc`, {
+    sdp: pc.localDescription.sdp, type: pc.localDescription.type,
+  });
+  if (webrtcPC !== pc) { pc.close(); return; }
+  await pc.setRemoteDescription({ type: r.type, sdp: r.sdp });
+}
+
+function closeWebrtcViewer() {
+  if (webrtcPC) { try { webrtcPC.close(); } catch (_) {} webrtcPC = null; }
+  $('mVideo').srcObject = null;
+  const a = $('mAudio');
+  a.pause(); a.srcObject = null;
+}
+
+// WebRTC 音频自动播放被浏览器策略拦截时，点击画面恢复
+// （iOS 的 touchstart preventDefault 会吞掉合成 click，触摸路径里也会显式调用）
+function resumeAudioIfPaused() {
+  const a = $('mAudio');
+  if (webrtcMode && a.srcObject && a.paused) a.play().catch(() => {});
+}
+$('mCanvas').addEventListener('click', resumeAudioIfPaused);
+
+function stopMirror(callApi) {
+  if (mirrorWS) { mirrorWS.onclose = null; mirrorWS.close(); mirrorWS = null; }
+  if (mirrorDecoder) { try { mirrorDecoder.close(); } catch (_) {} mirrorDecoder = null; }
+  closeWebrtcViewer();
+  closeAudio();
+  if (callApi && mirrorSerial) api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {});
+  mirrorSerial = null;
+  deviceAudio = false;
+  audioDup = false;
+  waitingKeyframe = false;
+  $('mirror').hidden = true;
+}
+
+function showMsg(text) {
+  $('mMsg').hidden = !text;
+  $('mMsg').textContent = text;
+}
+
+function wsSend(obj) { if (mirrorWS && mirrorWS.readyState === 1) mirrorWS.send(JSON.stringify(obj)); }
+
+function openVideoWS(serial) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}?token=${encodeURIComponent(token)}`);
+  ws.binaryType = 'arraybuffer';
+  mirrorWS = ws;
+
+  let configData = null, started = false, keySeen = false;
+  let frameCount = 0, byteCount = 0, lastTick = performance.now();
+
+  ws.onmessage = ev => {
+    if (typeof ev.data === 'string') {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'meta') {
+        videoW = msg.width; videoH = msg.height;
+        $('mTitle').textContent = `${msg.device}（${msg.width}×${msg.height}）`;
+      } else if (msg.type === 'resize') {
+        videoW = msg.width; videoH = msg.height;
+        $('mTitle').textContent = $('mTitle').textContent.replace(/（.*）/, `（${msg.width}×${msg.height}）`);
+      }
+      return;
+    }
+    const buf = new Uint8Array(ev.data);
+    if (buf.length < 9) return;
+    const flags = buf[0];
+    const pts = Number(new DataView(buf.buffer, buf.byteOffset).getBigUint64(1));
+    const payload = buf.subarray(9);
+    if (!(flags & 1)) { frameCount++; byteCount += payload.length; }
+    const now = performance.now();
+    if (now - lastTick >= 1000) {
+      // 音频包到达后由 audioOn 标记统一附加 🔊（直接 += 会被本循环每秒覆盖）
+      $('mStats').textContent = `${frameCount} fps · ${(byteCount * 8 / 1e6).toFixed(1)} Mbps${audioOn ? ' · 🔊' : ''}`;
+      frameCount = 0; byteCount = 0; lastTick = now;
+    }
+
+    const isConfig = flags & 1, isKey = flags & 2;
+    if (isConfig) { configData = payload; return; }
+    if (isKey) keySeen = true;
+    if (!keySeen) return;
+
+    if (!started) {
+      let codec = 'avc1.640029';
+      const sps = findNAL(configData, 7);
+      if (sps && sps.length >= 4) {
+        codec = 'avc1.' + [sps[1], sps[2], sps[3]].map(b => b.toString(16).padStart(2, '0')).join('');
+      }
+      mirrorDecoder = new VideoDecoder({
+        output: frame => {
+          clearKeyframeWait();
+          const canvas = $('mCanvas');
+          if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+            canvas.width = frame.displayWidth; canvas.height = frame.displayHeight;
+          }
+          canvas.getContext('2d').drawImage(frame, 0, 0);
+          frame.close();
+        },
+        error: e => showMsg('解码错误: ' + e.message),
+      });
+      mirrorDecoder.configure({ codec, optimizeForLatency: true });
+      started = true;
+    }
+    if (mirrorDecoder.state !== 'configured') return;
+    const data = (isKey && configData) ? concat(configData, payload) : payload;
+    try {
+      mirrorDecoder.decode(new EncodedVideoChunk({
+        type: isKey ? 'key' : 'delta',
+        timestamp: pts,
+        data,
+      }));
+    } catch (e) {
+      showMsg('解码异常: ' + e.message);
+    }
+  };
+
+  ws.onclose = ev => {
+    if (mirrorWS !== ws) return;
+    mirrorWS = null;
+    if (mirrorSerial) showMsg(ev.reason || '投屏流已结束');
+  };
+}
+
+// 触摸 / 滚动 / 键盘（视频像素坐标）
+const canvas = $('mCanvas');
+function videoCoords(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: Math.max(0, Math.min(videoW - 1, Math.round((e.clientX - rect.left) * videoW / rect.width))),
+    y: Math.max(0, Math.min(videoH - 1, Math.round((e.clientY - rect.top) * videoH / rect.height))),
+  };
+}
+// 触控按下状态自维护，不依赖 e.buttons/e.pressure（iOS Safari 触摸的 pointermove
+// 会把它们上报为 0，且部分版本画布上 pointer 事件对触摸支持不稳定）。
+// iOS/iPadOS 一律走原生 touch 事件（Safari 最稳的路径），其余平台用 PointerEvent。
+const isAppleTouch = /iP(hone|ad|od)/i.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS 桌面 UA
+const activePointers = new Set();
+function sendTouch(action, x, y, pid) {
+  const p = videoCoords({ clientX: x, clientY: y });
+  const ok = mirrorWS && mirrorWS.readyState === 1;
+  if (window.__touchDebug) {
+    __touchDebug('SEND ' + action + ' xy=' + p.x + ',' + p.y + ' pid=' + pid
+      + ' videoWH=' + videoW + 'x' + videoH + ' wsReady=' + (ok ? 1 : 0));
+  }
+  wsSend({ type: 'touch', action, x: p.x, y: p.y, pid });
+}
+if (window.PointerEvent && !isAppleTouch) {
+  canvas.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    activePointers.add(e.pointerId);
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    sendTouch('down', e.clientX, e.clientY, e.pointerId);
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!activePointers.has(e.pointerId)) return;
+    sendTouch('move', e.clientX, e.clientY, e.pointerId);
+  });
+  const pointerEnd = e => {
+    if (!activePointers.delete(e.pointerId)) return;
+    sendTouch('up', e.clientX, e.clientY, e.pointerId);
+  };
+  canvas.addEventListener('pointerup', pointerEnd);
+  canvas.addEventListener('pointercancel', pointerEnd);
+} else {
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    resumeAudioIfPaused(); // preventDefault 会吞掉合成 click，这里显式恢复音频
+    for (const t of e.changedTouches) {
+      activePointers.add(t.identifier);
+      sendTouch('down', t.clientX, t.clientY, t.identifier);
+    }
+  }, { passive: false });
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (activePointers.has(t.identifier)) sendTouch('move', t.clientX, t.clientY, t.identifier);
+    }
+  }, { passive: false });
+  const touchEnd = e => {
+    for (const t of e.changedTouches) {
+      if (activePointers.delete(t.identifier)) sendTouch('up', t.clientX, t.clientY, t.identifier);
+    }
+  };
+  canvas.addEventListener('touchend', touchEnd);
+  canvas.addEventListener('touchcancel', touchEnd);
+}
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const p = videoCoords(e);
+  wsSend({ type: 'scroll', x: p.x, y: p.y, dx: Math.sign(e.deltaX), dy: Math.sign(e.deltaY) });
+}, { passive: false });
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// TEMP 触摸诊断浮层：URL 带 ?touchdebug=1 启用，用于远程定位第三方 iOS 浏览器
+// 无法操控的问题（事件是否到达、走哪个分支、消息是否发出）。定位后移除。
+if (location.search.includes('touchdebug')) {
+  const dbg = document.createElement('pre');
+  dbg.style.cssText = 'position:fixed;left:4px;top:4px;z-index:99999;background:#000c;color:#0f0;'
+    + 'font-size:11px;line-height:1.3;padding:6px;pointer-events:none;max-width:96%;max-height:70%;'
+    + 'overflow:hidden;white-space:pre-wrap;word-break:break-all;margin:0;';
+  document.body.appendChild(dbg);
+  let dbgN = 0;
+  window.__touchDebug = m => {
+    dbg.textContent = (++dbgN) + ' ' + m + '\n' + dbg.textContent.slice(0, 1600);
+  };
+  __touchDebug('UA=' + navigator.userAgent);
+  __touchDebug('branch: appleTouch=' + isAppleTouch + ' PointerEvent=' + !!window.PointerEvent
+    + ' hasCodecs=' + ('VideoDecoder' in window) + ' hasRTC=' + ('RTCPeerConnection' in window)
+    + ' maxTouchPoints=' + navigator.maxTouchPoints);
+  ['touchstart', 'touchmove', 'touchend', 'pointerdown', 'pointermove', 'pointerup']
+    .forEach(t => document.addEventListener(t, e => __touchDebug('DOC ' + t
+      + ' target=' + (e.target.id || e.target.tagName)
+      + ' xy=' + Math.round(e.clientX) + ',' + Math.round(e.clientY)
+      + ' buttons=' + e.buttons), true));
+}
+
+// 浏览器按键 → Android keycode
+const KEYMAP = {
+  Enter: 66, Backspace: 67, Tab: 61, Escape: 111,
+  ArrowUp: 19, ArrowDown: 20, ArrowLeft: 21, ArrowRight: 22,
+  Home: 122, End: 123, PageUp: 92, PageDown: 93,
+  Delete: 112, Insert: 124, VolumeUp: 24, VolumeDown: 25,
+};
+function androidKeyFor(e) {
+  if (e.key in KEYMAP) return KEYMAP[e.key];
+  if (e.key.length === 1) {
+    const c = e.key;
+    if (c >= 'a' && c <= 'z') return 29 + c.charCodeAt(0) - 97;
+    if (c >= 'A' && c <= 'Z') return 29 + c.charCodeAt(0) - 65;
+    if (c >= '0' && c <= '9') return 7 + Number(c);
+    if (c === ' ') return 62;
+    if (c === '@') return 77; if (c === '*') return 17; if (c === '#') return 18;
+  }
+  return null;
+}
+function metaOf(e) {
+  let m = 0;
+  if (e.shiftKey) m |= 1; if (e.ctrlKey) m |= 0x1000; if (e.altKey) m |= 2;
+  return m;
+}
+canvas.addEventListener('keydown', e => {
+  const code = androidKeyFor(e);
+  if (code === null) return;
+  e.preventDefault();
+  wsSend({ type: 'key', action: 'down', code, meta: metaOf(e) });
+});
+canvas.addEventListener('keyup', e => {
+  const code = androidKeyFor(e);
+  if (code === null) return;
+  e.preventDefault();
+  wsSend({ type: 'key', action: 'up', code, meta: metaOf(e) });
+});
+
+function findNAL(data, type) {
+  if (!data) return null;
+  for (let i = 0; i + 4 < data.length; i++) {
+    if (data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 1) {
+      const nal = data[i + 3];
+      if ((nal & 0x1f) === type) return data.subarray(i + 3);
+    }
+  }
+  return null;
+}
+function concat(a, b) {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a); out.set(b, a.length);
+  return out;
+}
+
+// ---------- 终端 ----------
+let termWS = null, term = null;
+$('termOpen').onclick = () => {
+  const serial = $('curSerial').value;
+  if (!serial) { $('termState').textContent = '请先选择设备'; return; }
+  if (termWS) termWS.close();
+  if (!term) {
+    if (!window.Terminal) {
+      $('termState').textContent = 'xterm.js 加载失败（CDN 不可达）';
+      return;
+    }
+    term = new window.Terminal({ cursorBlink: true, fontSize: 14, theme: { background: '#101418' } });
+    term.open($('termBox'));
+    term.onData(d => {
+      if (termWS && termWS.readyState === 1) termWS.send(JSON.stringify({ type: 'input', data: d }));
+    });
+  }
+  term.reset();
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/term/${encodeURIComponent(serial)}?token=${encodeURIComponent(token)}`);
+  ws.binaryType = 'arraybuffer';
+  termWS = ws;
+  $('termState').textContent = '连接中…';
+  ws.onopen = () => $('termState').textContent = '已连接 ' + serial;
+  ws.onmessage = ev => {
+    const text = typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(new Uint8Array(ev.data));
+    term.write(text);
+  };
+  ws.onclose = ev => {
+    if (termWS !== ws) return;
+    termWS = null;
+    $('termState').textContent = '已断开' + (ev.reason ? '：' + ev.reason : '');
+  };
+  ws.onerror = () => { $('termState').textContent = '连接失败'; };
+};
+$('termClose').onclick = () => { if (termWS) { termWS.close(); termWS = null; } };
+
+// ---------- 文件管理 ----------
+function fmtSize(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+}
+
+async function listFiles() {
+  const serial = $('curSerial').value;
+  const p = $('filePath').value.trim() || '/';
+  if (!serial) { $('fileTable').tBodies[0].innerHTML = '<tr><td colspan="3" class="hint">请先选择设备</td></tr>'; return; }
+  $('fileTable').tBodies[0].innerHTML = '<tr><td colspan="3" class="hint">加载中…</td></tr>';
+  try {
+    const entries = await api('GET', `/api/devices/${encodeURIComponent(serial)}/files?path=${encodeURIComponent(p)}`);
+    if (!entries.length) { $('fileTable').tBodies[0].innerHTML = '<tr><td colspan="3" class="hint">空目录</td></tr>'; return; }
+    $('fileTable').tBodies[0].innerHTML = entries.map(e => {
+      const full = (p === '/' ? '' : p) + '/' + e.name;
+      const nameCell = e.dir
+        ? `<td class="name" onclick="$('filePath').value='${full}';listFiles()">📁 ${e.name}</td>`
+        : `<td>${e.name}</td>`;
+      const ops = e.dir
+        ? `<button class="ghost" onclick="$('filePath').value='${full}';listFiles()">进入</button>`
+        : `<button class="ghost" onclick="downloadFile('${full}')">下载</button>`;
+      return `<tr>${nameCell}<td>${e.dir ? '目录' : fmtSize(Number(e.size))}</td>
+        <td class="row">${ops}<button class="danger" onclick="deleteFile('${full}')">删除</button></td></tr>`;
+    }).join('');
+  } catch (e) {
+    $('fileTable').tBodies[0].innerHTML = `<tr><td colspan="3" class="hint">失败: ${e.message}</td></tr>`;
+  }
+}
+$('fileRefresh').onclick = listFiles;
+window.listFiles = listFiles;
+
+window.downloadFile = p => {
+  const serial = $('curSerial').value;
+  window.open(`/api/devices/${encodeURIComponent(serial)}/files/content?path=${encodeURIComponent(p)}&token=${encodeURIComponent(token)}`);
+};
+window.deleteFile = async p => {
+  const serial = $('curSerial').value;
+  if (!confirm('删除 ' + p + ' ?')) return;
+  try { await api('DELETE', `/api/devices/${encodeURIComponent(serial)}/files?path=${encodeURIComponent(p)}`); listFiles(); }
+  catch (e) { alert('删除失败: ' + e.message); }
+};
+$('fileMkdir').onclick = async () => {
+  const serial = $('curSerial').value;
+  const name = prompt('目录名：');
+  if (!serial || !name) return;
+  const base = $('filePath').value.trim() || '/';
+  try {
+    await api('POST', `/api/devices/${encodeURIComponent(serial)}/files/mkdir?path=${encodeURIComponent((base === '/' ? '' : base) + '/' + name)}`);
+    listFiles();
+  } catch (e) { alert('创建失败: ' + e.message); }
+};
+$('fileUploadBtn').onclick = () => { if (!$('curSerial').value) { alert('请先选择设备'); return; } $('fileUpload').click(); };
+$('fileUpload').onchange = async () => {
+  const serial = $('curSerial').value;
+  const f = $('fileUpload').files[0];
+  if (!f) return;
+  const base = $('filePath').value.trim() || '/';
+  $('fileUploadBtn').textContent = '上传中…';
+  try {
+    const res = await fetch(`/api/devices/${encodeURIComponent(serial)}/files?path=${encodeURIComponent((base === '/' ? '' : base) + '/' + f.name)}`, {
+      method: 'PUT', headers: { 'X-Auth-Token': token }, body: f,
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status);
+    listFiles();
+  } catch (e) { alert('上传失败: ' + e.message); }
+  $('fileUploadBtn').textContent = '上传文件';
+  $('fileUpload').value = '';
+};
+
+$('curSerial').onchange = () => { listFiles(); };
+
+if (token) { loadDevices(); watchEvents(); }
+</script>
+</body>
+</html>

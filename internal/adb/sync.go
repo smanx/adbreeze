@@ -1,6 +1,7 @@
 package adb
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -27,6 +28,11 @@ const (
 // 注意：sync 协议所有 u32 字段均为小端（adbd 以原生 LE 结构体收发），
 // 这与 smart socket 的十六进制长度前缀是两套编码，不可混用。
 func (c *Client) Push(serial, remotePath string, data []byte, mode string) error {
+	return c.PushStream(serial, remotePath, bytes.NewReader(data), mode)
+}
+
+// PushStream 流式推送：从 r 读取内容写入设备文件，不整体驻留内存（大文件上传用）。
+func (c *Client) PushStream(serial, remotePath string, r io.Reader, mode string) error {
 	conn, err := c.transport(serial)
 	if err != nil {
 		return err
@@ -45,15 +51,20 @@ func (c *Client) Push(serial, remotePath string, data []byte, mode string) error
 		return err
 	}
 	// DATA 分块
-	for len(data) > 0 {
-		n := len(data)
-		if n > syncDataMax {
-			n = syncDataMax
+	buf := make([]byte, syncDataMax)
+	for {
+		n, rerr := r.Read(buf)
+		if n > 0 {
+			if err := writeSyncRequest(conn, "DATA", buf[:n]); err != nil {
+				return err
+			}
 		}
-		if err := writeSyncRequest(conn, "DATA", data[:n]); err != nil {
-			return err
+		if rerr == io.EOF {
+			break
 		}
-		data = data[n:]
+		if rerr != nil {
+			return rerr
+		}
 	}
 	// DONE: id + u32(LE) mtime（无长度前缀）
 	done := make([]byte, 8)
@@ -111,8 +122,12 @@ func (c *Client) List(serial, remotePath string) ([]FileEntry, error) {
 			if _, err := io.ReadFull(conn, name); err != nil {
 				return nil, err
 			}
+			entryName := strings.TrimRight(string(name), "\x00")
+			if entryName == "." || entryName == ".." { // 跳过相对目录项，避免误删/递归打包
+				continue
+			}
 			out = append(out, FileEntry{
-				Name: strings.TrimRight(string(name), "\x00"),
+				Name: entryName,
 				Size: uint64(size),
 				Mode: mode,
 				Time: mtime,

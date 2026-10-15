@@ -5,12 +5,15 @@ import (
 	"errors"
 	"log"
 	"net"
+	"sort"
 	"sync"
 	"time"
 )
 
 // Tracker 通过 host:track-devices 长连接监听设备热插拔，
 // 维护设备快照并广播给订阅者。
+// 额外记忆「最近在线的无线设备」：无线设备断开后（adb disconnect 或网络中断）
+// 会从 adb devices 消失，这里将其以 offline 状态保留在列表中，便于一键重连。
 type Tracker struct {
 	client *Client
 	// ensureServer 在检测到 adb server 不可达时调用（自动拉起）
@@ -18,22 +21,68 @@ type Tracker struct {
 
 	mu      sync.RWMutex
 	devices []Device
-	subs    map[chan []Device]struct{}
+	// knownWireless 曾在线的无线设备（serial → 最后在线时间），掉线后仍展示
+	knownWireless map[string]time.Time
+	subs          map[chan []Device]struct{}
 }
 
 func NewTracker(c *Client) *Tracker {
-	return &Tracker{client: c, subs: make(map[chan []Device]struct{})}
+	return &Tracker{client: c, subs: make(map[chan []Device]struct{}), knownWireless: map[string]time.Time{}}
+}
+
+// isWireless 判断 serial 是否为网络设备形态（IP:port）。
+func isWireless(serial string) bool {
+	_, _, err := net.SplitHostPort(serial)
+	return err == nil
+}
+
+// ForgetDevice 手动从记忆列表移除某台掉线设备（用户点「移除」时调用）。
+func (t *Tracker) ForgetDevice(serial string) {
+	t.mu.Lock()
+	delete(t.knownWireless, serial)
+	devs := t.withRemembered()
+	t.mu.Unlock()
+	t.broadcast(devs)
+}
+
+// withRemembered 合并当前在线设备与掉线记忆（调用方须持锁）。
+// 在线设备原样保留；记忆中的设备若不在线则以 offline 状态追加。
+func (t *Tracker) withRemembered() []Device {
+	out := make([]Device, len(t.devices), len(t.devices)+len(t.knownWireless))
+	online := make(map[string]bool, len(t.devices))
+	for i, d := range t.devices {
+		out[i] = d
+		if d.State == "device" && isWireless(d.Serial) {
+			t.knownWireless[d.Serial] = time.Now()
+		}
+		online[d.Serial] = true
+	}
+	// 按最后在线时间排序追加掉线设备
+	type lost struct {
+		d  Device
+		at time.Time
+	}
+	var lostDevs []lost
+	for serial, at := range t.knownWireless {
+		if !online[serial] {
+			lostDevs = append(lostDevs, lost{Device{Serial: serial, State: "offline"}, at})
+		}
+	}
+	sort.Slice(lostDevs, func(i, j int) bool { return lostDevs[i].at.After(lostDevs[j].at) })
+	for _, l := range lostDevs {
+		out = append(out, l.d)
+	}
+	return out
 }
 
 // SetEnsureServer 注入 adb server 自愈函数。
 func (t *Tracker) SetEnsureServer(fn func()) { t.ensureServer = fn }
 
-// Devices 返回当前设备快照（空列表返回 [] 而非 null）。
+// Devices 返回当前设备快照（含记忆的掉线无线设备），空列表返回 [] 而非 null。
 func (t *Tracker) Devices() []Device {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	out := make([]Device, 0, len(t.devices))
-	return append(out, t.devices...)
+	return t.withRemembered()
 }
 
 // Subscribe 注册订阅者，返回事件通道与取消函数。
@@ -109,11 +158,18 @@ func (t *Tracker) trackOnce(ctx context.Context) error {
 func (t *Tracker) update(devs []Device) {
 	t.mu.Lock()
 	t.devices = devs
+	merged := t.withRemembered()
+	t.mu.Unlock()
+	t.broadcast(merged)
+}
+
+func (t *Tracker) broadcast(devs []Device) {
+	t.mu.RLock()
 	subs := make([]chan []Device, 0, len(t.subs))
 	for ch := range t.subs {
 		subs = append(subs, ch)
 	}
-	t.mu.Unlock()
+	t.mu.RUnlock()
 	for _, ch := range subs {
 		select {
 		case ch <- devs:
