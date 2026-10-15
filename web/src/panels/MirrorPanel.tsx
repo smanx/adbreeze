@@ -21,7 +21,28 @@ export default function MirrorPanel() {
   const [settings, setSettings] = useState<MirrorSettings>(loadMirrorSettings(selected))
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
+  const stageRef = useRef<HTMLDivElement>(null)
   const activePointers = useRef(new Set<number>())
+  const [fsOn, setFsOn] = useState(false)
+  const [fsSupported] = useState(() =>
+    typeof HTMLElement !== 'undefined' && typeof HTMLElement.prototype.requestFullscreen === 'function')
+
+  // 全屏状态跟随（ESC / 浏览器 UI 退出时同步按钮文案）
+  useEffect(() => {
+    const onChange = () => setFsOn(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', onChange)
+    return () => document.removeEventListener('fullscreenchange', onChange)
+  }, [])
+
+  // 全屏显示：让舞台（画布+遮罩）进入浏览器原生全屏；请求被拒时兜底提示
+  const toggleFullscreen = async () => {
+    const el = stageRef.current
+    if (!el) return
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen()
+      else await el.requestFullscreen({ navigationUI: 'hide' })
+    } catch { setMsg('不支持') }
+  }
 
   // 控制器初始化 + 状态回调（一次；设备切换由 start/stop 处理）
   useEffect(() => {
@@ -208,6 +229,9 @@ export default function MirrorPanel() {
         <button className="btn tiny ghost" disabled={!running} onClick={clipboardGetClick}>取剪贴板</button>
         <button className="btn tiny ghost" disabled={!running} onClick={clipboardPasteClick}>粘贴到设备</button>
         <button className="btn tiny" onClick={muteClick}>{muted ? '🔇 已静音' : '🔊 声音'}</button>
+        <button className="btn tiny ghost" onClick={toggleFullscreen} disabled={!fsSupported}>
+          {!fsSupported ? '⛶ 不支持' : fsOn ? '⛶ 退出全屏' : '⛶ 全屏显示'}
+        </button>
         <button className="btn tiny ghost" onClick={() => setSettingsOpen(v => !v)}>⚙ 设置</button>
         {running
           ? <button className="btn tiny danger" onClick={stopClick}>停止</button>
@@ -252,7 +276,7 @@ export default function MirrorPanel() {
       )}
 
       <div className="mirror-body">
-        <div className="mirror-stage">
+        <div className="mirror-stage" ref={stageRef}>
           <canvas id="mirror-canvas" ref={canvasRef} width={720} height={1280} tabIndex={0} />
           {/* 首帧前盖住画布（防旧帧错觉），失败时显示错误 */}
           {running && phase !== 'ready' && (
