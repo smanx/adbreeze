@@ -389,10 +389,9 @@ export class FrameRenderer {
     this.texY = this.makeTexture()
     this.texU = this.makeTexture()
     this.texV = this.makeTexture()
-
-    gl.uniform1i(this.yuvLoc.yPlane, 0)
-    gl.uniform1i(this.yuvLoc.uPlane, 1)
-    gl.uniform1i(this.yuvLoc.vPlane, 2)
+    // 采样器 uniform 不在这里设：此时没有 program 在用，uniform1i 会被 WebGL
+    // 静默忽略，导致采样器停在默认值 0（三个平面都读亮度纹理 → 画面泛绿）。
+    // 必须在 drawYUV 里 useProgram 之后再设（见 drawYUV）。
   }
 
   private makeTexture() {
@@ -775,6 +774,11 @@ export class FrameRenderer {
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.texY)
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.texU)
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texV)
+    // 采样器 uniform 必须在 useProgram 之后设：无绑定程序时 uniform1i 被静默忽略，
+    // 采样器会停在默认值 0，三个平面全读纹理单元 0（亮度）→ 画面整体泛绿
+    gl.uniform1i(this.yuvLoc.yPlane, 0)
+    gl.uniform1i(this.yuvLoc.uPlane, 1)
+    gl.uniform1i(this.yuvLoc.vPlane, 2)
 
     gl.uniform2f(this.yuvLoc.lumaSize, w, h)
     gl.uniform2f(this.yuvLoc.chromaSize, Math.max(1, w / 2), Math.max(1, h / 2))

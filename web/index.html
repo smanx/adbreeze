@@ -4,7 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0f9d58" />
+    <meta name="description" content="轻风般的跨平台 ADB 控制中心：投屏、终端、文件、应用管理" />
     <title>ADBreeze 控制台</title>
+
+    <!-- PWA -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
+    <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+
+    <!-- iOS 全屏 Web App（安装到主屏后以独立窗口运行、隐藏 Safari 界面） -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="ADBreeze" />
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- 旧版 iOS/部分国产浏览器的等价写法，缺一不可 -->
+    <meta name="apple-touch-fullscreen" content="yes" />
+    <meta name="format-detection" content="telephone=no" />
   </head>
   <body>
     <div id="root"></div>

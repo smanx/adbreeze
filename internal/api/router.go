@@ -4,6 +4,7 @@ package api
 import (
 	"io/fs"
 	"log"
+	"mime"
 	"net/http"
 
 	"adbreeze/internal/adb"
@@ -12,6 +13,12 @@ import (
 	"adbreeze/internal/settings"
 	"adbreeze/internal/webrtc"
 )
+
+func init() {
+	// Go 的 mime 表不认识 .webmanifest，默认按 application/octet-stream 下发，
+	// 浏览器会因 MIME 不合法而拒绝解析 PWA manifest（表现为"无法安装"）。
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+}
 
 // Server 承载 HTTP 服务。
 type Server struct {

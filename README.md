@@ -80,6 +80,18 @@ WebCodecs（`VideoDecoder`）只在**安全上下文**暴露，即 HTTPS 或 `lo
 
 未指定 `-tls-cert` / `-tls-key` 时自动生成自签名证书（覆盖 `localhost` 与全部本机 IP，有效期 10 年，已存在则复用不重生成），位置在数据目录的 `tls/` 下。自签名证书首次访问会触发浏览器告警，点「高级 → 继续前往」即可（只需一次）；不想每次告警可将 `cert.pem` 导入系统信任库后重启浏览器。
 
+### 安装为应用（PWA）
+
+前端带 Web App Manifest 与 Service Worker，可作为独立应用安装：
+
+- **桌面 Chrome / Edge**：地址栏右侧出现「安装」图标，或用菜单「应用 → 安装此站点为应用」
+- **Android Chrome**：菜单「添加到主屏幕」，之后以独立窗口启动、无浏览器界面
+- **iOS Safari**：分享 → 「添加到主屏幕」。已设 `apple-mobile-web-app-capable`，从主屏图标打开即为全屏，状态栏按 `black-translucent` 融入内容
+
+Service Worker 只缓存静态外壳（HTML/CSS/JS/图标），**绝不缓存 `/api` 与 `/ws`**——那些是设备实时数据与实时流，缓存会导致看到陈旧状态或连接到失效会话。因此离线只能打开界面，功能仍需服务在线。
+
+安装能力与安全上下文绑定：`http://localhost` 或 HTTPS 下可安装；用局域网 IP 以 `http://` 访问时浏览器不视为可安装站点（需 `-https`）。iOS 对 PWA 的 WebCodecs 支持有限，投屏建议走 WebRTC 或软解。
+
 ### 一键脚本
 
 项目内的跨平台开发脚本 `scripts/dev.go`（Go 编写，Windows / macOS / Linux 通用）串起「前端构建 → Go 编译 → 启动」全流程：
@@ -190,6 +202,7 @@ adbreeze/
 │   ├── tlsutil/           # 自签名证书生成 / 复用（HTTPS）
 │   └── config/            # 命令行配置
 ├── web/dist/              # 前端（embed 进二进制）
+│   └── (manifest.webmanifest / sw.js / icons/ 随构建产出，支撑 PWA 安装)
 ├── scripts/               # 跨平台开发脚本（go run ./scripts）
 ├── vendor-bin/            # 内嵌 scrcpy-server jar
 ├── Dockerfile / Makefile / .github/workflows/release.yml
