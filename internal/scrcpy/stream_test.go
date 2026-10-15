@@ -57,26 +57,35 @@ func (f *fakeDeps) ShellConn(serial, cmd string) (net.Conn, error) {
 }
 
 func (f *fakeDeps) serve() {
-	conn, err := f.ln.Accept()
-	if err != nil {
-		return
-	}
-	// server 依次连出：video → audio（可选）→ control
-	if f.withAudio {
-		go func() {
-			audio, err := f.ln.Accept()
-			if err == nil {
-				f.serveAudio(audio)
-			}
-		}()
-	}
+	// 客户端按 video → audio（可选）→ control 顺序拨号，真实 server 也严格按
+	// accept 顺序分配角色。多个 goroutine 并发 Accept 会让第 2/3 条连接错分到
+	// audio/control（Linux CI 实测复现），因此统一由单个 accept 循环按序派发。
+	next := make(chan net.Conn, 3)
 	go func() {
-		ctl, err := f.ln.Accept()
-		if err == nil {
-			go io.Copy(io.Discard, ctl)
+		defer close(next)
+		for {
+			c, err := f.ln.Accept()
+			if err != nil {
+				return
+			}
+			next <- c
 		}
 	}()
-	f.serveVideo(conn)
+
+	video, ok := <-next
+	if !ok {
+		return
+	}
+	go f.serveVideo(video) // 需并发发出 dummy 字节，否则客户端不会拨号下一条
+
+	if f.withAudio {
+		if audio, ok := <-next; ok {
+			go f.serveAudio(audio)
+		}
+	}
+	if ctl, ok := <-next; ok {
+		go io.Copy(io.Discard, ctl)
+	}
 }
 
 // serveAudio 推送音频流：4B 编码 ID "opus" + OpusHead 配置包 + 音频帧。
