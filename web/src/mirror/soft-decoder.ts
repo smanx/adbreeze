@@ -12,6 +12,7 @@
 //     或用户显式选择软解时才下载。
 
 import type { FrameRenderer } from './render'
+import { t } from '../i18n'
 
 /** 模块级单例：多个会话共享同一份已实例化的 wasm 模块 */
 let modulePromise: Promise<H264BsdModule> | null = null
@@ -117,7 +118,7 @@ export class SoftH264Decoder {
       this.module = mod
       this.decoder = new mod.Decoder()
     } catch (e) {
-      this.onError('软解码模块加载失败: ' + (e as Error).message)
+      this.onError(t('soft.loadFailed') + (e as Error).message)
     }
   }
 
@@ -148,10 +149,10 @@ export class SoftH264Decoder {
           // 连续两次即判定不可用；在 P 帧中间失败则只是丢包，继续等下个 IDR
           if (isKey) this.keyErrors++
           if (this.keyErrors >= 2) {
-            this.onError('当前码流超出软解码器能力（仅支持 Baseline profile / Level≤4）')
+            this.onError(t('soft.tooWeak'))
             this.onUnsupported?.()
           } else {
-            this.onError('软解码失败（code=' + result.code + '），等待下一个关键帧')
+            this.onError(t('soft.failed', { code: result.code }))
           }
           return
         }
@@ -164,7 +165,7 @@ export class SoftH264Decoder {
     } catch (e) {
       this.errorCount++
       this.needsKeyframe = true
-      this.onError('软解码异常: ' + (e as Error).message)
+      this.onError(t('soft.error') + (e as Error).message)
       return
     }
 

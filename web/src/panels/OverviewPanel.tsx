@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
 import { useStore } from '../store'
+import { useT, type MsgKey } from '../i18n'
 
 // 概览面板：设备信息总览（对齐 AYA Overview），一次性拉取 + 手动刷新，点击条目复制值。
 interface Battery {
@@ -23,8 +24,10 @@ interface OverviewResp {
   info: OverviewInfo
 }
 
-const STATUS_TEXT: Record<number, string> = {
-  2: '充电中', 3: '放电中', 4: '未充电', 5: '已充满', 1: '未知',
+// 电池状态码 → 文案（Android BatteryManager）
+const STATUS_KEYS: Record<number, MsgKey> = {
+  2: 'overview.battCharging', 3: 'overview.battDischarging', 4: 'overview.battNotCharging',
+  5: 'overview.battFull', 1: 'common.unknown',
 }
 
 function fmtKB(kb: number): string {
@@ -40,6 +43,7 @@ export default function OverviewPanel() {
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
   const [copied, setCopied] = useState('')
+  const t = useT()
 
   const load = useCallback(async () => {
     if (!selected) return
@@ -59,7 +63,7 @@ export default function OverviewPanel() {
   }
 
   if (!selected) {
-    return <div className="panel panel-placeholder"><h2>概览</h2><p className="hint">请先在设备列表中选择设备</p></div>
+    return <div className="panel panel-placeholder"><h2>{t('overview.title')}</h2><p className="hint">{t('panel.selectDevice')}</p></div>
   }
 
   const info = data?.info
@@ -68,49 +72,49 @@ export default function OverviewPanel() {
   return (
     <div className="panel overview-panel">
       <div className="overview-head">
-        <h2>概览{data ? `（${data.serial}）` : ''}</h2>
+        <h2>{data ? t('overview.withSerial', { serial: data.serial }) : t('overview.title')}</h2>
         <span className="spacer" />
-        {copied && <span className="hint">已复制「{copied}」</span>}
-        <button className="btn ghost" disabled={loading} onClick={load}>{loading ? '加载中…' : '刷新'}</button>
+        {copied && <span className="hint">{t('overview.copied', { label: copied })}</span>}
+        <button className="btn ghost" disabled={loading} onClick={load}>{loading ? t('common.loading') : t('common.refresh')}</button>
       </div>
       {err && <p className="error-text">{err}</p>}
-      {!info && !err && <p className="hint">加载中…</p>}
+      {!info && !err && <p className="hint">{t('common.loading')}</p>}
       {info && (
         <>
           <section className="ov-grid">
-            <Item label="设备名称" value={info.marketName} copy={copy} copied={copied} />
-            <Item label="品牌" value={info.brand} copy={copy} copied={copied} />
-            <Item label="型号" value={info.model} copy={copy} copied={copied} />
-            <Item label="序列号" value={info.serialno} copy={copy} copied={copied} />
-            <Item label="Android 版本" value={info.android ? `${info.android}（API ${info.sdk}）` : ''} copy={copy} copied={copied} />
-            <Item label="内核版本" value={info.kernel} copy={copy} copied={copied} />
-            <Item label="处理器" value={info.board ? `${info.board}（${info.cpuCores} 核，${info.abi}）` : ''} copy={copy} copied={copied} />
-            <Item label="构建版本" value={info.incremental} copy={copy} copied={copied} />
-            <Item label="字体缩放" value={info.fontScale} copy={copy} copied={copied} />
+            <Item label={t('overview.deviceName')} value={info.marketName} copy={copy} copied={copied} />
+            <Item label={t('overview.brand')} value={info.brand} copy={copy} copied={copied} />
+            <Item label={t('overview.model')} value={info.model} copy={copy} copied={copied} />
+            <Item label={t('overview.serial')} value={info.serialno} copy={copy} copied={copied} />
+            <Item label={t('overview.android')} value={info.android ? `${info.android}${t('overview.apiSuffix', { sdk: info.sdk })}` : ''} copy={copy} copied={copied} />
+            <Item label={t('overview.kernel')} value={info.kernel} copy={copy} copied={copied} />
+            <Item label={t('overview.soc')} value={info.board ? `${info.board}${t('overview.coresSuffix', { cores: info.cpuCores, abi: info.abi })}` : ''} copy={copy} copied={copied} />
+            <Item label={t('overview.build')} value={info.incremental} copy={copy} copied={copied} />
+            <Item label={t('overview.fontScale')} value={info.fontScale} copy={copy} copied={copied} />
           </section>
 
           <section className="ov-grid">
-            <Item label="内存" value={info.memTotalKB ? `${fmtKB(memUsed)} / ${fmtKB(info.memTotalKB)}` : ''} copy={copy} copied={copied} />
-            <Item label="存储" value={info.storageTotalKB ? `${fmtKB(info.storageUsedKB)} / ${fmtKB(info.storageTotalKB)}` : ''} copy={copy} copied={copied} />
-            <Item label="物理分辨率" value={info.physSize ? `${info.physSize}（${info.physDensity || '—'} dpi）` : ''} copy={copy} copied={copied} />
-            <Item label="显示分辨率" value={info.overSize ? `${info.overSize}（${info.overDensity || '—'} dpi）` : '未覆盖'} copy={copy} copied={copied} />
-            <Item label="Wi-Fi" value={info.wifi} copy={copy} copied={copied} />
-            <Item label="IP 地址" value={info.ip} copy={copy} copied={copied} />
-            <Item label="MAC 地址" value={info.mac} copy={copy} copied={copied} />
-            <Item label="CPU 温度" value={info.cpuTemp ? `${info.cpuTemp.toFixed(1)} °C` : ''} copy={copy} copied={copied} />
+            <Item label={t('overview.memory')} value={info.memTotalKB ? `${fmtKB(memUsed)} / ${fmtKB(info.memTotalKB)}` : ''} copy={copy} copied={copied} />
+            <Item label={t('overview.storage')} value={info.storageTotalKB ? `${fmtKB(info.storageUsedKB)} / ${fmtKB(info.storageTotalKB)}` : ''} copy={copy} copied={copied} />
+            <Item label={t('overview.physSize')} value={info.physSize ? `${info.physSize}${t('overview.dpiSuffix', { dpi: info.physDensity || '—' })}` : ''} copy={copy} copied={copied} />
+            <Item label={t('overview.overSize')} value={info.overSize ? `${info.overSize}${t('overview.dpiSuffix', { dpi: info.overDensity || '—' })}` : t('overview.notOverridden')} copy={copy} copied={copied} />
+            <Item label={t('overview.wifi')} value={info.wifi} copy={copy} copied={copied} />
+            <Item label={t('overview.ip')} value={info.ip} copy={copy} copied={copied} />
+            <Item label={t('overview.mac')} value={info.mac} copy={copy} copied={copied} />
+            <Item label={t('overview.cpuTemp')} value={info.cpuTemp ? `${info.cpuTemp.toFixed(1)} °C` : ''} copy={copy} copied={copied} />
           </section>
 
           <section className="ov-grid">
-            <Item label="电池电量" value={info.battery.level ? `${info.battery.level}%` : ''} copy={copy} copied={copied} />
-            <Item label="电池状态" value={STATUS_TEXT[info.battery.status] || String(info.battery.status || '')} copy={copy} copied={copied} />
-            <Item label="电池温度" value={info.battery.temperature ? `${info.battery.temperature.toFixed(1)} °C` : ''} copy={copy} copied={copied} />
-            <Item label="电池电压" value={info.battery.voltage ? `${(info.battery.voltage / 1000).toFixed(2)} V` : ''} copy={copy} copied={copied} />
-            <Item label="电池类型" value={info.battery.technology} copy={copy} copied={copied} />
-            <Item label="充电方式" value={(() => {
+            <Item label={t('overview.battLevel')} value={info.battery.level ? `${info.battery.level}%` : ''} copy={copy} copied={copied} />
+            <Item label={t('overview.battStatus')} value={STATUS_KEYS[info.battery.status] ? t(STATUS_KEYS[info.battery.status]) : String(info.battery.status || '')} copy={copy} copied={copied} />
+            <Item label={t('overview.battTemp')} value={info.battery.temperature ? `${info.battery.temperature.toFixed(1)} °C` : ''} copy={copy} copied={copied} />
+            <Item label={t('overview.battVolt')} value={info.battery.voltage ? `${(info.battery.voltage / 1000).toFixed(2)} V` : ''} copy={copy} copied={copied} />
+            <Item label={t('overview.battType')} value={info.battery.technology} copy={copy} copied={copied} />
+            <Item label={t('overview.powerSource')} value={(() => {
               const b = info.battery
-              if (b.acPowered) return '交流电源'
+              if (b.acPowered) return t('overview.ac')
               if (b.usbPowered) return 'USB'
-              if (b.wirelessPowered) return '无线'
+              if (b.wirelessPowered) return t('overview.wireless')
               return ''
             })()} copy={copy} copied={copied} />
           </section>
@@ -124,9 +128,10 @@ function Item({ label, value, copy, copied }: {
   label: string; value: string
   copy: (label: string, value: string) => void; copied: string
 }) {
+  const t = useT()
   return (
     <div className={'ov-item' + (copied === label ? ' copied' : '')}
-      onClick={() => copy(label, value)} title={value ? `点击复制：${value}` : ''}>
+      onClick={() => copy(label, value)} title={value ? t('overview.copyTip', { value }) : ''}>
       <span className="ov-label">{label}</span>
       <span className="ov-value">{value || '—'}</span>
     </div>

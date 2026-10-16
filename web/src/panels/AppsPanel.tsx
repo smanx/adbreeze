@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, apiUrl, authHeaders } from '../api'
 import { useStore } from '../store'
 import { Th, useColWidths } from '../components/TableTh'
+import { useT, type MsgKey } from '../i18n'
 
 // 应用面板（对齐 AYA Application）：
 // 列表列：应用名/包名/版本/最小SDK/存储占用/状态 + 系统应用开关 + 搜索。
@@ -36,7 +37,7 @@ interface AppInfo {
 
 type SortKey = 'label' | 'package' | 'versionName' | 'minSdk' | 'targetSdk' | 'storage' | 'status'
 const APP_KEYS: SortKey[] = ['label', 'package', 'versionName', 'minSdk', 'targetSdk', 'storage', 'status']
-const APP_COLS = ['应用名', '包名', '版本', '最小 SDK', '目标 SDK', '存储占用', '状态']
+const APP_COLS: MsgKey[] = ['apps.colName', 'apps.colPackage', 'apps.colVersion', 'apps.colMinSdk', 'apps.colTargetSdk', 'apps.colStorage', 'common.status']
 // 右对齐列（SDK/存储）
 const APP_NUM_COLS = [3, 4, 5]
 
@@ -67,6 +68,7 @@ export default function AppsPanel() {
   const [widths, setWidth] = useColWidths('adbreeze-apps-colwidths', APP_COLS.length)
   const menuRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const t = useT()
 
   const load = useCallback(async (refresh = false) => {
     if (!selected) return
@@ -125,9 +127,9 @@ export default function AppsPanel() {
     setBusyPkg(pkg); setHint(''); setMenu(null)
     try {
       const r = await api<{ message: string }>('POST', `/api/devices/${encodeURIComponent(selected!)}/apps/action`, { package: pkg, action })
-      setHint(`${pkg}: ${r.message || '完成'}`)
+      setHint(`${pkg}: ${r.message || t('common.done')}`)
       if (action !== 'open') load() // 状态类操作后刷新列表
-    } catch (e) { setHint(`${pkg}: 操作失败 - ${(e as Error).message}`) } finally { setBusyPkg('') }
+    } catch (e) { setHint(t('apps.actionFailed', { pkg, msg: (e as Error).message })) } finally { setBusyPkg('') }
   }
 
   const openInfo = async (pkg: string) => {
@@ -140,7 +142,7 @@ export default function AppsPanel() {
 
   const exportApk = async (app: AppEntry) => {
     setMenu(null)
-    setBusyPkg(app.package); setHint('导出 APK…')
+    setBusyPkg(app.package); setHint(t('apps.exporting'))
     try {
       const blob = await fetch(apiUrl(`/api/devices/${encodeURIComponent(selected!)}/apps/apk?package=${encodeURIComponent(app.package)}`), { headers: authHeaders() })
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob() })
@@ -150,51 +152,51 @@ export default function AppsPanel() {
       a.download = app.versionName ? `${app.package}-${app.versionName}.apk` : `${app.package}.apk`
       a.click()
       URL.revokeObjectURL(a.href)
-      setHint(`${app.package}: APK 已保存到下载`)
-    } catch (e) { setHint(`${app.package}: 导出失败 - ${(e as Error).message}`) } finally { setBusyPkg('') }
+      setHint(t('apps.exportSaved', { pkg: app.package }))
+    } catch (e) { setHint(t('apps.exportFailed', { pkg: app.package, msg: (e as Error).message })) } finally { setBusyPkg('') }
   }
 
-  const confirmPrefix = (a: AppEntry) => a.system ? '该应用为系统应用。' : ''
+  const confirmPrefix = (a: AppEntry) => a.system ? t('apps.sysPrefix') : ''
   const showName = (a: AppEntry) => a.label || a.package
 
   const menuItems = (a: AppEntry) => ([
-    { label: '应用信息', act: () => openInfo(a.package) },
-    { label: '导出安装包', act: () => exportApk(a) },
+    { label: t('apps.menuInfo'), act: () => openInfo(a.package) },
+    { label: t('apps.menuExport'), act: () => exportApk(a) },
     { sep: true },
-    { label: '打开', act: () => doAction(a.package, 'open') },
-    { label: '停止', act: () => doAction(a.package, 'stop', `${confirmPrefix(a)}确定要停止 ${showName(a)} 吗？`) },
+    { label: t('apps.menuOpen'), act: () => doAction(a.package, 'open') },
+    { label: t('apps.menuStop'), act: () => doAction(a.package, 'stop', t('apps.confirmStop', { prefix: confirmPrefix(a), name: showName(a) })) },
     { sep: true },
     a.disabled
-      ? { label: '解冻', act: () => doAction(a.package, 'enable') }
-      : { label: '冻结', act: () => doAction(a.package, 'disable', `${confirmPrefix(a)}确定要冻结 ${showName(a)} 吗？`) },
+      ? { label: t('apps.menuEnable'), act: () => doAction(a.package, 'enable') }
+      : { label: t('apps.menuDisable'), act: () => doAction(a.package, 'disable', t('apps.confirmDisable', { prefix: confirmPrefix(a), name: showName(a) })) },
     { sep: true },
-    { label: '清除数据', act: () => doAction(a.package, 'clear', `${confirmPrefix(a)}确定要清除 ${showName(a)} 的数据吗？`) },
-    { label: '卸载', act: () => doAction(a.package, 'uninstall', `${confirmPrefix(a)}确定要卸载 ${showName(a)} 吗？`) },
+    { label: t('apps.menuClear'), act: () => doAction(a.package, 'clear', t('apps.confirmClear', { prefix: confirmPrefix(a), name: showName(a) })) },
+    { label: t('apps.menuUninstall'), act: () => doAction(a.package, 'uninstall', t('apps.confirmUninstall', { prefix: confirmPrefix(a), name: showName(a) })) },
   ])
 
   if (!selected) {
-    return <div className="panel panel-placeholder"><h2>应用</h2><p className="hint">请先在设备列表中选择设备</p></div>
+    return <div className="panel panel-placeholder"><h2>{t('apps.title')}</h2><p className="hint">{t('panel.selectDevice')}</p></div>
   }
 
   return (
     <div className="panel apps-panel" ref={listRef}>
       <div className="apps-bar">
-        <input className="apps-search" placeholder="搜索包名/应用名" value={keyword} onChange={e => setKeyword(e.target.value)} />
+        <input className="apps-search" placeholder={t('apps.searchPh')} value={keyword} onChange={e => setKeyword(e.target.value)} />
         <label className="apps-sys-chk">
           <input type="checkbox" checked={showSys} onChange={e => setShowSys(e.target.checked)} />
-          系统应用
+          {t('apps.showSys')}
         </label>
-        <span className="hint">{loading ? '加载中…（首次约 7 秒）' : `${filtered.length} / ${apps.length} 个应用`}</span>
+        <span className="hint">{loading ? t('apps.loadingFirst') : t('apps.count', { f: filtered.length, t: apps.length })}</span>
         <span className="spacer" />
         {hint && <span className="hint">{hint}</span>}
-        <button className="btn ghost" disabled={loading} onClick={() => load(true)}>刷新</button>
+        <button className="btn ghost" disabled={loading} onClick={() => load(true)}>{t('common.refresh')}</button>
       </div>
       {err && <p className="error-text">{err}</p>}
       <div className="apps-table-wrap">
         <table className="apps-table">
           <thead>
             <tr>
-              {APP_COLS.map((text, i) => th(APP_KEYS[i], text, i))}
+              {APP_COLS.map((key, i) => th(APP_KEYS[i], t(key), i))}
             </tr>
           </thead>
           <tbody>
@@ -203,17 +205,17 @@ export default function AppsPanel() {
                 className={a.disabled ? 'disabled' : ''}
                 onContextMenu={e => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, app: a }) }}
                 onClick={() => openInfo(a.package)}
-                title="右键打开菜单，单击查看详情">
-                <td className="apps-label">{a.label || '—'}{a.system && <span className="apps-tag sys">系统</span>}</td>
+                title={t('apps.rowTip')}>
+                <td className="apps-label">{a.label || '—'}{a.system && <span className="apps-tag sys">{t('apps.sysTag')}</span>}</td>
                 <td className="mono">{a.package}</td>
                 <td className="mono">{a.versionName || '—'}</td>
                 <td className="mono num">{a.minSdk || '—'}</td>
                 <td className="mono num">{a.targetSdk || '—'}</td>
                 <td className="mono num">{fmtSize(storageOf(a))}</td>
-                <td>{a.disabled ? <span className="apps-tag off">已禁用</span> : <span className="apps-tag en">已启用</span>}</td>
+                <td>{a.disabled ? <span className="apps-tag off">{t('apps.disabled')}</span> : <span className="apps-tag en">{t('apps.enabled')}</span>}</td>
               </tr>
             ))}
-            {!filtered.length && !loading && <tr><td colSpan={7} className="hint apps-empty">无匹配应用</td></tr>}
+            {!filtered.length && !loading && <tr><td colSpan={7} className="hint apps-empty">{t('apps.noMatch')}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -237,20 +239,20 @@ export default function AppsPanel() {
           <div className="apps-modal" onClick={e => e.stopPropagation()}>
             <h3>{info.label || info.package}</h3>
             <dl>
-              <dt>应用名</dt><dd>{info.label || '—'}</dd>
-              <dt>包名</dt><dd className="mono">{info.package}</dd>
-              <dt>版本</dt><dd>{info.versionName || '—'}{info.versionCode ? <span className="hint">（{info.versionCode}）</span> : null}</dd>
-              <dt>类型</dt><dd>{info.system ? '系统应用' : '第三方应用'}</dd>
-              <dt>状态</dt><dd>{info.enabled ? '已启用' : '已禁用'}</dd>
-              <dt>最小 SDK</dt><dd>{info.minSdk || '—'}</dd>
-              <dt>目标 SDK</dt><dd>{info.targetSdk || '—'}</dd>
-              <dt>首次安装</dt><dd>{info.firstInstall || '—'}</dd>
-              <dt>最后更新</dt><dd>{info.lastUpdate || info.firstInstall || '—'}</dd>
-              <dt>APK 路径</dt><dd className="mono">{info.apkPath || '—'}</dd>
+              <dt>{t('apps.dName')}</dt><dd>{info.label || '—'}</dd>
+              <dt>{t('apps.dPackage')}</dt><dd className="mono">{info.package}</dd>
+              <dt>{t('common.version')}</dt><dd>{info.versionName || '—'}{info.versionCode ? <span className="hint">（{info.versionCode}）</span> : null}</dd>
+              <dt>{t('apps.dType')}</dt><dd>{info.system ? t('apps.dSys') : t('apps.dUser')}</dd>
+              <dt>{t('common.status')}</dt><dd>{info.enabled ? t('apps.enabled') : t('apps.disabled')}</dd>
+              <dt>{t('apps.dMinSdk')}</dt><dd>{info.minSdk || '—'}</dd>
+              <dt>{t('apps.dTargetSdk')}</dt><dd>{info.targetSdk || '—'}</dd>
+              <dt>{t('apps.dFirstInstall')}</dt><dd>{info.firstInstall || '—'}</dd>
+              <dt>{t('apps.dLastUpdate')}</dt><dd>{info.lastUpdate || info.firstInstall || '—'}</dd>
+              <dt>{t('apps.dApkPath')}</dt><dd className="mono">{info.apkPath || '—'}</dd>
             </dl>
             <div className="apps-modal-foot">
-              <button className="btn" onClick={() => { doAction(info.package, 'open'); setInfo(null) }}>启动</button>
-              <button className="btn ghost" onClick={() => setInfo(null)}>关闭</button>
+              <button className="btn" onClick={() => { doAction(info.package, 'open'); setInfo(null) }}>{t('apps.dLaunch')}</button>
+              <button className="btn ghost" onClick={() => setInfo(null)}>{t('common.close')}</button>
             </div>
           </div>
         </div>

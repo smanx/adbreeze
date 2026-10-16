@@ -1,0 +1,599 @@
+// 前端国际化：en（默认）+ zh 双语词典。
+//
+// 设计要点：
+//   - 模块级语言状态 + useSyncExternalStore 订阅：组件用 useT() 拿 t（语言切换自动重渲染），
+//     controller.ts 等非组件代码直接 import { t } 调用即可，永远是当前语言（无闭包过期问题）。
+//   - 每条消息一个 [en, zh] 元组：单一事实源，杜绝两份词典键漂移。
+//   - 插值：t('key', { name: 'x' }) 替换字符串中的 {name}。
+//   - 持久化：localStorage 'ADBreeze-lang'；默认 en（项目默认英文）。
+//   - document.documentElement.lang 同步设置（读屏/浏览器翻译感知）。
+
+import { useSyncExternalStore } from 'react'
+
+export type Lang = 'en' | 'zh'
+
+const LANG_KEY = 'ADBreeze-lang'
+
+const MESSAGES = {
+  // ---------- 应用 ----------
+  'app.title': ['ADBreeze Console', 'ADBreeze 控制台'],
+
+  // ---------- 通用 ----------
+  'common.close': ['Close', '关闭'],
+  'common.cancel': ['Cancel', '取消'],
+  'common.retry': ['Retry', '重试'],
+  'common.refresh': ['Refresh', '刷新'],
+  'common.loading': ['Loading…', '加载中…'],
+  'common.done': ['Done', '完成'],
+  'common.unknown': ['Unknown', '未知'],
+  'common.none': ['None', '无'],
+  'common.error': ['Error', '错误'],
+  'common.networkError': ['Network error', '网络错误'],
+  'common.noOutput': ['(no output)', '(无输出)'],
+  'common.errorPrefix': ['[Error] ', '[错误] '],
+  'common.name': ['Name', '名称'],
+  'common.size': ['Size', '大小'],
+  'common.time': ['Modified', '修改时间'],
+  'common.actions': ['Actions', '操作'],
+  'common.download': ['Download', '下载'],
+  'common.delete': ['Delete', '删除'],
+  'common.rename': ['Rename', '重命名'],
+  'common.status': ['Status', '状态'],
+  'common.version': ['Version', '版本'],
+  'common.open': ['Open', '打开'],
+  'common.run': ['Run', '执行'],
+  'common.export': ['Export', '导出'],
+  'common.clear': ['Clear', '清空'],
+  'common.apply': ['Apply', '应用'],
+  'common.settings': ['Settings', '设置'],
+  'common.default': ['default', '默认'],
+  'common.defaultParens': ['(default)', '（默认）'],
+  'common.device': ['Device', '设备'],
+
+  // ---------- 顶栏 / 外壳 ----------
+  'topbar.devices': ['Devices', '设备'],
+  'topbar.noDevice': ['No device selected', '未选择设备'],
+  'topbar.logout': ['Log out', '退出'],
+  'topbar.serviceOnline': ['Service online', '服务在线'],
+  'topbar.reconnecting': ['Reconnecting', '重连中'],
+  'topbar.github': ['GitHub repository', 'GitHub 仓库'],
+  'topbar.langTip': ['Switch language', '切换语言'],
+  'topbar.langBtn': ['中文', 'EN'],
+  'shell.logoutConfirm': ['Logging out ends the current session (credentials remembered by the browser stay valid until the tab is closed). Continue?',
+    '退出将结束当前会话（浏览器记住的登录凭证需关闭标签页后才会失效），确定？'],
+  'shell.signedOut': ['Signed out', '已退出'],
+  'shell.signedOutHint': ['The session has ended. Close this tab to fully clear the credentials saved by the browser.',
+    '会话已结束。关闭此标签页即可彻底清除浏览器保存的登录凭证。'],
+  'shell.loginAgain': ['Log in again', '重新登录'],
+
+  // ---------- 后端横幅 ----------
+  'banner.unreachable': ['Cannot reach backend ({host}): check the network, or configure the backend address manually in “Settings”',
+    '无法连接后端（{host}）：请检查网络是否连通，或在「设置」中手动配置后端地址'],
+  'banner.auth': ['Backend rejected the current credentials: cross-origin access does not trigger the browser login prompt — verify the backend address, username and password in “Settings”',
+    '后端拒绝了当前账号密码：跨源访问时浏览器不会弹出登录框，请在「设置」中核对后端地址、账号与密码'],
+  'banner.configure': ['Configure', '去配置'],
+
+  // ---------- 面板通用 ----------
+  'panel.selectDevice': ['Please select a device from the device list first', '请先在设备列表中选择设备'],
+  'panel.selectDevice.': ['Please select a device from the device list first.', '请先在设备列表中选择设备。'],
+  'panel.selectDeviceShort': ['Please select a device', '请先选择设备'],
+  'placeholder.phase': ['This panel will be implemented in {phase}; it is currently a layout placeholder.',
+    '该面板将在 {phase} 实现，当前为布局占位。'],
+  'placeholder.laterPhase': ['a later phase', '后续阶段'],
+  'placeholder.currentDevice': ['Current device: ', '当前设备：'],
+
+  // ---------- Tab 标签 ----------
+  'tab.overview': ['Overview', '概览'],
+  'tab.mirror': ['Mirror', '投屏'],
+  'tab.files': ['Files', '文件'],
+  'tab.apps': ['Apps', '应用'],
+  'tab.process': ['Processes', '进程'],
+  'tab.perf': ['Performance', '性能'],
+  'tab.layout': ['Layout', '布局'],
+  'tab.logcat': ['Logcat', '日志'],
+  'tab.term': ['Terminal', '终端'],
+  'tab.tools': ['Tools', '工具'],
+  'tab.settings': ['Settings', '设置'],
+
+  // ---------- 设备列表 ----------
+  'device.empty': ['No devices', '无设备'],
+  'device.wireless': ['Wireless', '无线'],
+  'device.wired': ['Wired', '有线'],
+  'device.wirelessTip': ['Wireless (TCP/IP)', '无线连接（TCP/IP）'],
+  'device.wiredTip': ['Wired (USB)', '有线连接（USB）'],
+  'device.disconnected': ['Disconnected', '已断开'],
+  'device.reconnecting': ['Reconnecting…', '重连中…'],
+  'device.reconnect': ['Reconnect', '重连'],
+  'device.remove': ['Remove', '移除'],
+  'device.disconnect': ['Disconnect', '断开'],
+  'device.connecting': ['Connecting…', '连接中…'],
+  'device.connect': ['Connect device', '连接设备'],
+
+  // ---------- 设置：ADB 路径 ----------
+  'settings.title': ['Settings', '设置'],
+  'settings.adbReadFailed': ['Failed to read ADB settings: ', '读取 ADB 设置失败: '],
+  'settings.adbPath': ['ADB path', 'ADB 路径'],
+  'settings.adbHint': ['The adb executable is only used to start / restart the adb server. After switching, the server is restarted once with the new path. Leave empty to use the default (looked up in PATH).',
+    '后端只在「拉起 / 重启 adb server」时用到 adb 可执行文件；切换后会立即用新路径重启一次 server 使其生效。可留空使用默认（从 PATH 查找）。'],
+  'settings.adbNotFound': ['adb not found in PATH; please enter the full path', '未在 PATH 中找到 adb，请填写完整路径'],
+  'settings.adbDefaultPrefix': ['Leave empty for default: ', '留空使用默认：'],
+  'settings.switching': ['Switching…', '切换中…'],
+  'settings.testing': ['Testing…', '测试中…'],
+  'settings.saveSwitch': ['Save & switch', '保存并切换'],
+  'settings.usePathTitle': ['Back to PATH lookup', '改回从 PATH 查找'],
+  'settings.resetDefault': ['Reset to default', '恢复默认'],
+  'settings.active': ['Active: ', '当前生效：'],
+  'settings.saved': [' · Saved: ', '　存档：'],
+  'settings.noPersistence': ['(persistence disabled)', '（未启用持久化）'],
+  'settings.defaultWith': ['Default ({x})', '默认（{x}）'],
+  'settings.notInPath': ['adb not found in PATH', 'PATH 中未找到 adb'],
+  'settings.authHint': ['Login uses the browser built-in Basic Auth (username/password are set when the service starts and cached by the browser per site). Changing the password requires restarting the service with -password; switching accounts or logging out completely requires closing the tab / clearing the browser site data. Mirroring quality/audio settings are saved per device in the mirror panel.',
+    '登录使用浏览器自带的 Basic Auth（账号密码由服务启动时配置，浏览器按站点缓存）。修改密码需重启服务并指定 -password；切换账号或彻底退出需关闭标签页 / 清除浏览器站点数据。投屏画质/声音等设置在投屏面板内按设备单独保存。'],
+
+  // ---------- 设置：后端地址 ----------
+  'settings.backend': ['Backend address', '后端地址'],
+  'settings.backendHint': ['By default the frontend talks to the same origin ({host}), with the browser attaching login credentials automatically. When the frontend is hosted elsewhere (static Pages, reverse proxy, etc.), enter the backend address (e.g. http://192.168.1.5:9080) and save — all requests and the mirror stream then go to that backend. Note: an HTTPS page cannot reach an HTTP backend (browser mixed-content blocking); in that case use the backend HTTPS address (this service also listens on :9443 by default — trust its certificate in the browser first). For cross-origin setups the username/password are stored only in this browser\'s localStorage and used to build the Authorization header.',
+    '默认与页面同源（当前 {host}），由浏览器自动携带登录凭证。前端托管在别的地址时（静态 Pages、反代等），填写后端地址（如 http://192.168.1.5:9080）并保存，之后所有请求与投屏流都打到该后端。注意：HTTPS 页面无法访问 HTTP 后端（浏览器混合内容拦截），此时应填后端的 HTTPS 地址（本服务默认同时监听 :9443，需先在浏览器信任其证书）。跨源时账号密码仅保存在本浏览器 localStorage，用于拼装 Authorization 头。'],
+  'settings.sameOriginEmpty': ['Empty = same origin as the page ({host})', '留空 = 与页面同源（{host}）'],
+  'settings.userPlaceholder': ['Username (required for cross-origin)', '账号（跨源必填）'],
+  'settings.testConnection': ['Test connection', '测试连接'],
+  'settings.saveReconnect': ['Save & reconnect', '保存并重连'],
+  'settings.backSameOrigin': ['Back to same-origin', '恢复同源'],
+  'settings.backSameOriginTip': ['Switch back to same-origin access', '改回与页面同源'],
+  'settings.connected': ['Connected', '连接成功'],
+  'settings.backendOf': ['(backend {v})', '（后端 {v}）'],
+  'settings.connectFailed': ['Connection failed: ', '连接失败：'],
+  'settings.unknownError': ['unknown error', '未知错误'],
+  'settings.badAddress': ['Invalid address: must start with http:// or https://', '地址格式不正确：需以 http:// 或 https:// 开头'],
+  'settings.crossOriginNeedUser': ['Cross-origin access requires a username and password (the browser will not show a login prompt)', '跨源访问需填写账号密码（浏览器不会弹出登录框）'],
+  'settings.preSaveFailed': ['Pre-save connection test failed', '保存前连接测试失败'],
+  'settings.savedReconnecting': ['Saved, reconnecting…', '已保存，正在重连…'],
+  'settings.activeSameOrigin': ['same origin ({host})', '同源（{host}）'],
+
+  // ---------- 设置：HTTPS 证书 ----------
+  'settings.tlsReadFailed': ['Failed to read certificate status: ', '读取证书状态失败: '],
+  'settings.downloadFailed': ['Download failed: ', '下载失败: '],
+  'settings.tls': ['HTTPS certificate', 'HTTPS 证书'],
+  'settings.tlsOff': ['HTTPS is disabled (startup flag -https=false). Once enabled the browser treats this site as a secure context (WebCodecs hardware decoding available); follow the guide on this page to install the CA certificate once and the “not trusted” warning disappears.',
+    'HTTPS 未开启（启动参数 -https=false）。开启后浏览器才会把本站视为安全上下文（WebCodecs 硬解可用），届时按本页指引安装一次 CA 证书即可消除「不受信任」提示。'],
+  'settings.tlsCustom': ['A custom certificate is in use (-tls-cert / -tls-key). Make sure it is issued by a trusted CA; if it is self-signed, import the matching root certificate on the client (same flow as the self-signed CA below, with your root certificate file).',
+    '正在使用自备证书（-tls-cert / -tls-key）。请确保证书由受信任的 CA 签发；若是自签证书，需在客户端导入对应的根证书（与下方自签 CA 流程相同，只是文件换成你的根证书）。'],
+  'settings.tlsIntro': ['The browser warns “this page is not trusted” because this service uses a self-signed certificate (LAN IPs cannot get a publicly trusted certificate). Installing the CA certificate below into the system trust store removes the warning completely — works on PC, Android and iOS; install once and it stays valid across network/IP changes and restarts (the CA never changes; leaf certificates are re-issued per network adapter).',
+    '浏览器提示「这个页面不受信任」，是因为本服务使用自签证书（局域网 IP 申请不到受信任证书）。把下面的 CA 证书安装进系统信任库即可彻底消除提示——PC、安卓、iOS 都适用；安装一次长期有效，之后换网络、换 IP、重启服务都不用再装（CA 不变，叶证书自动按当前网卡重签）。'],
+  'settings.downloadCa': ['Download CA certificate (.crt)', '下载 CA 证书（.crt）'],
+  'settings.downloadMobileconfig': ['Download iOS profile (.mobileconfig)', '下载 iOS 描述文件（.mobileconfig）'],
+  'settings.iosOnly': ['iOS / iPadOS only', 'iOS / iPadOS 专用'],
+  'settings.caFingerprint': ['CA fingerprint (SHA-256, to verify which certificate is installed): ', 'CA 指纹（SHA-256，可核对安装的是哪张）：'],
+  'settings.fingerprintUnknown': ['(unknown)', '（未知）'],
+  'settings.certHosts': ['Certificate covers hostnames: ', '证书覆盖主机名：'],
+  'settings.certIps': ['; IPs: ', '；IP：'],
+  'settings.certNone': ['(none)', '（无）'],
+  'settings.hostNotCovered': ['The current address “{host}” is not covered by the certificate — installing the CA will still show a name mismatch. Please use one of the addresses listed above, or add -tls-hosts/-tls-ips and restart.',
+    '当前访问地址「{host}」不在证书覆盖范围内——装 CA 也会提示名称不符，请改用上面列出的地址访问，或在启动参数加 -tls-hosts/-tls-ips 追加后重启。'],
+  'settings.installHelp': ['Installation per platform', '各平台安装方法'],
+  'settings.installWin': ['Windows: double-click the .crt → Install certificate → Current User → Trusted Root Certification Authorities. Or in Chrome go to chrome://settings/certificates → Authorities → Import.',
+    'Windows：双击 .crt → 安装证书 → 当前用户 → 受信任的根证书颁发机构。或 Chrome 进 chrome://settings/certificates → 权威机构 → 导入。'],
+  'settings.installMac': ['macOS: double-click the .crt → add to the “System” keychain → right-click the certificate in Keychain Access → Get Info → “Always Trust”.',
+    'macOS：双击 .crt → 添加到「系统」钥匙串 → 在钥匙串访问中右键该证书 → 显示简介 → 「始终信任」。'],
+  'settings.installLinux': ['Linux: Chrome → chrome://settings/certificates → Authorities → Import; or place it in /usr/local/share/ca-certificates and run update-ca-certificates.',
+    'Linux：Chrome 进 chrome://settings/certificates → 权威机构 → 导入；或放入 /usr/local/share/ca-certificates 后执行 update-ca-certificates。'],
+  'settings.installAndroid': ['Android: Settings → Security → Encryption & credentials → Install a certificate → CA certificate → select the downloaded .crt (requires a screen-lock PIN). Chrome trusts user CAs; other apps follow the Android 7+ policy and do not trust user CAs by default.',
+    '安卓：设置 → 安全 → 加密与凭据 → 安装证书 → CA 证书 → 选择下载的 .crt（需锁屏 PIN）。Chrome 信任用户 CA；其他 App 按安卓 7+ 策略默认不信任用户 CA。'],
+  'settings.installIos': ['iOS / iPadOS: download the .mobileconfig → Settings → General → VPN & Device Management → Install; then you must go to Settings → General → About → Certificate Trust Settings → enable full trust for “ADBreeze Local CA” (without this step the browser still warns).',
+    'iOS / iPadOS：下载 .mobileconfig → 设置 → 通用 → VPN与设备管理 → 安装；然后必须到 设置 → 通用 → 关于本机 → 证书信任设置 → 打开「ADBreeze Local CA」的完全信任（少这一步浏览器仍会告警）。'],
+
+  // ---------- 概览 ----------
+  'overview.title': ['Overview', '概览'],
+  'overview.withSerial': ['Overview ({serial})', '概览（{serial}）'],
+  'overview.copied': ['Copied “{label}”', '已复制「{label}」'],
+  'overview.deviceName': ['Device name', '设备名称'],
+  'overview.brand': ['Brand', '品牌'],
+  'overview.model': ['Model', '型号'],
+  'overview.serial': ['Serial number', '序列号'],
+  'overview.android': ['Android version', 'Android 版本'],
+  'overview.apiSuffix': [' (API {sdk})', '（API {sdk}）'],
+  'overview.kernel': ['Kernel version', '内核版本'],
+  'overview.soc': ['SoC', '处理器'],
+  'overview.coresSuffix': [' ({cores} cores, {abi})', '（{cores} 核，{abi}）'],
+  'overview.build': ['Build', '构建版本'],
+  'overview.fontScale': ['Font scale', '字体缩放'],
+  'overview.memory': ['Memory', '内存'],
+  'overview.storage': ['Storage', '存储'],
+  'overview.physSize': ['Physical resolution', '物理分辨率'],
+  'overview.overSize': ['Display resolution', '显示分辨率'],
+  'overview.notOverridden': ['Not overridden', '未覆盖'],
+  'overview.dpiSuffix': [' ({dpi} dpi)', '（{dpi} dpi）'],
+  'overview.wifi': ['Wi-Fi', 'Wi-Fi'],
+  'overview.ip': ['IP address', 'IP 地址'],
+  'overview.mac': ['MAC address', 'MAC 地址'],
+  'overview.cpuTemp': ['CPU temperature', 'CPU 温度'],
+  'overview.battLevel': ['Battery level', '电池电量'],
+  'overview.battStatus': ['Battery status', '电池状态'],
+  'overview.battTemp': ['Battery temperature', '电池温度'],
+  'overview.battVolt': ['Battery voltage', '电池电压'],
+  'overview.battType': ['Battery type', '电池类型'],
+  'overview.powerSource': ['Power source', '充电方式'],
+  'overview.battCharging': ['Charging', '充电中'],
+  'overview.battDischarging': ['Discharging', '放电中'],
+  'overview.battNotCharging': ['Not charging', '未充电'],
+  'overview.battFull': ['Full', '已充满'],
+  'overview.ac': ['AC', '交流电源'],
+  'overview.wireless': ['Wireless', '无线'],
+  'overview.copyTip': ['Click to copy: {value}', '点击复制：{value}'],
+
+  // ---------- 投屏 ----------
+  'mirror.title': ['Mirror', '投屏'],
+  'mirror.planCodecs': ['WebCodecs', 'WebCodecs'],
+  'mirror.planWasm': ['WASM soft decode', 'WASM 软解'],
+  'mirror.planWebrtc': ['WebRTC', 'WebRTC'],
+  'mirror.planTip': ['Scheme: {plan} (decode {dec} / render {ren})', '方案：{plan}（解码 {dec} / 渲染 {ren}）'],
+  'mirror.render2d': [' · 2D', ' · 2D'],
+  'mirror.op.back': ['Back', '返回'],
+  'mirror.op.home': ['Home', '主页'],
+  'mirror.op.menu': ['Menu', '菜单'],
+  'mirror.op.notify': ['Notifications', '通知'],
+  'mirror.op.power': ['Power', '电源'],
+  'mirror.notSupported': ['Not supported', '不支持'],
+  'mirror.clipEmpty': ['Clipboard is empty', '剪贴板为空'],
+  'mirror.clipCopied': ['Copied to this machine: ', '已复制到本机: '],
+  'mirror.clipDevice': ['Device clipboard: ', '设备剪贴板: '],
+  'mirror.clipFailed': ['Clipboard operation failed: ', '剪贴板操作失败: '],
+  'mirror.clipPrompt': ['Text to write to the device clipboard:', '输入要写入设备剪贴板的文本：'],
+  'mirror.clipWritten': ['Written to the device clipboard and pasted', '已写入设备剪贴板并粘贴'],
+  'mirror.latencyTotal': ['Measurable total', '可检测合计'],
+  'mirror.rotateTip': ['Rotate view (web view only) · currently {deg}°', '旋转画面（只转网页画面）· 当前 {deg}°'],
+  'mirror.clipGetTip': ['Get clipboard (device → local)', '取剪贴板（设备 → 本机）'],
+  'mirror.clipPasteTip': ['Paste to device (local → device)', '粘贴到设备（本机 → 设备）'],
+  'mirror.unmute': ['Unmute', '取消静音'],
+  'mirror.mute': ['Mute', '静音'],
+  'mirror.fsUnsupported': ['Fullscreen (not supported by this browser)', '全屏显示（当前浏览器不支持）'],
+  'mirror.fsExit': ['Exit fullscreen', '退出全屏'],
+  'mirror.fsEnter': ['Fullscreen', '全屏显示'],
+  'mirror.maxExit': ['Exit maximize', '退出最大化'],
+  'mirror.maxEnter': ['Maximize window (hide the app shell, fill the browser window)', '最大化窗口（隐藏页面外壳，画面占满浏览器窗口）'],
+  'mirror.stop': ['Stop', '停止'],
+  'mirror.start': ['Start mirroring', '开始投屏'],
+  'mirror.scheme': ['Mirroring scheme', '投屏方案'],
+  'mirror.optAuto': ['Auto', '自动'],
+  'mirror.needHttps': ['Requires HTTPS or localhost access', '需 HTTPS 或 localhost 访问'],
+  'mirror.noCodecs': ['WebCodecs not supported by this browser', '当前浏览器不支持 WebCodecs'],
+  'mirror.noWebrtc': ['WebRTC not supported by this browser', '当前浏览器不支持 WebRTC'],
+  'mirror.noWasm': ['WebAssembly not supported by this browser', '当前浏览器不支持 WebAssembly'],
+  'mirror.audio': ['Device audio', '手机声音'],
+  'mirror.audioBoth': ['🔊🔊 Both play sound (default)', '🔊🔊 两边都出声（默认）'],
+  'mirror.audioMute': ['🔇 Mute (captured by the web page)', '🔇 静音（采集到网页）'],
+  'mirror.audioDevice': ['🔊 Sound on (device speaker)', '🔊 出声（设备扬声器）'],
+  'mirror.bitrate': ['Bitrate', '码率'],
+  'mirror.shortSize': ['Resolution (short side)', '分辨率（短边）'],
+  'mirror.fps': ['Frame rate', '帧率'],
+  'mirror.restartHint': ['Changing encoder parameters restarts the stream (~1s)', '改编码器参数需重启流，约 1 秒'],
+  'mirror.acquiring': ['Acquiring picture…', '正在获取画面…'],
+  'mirror.failed': ['Failed to acquire picture', '画面获取失败'],
+  'mirror.overlayLoading': ['Waiting for the first video keyframe… (encoder GOP is ~2s; on some devices with a static screen it may take longer)',
+    '正在等待画面关键帧…（编码器 GOP 约 2 秒，静止画面下个别机型可能更久）'],
+  'mirror.failWebrtcTimeout': ['Failed to acquire picture: WebRTC first-frame timeout (the device encoder may not be pushing, or ICE failed). Retry or switch to the WebCodecs scheme',
+    '画面获取失败：WebRTC 等待首帧超时（设备编码器可能未推流或 ICE 连接失败），可重试或改用 WebCodecs 方案'],
+  'mirror.failTimeout': ['Failed to acquire picture: first-frame timeout (the device may be offline, screen off, or the encoder unresponsive)',
+    '画面获取失败：等待首帧超时（设备可能离线、熄屏或编码器未响应）'],
+  'mirror.failGpuLost': ['Failed to acquire picture: GPU context lost and unrecoverable — refresh the page and retry',
+    '画面获取失败：GPU 上下文丢失且无法恢复，请刷新页面后重试'],
+  'mirror.failWasmProfile': ['Failed to acquire picture: {codec} exceeds the software decoder capability (Baseline profile only). Please choose {alts}, or set “Mirroring scheme” to “Auto” and let it pick automatically',
+    '画面获取失败：{codec}超出软解码器能力（仅支持 Baseline profile）。请改选{alts}，或把「投屏方案」设为「自动」交给它自动选择'],
+  'mirror.currentStream': ['Current stream', '当前码流'],
+  'mirror.deviceStream': ['Device output {profile} stream', '设备输出的 {profile} 码流'],
+  'mirror.altCodecs': ['“WebCodecs hardware decode”', '「WebCodecs 硬解」'],
+  'mirror.altJoin': [' or ', ' 或 '],
+  'mirror.altOthers': ['other available options', '其他可用方案'],
+  'mirror.failPrefix': ['Failed to acquire picture: ', '画面获取失败：'],
+  'mirror.streamClosedEarly': ['stream closed before establishment', '投屏流未建立即断开'],
+  'mirror.streamEnded': ['Mirror stream ended', '投屏流已结束'],
+  'mirror.failWebrtcCtrlClosed': ['WebRTC control channel disconnected', 'WebRTC 控制通道断开'],
+  'mirror.failWebrtcIce': ['Failed to acquire picture: WebRTC connection failed (ICE cannot connect — check network/firewall). Retry or switch to the WebCodecs scheme',
+    '画面获取失败：WebRTC 连接失败（ICE 无法连通，检查网络/防火墙），可重试或改用 WebCodecs 方案'],
+  'mirror.webrtcDisconnected': ['WebRTC connection disconnected', 'WebRTC 连接断开'],
+  'mirror.othersWatching': ['Other pages are still watching this device; only this page was disconnected (the device-side stream keeps running)',
+    '其他页面仍在观看该设备，已仅断开本页（设备端投屏流保持运行）'],
+  'mirror.fallbackWebrtc': ['WebCodecs is not supported by this browser (insecure HTTP context or version too old); automatically switched to WebRTC mirroring',
+    '当前浏览器不支持 WebCodecs（HTTP 非安全上下文或版本过旧），已自动改用 WebRTC 投屏'],
+  'mirror.fallbackWasm': ['WebCodecs is not supported by this browser; automatically switched to WASM software decoding',
+    '当前浏览器不支持 WebCodecs，已自动改用 WASM 软解投屏'],
+  'mirror.fallbackCodecs': ['WebRTC is not supported by this browser; automatically switched to WebCodecs mirroring',
+    '当前浏览器不支持 WebRTC，已自动改用 WebCodecs 投屏'],
+  'mirror.fallbackWasm2': ['WebRTC is not supported by this browser; switched to WASM software decoding',
+    '当前浏览器不支持 WebRTC，已改用 WASM 软解投屏'],
+  'mirror.fallbackNoWasm': ['WebAssembly is not supported by this browser; switched to {plan} mirroring',
+    '当前浏览器不支持 WebAssembly，已改用{plan}投屏'],
+  'mirror.noSupportAtAll': ['This browser supports none of WebCodecs, WebRTC and WebAssembly, so mirroring is unavailable. Please use Chrome / Edge 94+ or a recent Safari{httpNote}',
+    '当前浏览器不支持 WebCodecs、WebRTC 与 WebAssembly，无法投屏。请使用 Chrome / Edge 94+ 或较新的 Safari{httpNote}'],
+  'mirror.insecureHttpNote': ['\n(currently over insecure HTTP: WebCodecs is disabled by the browser — use WebRTC / WASM soft decode, access via localhost, or configure an HTTPS reverse proxy for the service)',
+    '\n（当前为 HTTP 非安全上下文访问：WebCodecs 被浏览器禁用，可改用 WebRTC / WASM 软解，或用 localhost 访问、为服务配置 HTTPS 反向代理）'],
+  'mirror.connecting': ['{serial} — connecting…', '{serial} — 连接中…'],
+  'mirror.failStart': ['Failed to acquire picture: failed to start mirroring {msg}', '画面获取失败：启动投屏失败 {msg}'],
+  'mirror.failSwitch': ['Failed to acquire picture: failed to switch mirroring scheme {msg}', '画面获取失败：切换投屏方案失败 {msg}'],
+  'mirror.applying': ['Applying new parameters…', '正在应用新参数…'],
+  'mirror.failRestart': ['Failed to acquire picture: failed to restart the mirror stream {msg}', '画面获取失败：重启投屏流失败 {msg}'],
+  'mirror.audioUnavailable': ['Device audio unavailable (audio_dup requires Android 13+); continuing with video only',
+    '设备端音频不可用（audio_dup 需 Android 13+），已按仅视频继续'],
+  'mirror.audioHeaderFail': ['Failed to parse audio header', '音频头解析失败'],
+  'mirror.audioDecodeErr': ['Audio decode error: ', '音频解码错误: '],
+  'mirror.noWasmAudio': ['WebAssembly not supported by the browser; audio unavailable', '浏览器不支持 WebAssembly，音频不可用'],
+  'mirror.audioWasmLoadFail': ['Failed to load the WASM audio decoder; continuing with video only', '音频软解模块加载失败（WASM），已按仅视频继续'],
+  'mirror.autoplayBlocked': ['Autoplay blocked by the browser — click the picture to restore audio', '浏览器限制了自动播放——点击画面即可恢复声音'],
+  'mirror.audioInitFail': ['Audio playback initialization failed: ', '音频播放初始化失败: '],
+  'mirror.titleWithSize': ['{device} ({w}×{h})', '{device}（{w}×{h}）'],
+
+  // ---------- 链路延迟 ----------
+  'stats.drop': ['Dropped {n}', '丢帧 {n}'],
+  'stats.backlog': ['Backlog {n}', '积压 {n}'],
+  'lat.stage.capture': ['① Screen composition/capture (device)', '① 设备屏幕合成/采集'],
+  'lat.stage.encode': ['② H.264 encoding (device)', '② 设备 H.264 编码'],
+  'lat.stage.pack': ['③ scrcpy packaging (device)', '③ 设备端 scrcpy 打包'],
+  'lat.stage.adb': ['④ adb tunnel (device→host)', '④ adb 隧道（设备→主机）'],
+  'lat.stage.fanout': ['⑤ Backend fan-out', '⑤ 后端扇出'],
+  'lat.stage.net': ['⑥ Network + dispatch', '⑥ 网络+派发'],
+  'lat.stage.decode': ['⑦ Decoding (incl. queue)', '⑦ 解码（含排队）'],
+  'lat.stage.submit': ['⑧ Submit to screen', '⑧ 上屏提交'],
+  'lat.stage.composite': ['⑧ Composition wait', '⑧ 合成等待'],
+  'lat.unmeasurable': ['N/A', '无法计算'],
+  'lat.clockUncalibrated': ['Clock not calibrated', '时钟未校准'],
+  'lat.clockError': ['Clock calibration error ±{n}ms', '时钟校准误差 ±{n}ms'],
+  'lat.fused': ['⑦+⑧ Decoding + submit (fused, sync)', '⑦+⑧ 解码+上屏（同步融合）'],
+  'lat.title': ['Link latency (backend read → screen, {calib})', '链路延迟（后端读取→屏幕，{calib}）'],
+  'lat.noteDevice': ['①–④ are on the device side: no timestamp output / PTS clock differs from wall clock — not measurable',
+    '①~④ 位于设备侧：无时间戳出口 / PTS 时钟与墙钟不同源，无法测算'],
+  'lat.mergedJitter': ['Merged into jitter buffer', '合并在抖动缓冲'],
+  'lat.approxZero': ['≈0 (within rAF)', '≈0（rAF 内）'],
+  'lat.jitterBuffer': ['Jitter buffer (④–⑦)', '抖动缓冲（④~⑦）'],
+  'lat.networkJitter': ['Network jitter', '网络抖动'],
+  'lat.titleRtp': ['Link latency (RTP has no per-frame timestamps)', '链路延迟（RTP 无逐帧打戳）'],
+  'lat.noteRtp': ['①–③ are on the device side and not measurable; RTP has no per-frame timestamps, so ④–⑦ can only be reported merged as the jitter buffer',
+    '①~③ 位于设备侧无法测算；RTP 无逐帧打戳，④~⑦ 只能合并报抖动缓冲'],
+
+  // ---------- 解码器 ----------
+  'dec.dispatchFailed': ['Decode dispatch failed: ', '解码投递失败: '],
+  'dec.error': ['Decode error {msg}', '解码错误 {msg}'],
+  'soft.loadFailed': ['Failed to load the software decoder: ', '软解码模块加载失败: '],
+  'soft.tooWeak': ['Current stream exceeds the software decoder capability (Baseline profile / Level≤4 only)', '当前码流超出软解码器能力（仅支持 Baseline profile / Level≤4）'],
+  'soft.failed': ['Software decode failed (code={code}); waiting for the next keyframe', '软解码失败（code={code}），等待下一个关键帧'],
+  'soft.error': ['Software decode error: ', '软解码异常: '],
+
+  // ---------- 文件 ----------
+  'files.title': ['Files', '文件'],
+  'files.up': ['↑ Up', '↑ 上级'],
+  'files.newDir': ['New directory', '新建目录'],
+  'files.uploadFiles': ['Upload files', '上传文件'],
+  'files.uploadDir': ['Upload folder', '上传文件夹'],
+  'files.filterPh': ['Filter files/folders (fuzzy match)', '过滤文件/文件夹（模糊匹配）'],
+  'files.count': ['{n} items', '{n} 项'],
+  'files.countOf': ['{f} / {t} items', '{f} / {t} 项'],
+  'files.dragHint': ['Drag & drop files / folders here to upload', '支持拖拽文件 / 文件夹到列表上传'],
+  'files.selected': ['{n} selected', '已选 {n} 项'],
+  'files.dirFileCount': ['{d} directories · {f} files', '{d} 个目录 · {f} 个文件'],
+  'files.selectAll': ['Select all', '全选'],
+  'files.invert': ['Invert', '反选'],
+  'files.clearSel': ['Clear selection', '取消选择'],
+  'files.downloadN': ['Download ({n})', '下载（{n}）'],
+  'files.deleting': ['Deleting…', '删除中…'],
+  'files.deleteN': ['Delete ({n})', '删除（{n}）'],
+  'files.transfers': ['Transfers', '传输'],
+  'files.inProgress': ['({n} in progress)', '（{n} 个进行中）'],
+  'files.completed': ['(completed)', '（已完成）'],
+  'files.xferDone': ['Done', '完成'],
+  'files.selectAllTip': ['Select all / none', '全选/全不选'],
+  'files.noMatch': ['No matches', '无匹配项'],
+  'files.emptyDir': ['Empty directory', '空目录'],
+  'files.downloadZip': ['Download ZIP', '下载zip'],
+  'files.dir': ['directory', '目录'],
+  'files.file': ['file', '文件'],
+  'files.folder': ['folder', '文件夹'],
+  'files.confirmDelete': ['Delete {type} {name}?{warn}', '删除 {type} {name}？{warn}'],
+  'files.confirmDeleteDirWarn': [' (all contents will be deleted)', '（目录内容将一并删除）'],
+  'files.confirmBatchDelete': ['Delete {n} selected items ({d} directories, {f} files)? All contents will be deleted and cannot be recovered!',
+    '删除选中的 {n} 项（{d} 个目录、{f} 个文件）？目录内容将一并删除，不可恢复！'],
+  'files.batchFailed': ['{n} items failed to delete', '{n} 项删除失败'],
+  'files.newDirPrompt': ['New directory name:', '新目录名称：'],
+  'files.renamePrompt': ['Rename ({type}):', '重命名（{type}）：'],
+  'files.badName': ['Name cannot contain / or \\', '名称不能包含 / 或 \\'],
+  'files.downloadFailed': ['Download failed: ', '下载失败: '],
+
+  // ---------- 应用 ----------
+  'apps.title': ['Apps', '应用'],
+  'apps.colName': ['Name', '应用名'],
+  'apps.colPackage': ['Package', '包名'],
+  'apps.colVersion': ['Version', '版本'],
+  'apps.colMinSdk': ['Min SDK', '最小 SDK'],
+  'apps.colTargetSdk': ['Target SDK', '目标 SDK'],
+  'apps.colStorage': ['Storage', '存储占用'],
+  'apps.searchPh': ['Search package / app name', '搜索包名/应用名'],
+  'apps.showSys': ['System apps', '系统应用'],
+  'apps.loadingFirst': ['Loading… (first time takes ~7s)', '加载中…（首次约 7 秒）'],
+  'apps.count': ['{f} / {t} apps', '{f} / {t} 个应用'],
+  'apps.rowTip': ['Right-click for the menu, click for details', '右键打开菜单，单击查看详情'],
+  'apps.sysTag': ['System', '系统'],
+  'apps.disabled': ['Disabled', '已禁用'],
+  'apps.enabled': ['Enabled', '已启用'],
+  'apps.noMatch': ['No matching apps', '无匹配应用'],
+  'apps.menuInfo': ['App info', '应用信息'],
+  'apps.menuExport': ['Export APK', '导出安装包'],
+  'apps.menuOpen': ['Open', '打开'],
+  'apps.menuStop': ['Force stop', '停止'],
+  'apps.menuEnable': ['Enable', '解冻'],
+  'apps.menuDisable': ['Disable', '冻结'],
+  'apps.menuClear': ['Clear data', '清除数据'],
+  'apps.menuUninstall': ['Uninstall', '卸载'],
+  'apps.sysPrefix': ['This is a system app. ', '该应用为系统应用。'],
+  'apps.confirmStop': ['{prefix}Force stop {name}?', '{prefix}确定要停止 {name} 吗？'],
+  'apps.confirmDisable': ['{prefix}Disable {name}?', '{prefix}确定要冻结 {name} 吗？'],
+  'apps.confirmClear': ['{prefix}Clear data of {name}?', '{prefix}确定要清除 {name} 的数据吗？'],
+  'apps.confirmUninstall': ['{prefix}Uninstall {name}?', '{prefix}确定要卸载 {name} 吗？'],
+  'apps.actionFailed': ['{pkg}: operation failed - {msg}', '{pkg}: 操作失败 - {msg}'],
+  'apps.exporting': ['Exporting APK…', '导出 APK…'],
+  'apps.exportSaved': ['{pkg}: APK saved to downloads', '{pkg}: APK 已保存到下载'],
+  'apps.exportFailed': ['{pkg}: export failed - {msg}', '{pkg}: 导出失败 - {msg}'],
+  'apps.dName': ['App name', '应用名'],
+  'apps.dPackage': ['Package', '包名'],
+  'apps.dType': ['Type', '类型'],
+  'apps.dSys': ['System app', '系统应用'],
+  'apps.dUser': ['User app', '第三方应用'],
+  'apps.dMinSdk': ['Min SDK', '最小 SDK'],
+  'apps.dTargetSdk': ['Target SDK', '目标 SDK'],
+  'apps.dFirstInstall': ['First install', '首次安装'],
+  'apps.dLastUpdate': ['Last update', '最后更新'],
+  'apps.dApkPath': ['APK path', 'APK 路径'],
+  'apps.dLaunch': ['Launch', '启动'],
+
+  // ---------- 进程 ----------
+  'process.title': ['Processes', '进程'],
+  'process.colPid': ['PID', 'PID'],
+  'process.colUser': ['User', '用户'],
+  'process.colCpu': ['CPU%', 'CPU%'],
+  'process.colMem': ['Memory', '内存'],
+  'process.colName': ['Process', '进程名'],
+  'process.searchPh': ['Search process / PID / user', '搜索进程/PID/用户'],
+  'process.onlyApp': ['App processes only', '仅应用进程'],
+  'process.sampling': ['Sampling…', '采样中…'],
+  'process.count': ['{f} / {t} processes', '{f} / {t} 个进程'],
+  'process.stop': ['Stop', '停止'],
+  'process.confirmStopApp': ['Force stop process {name} (PID {pid})?\nThis runs am force-stop.', '停止进程 {name}（PID {pid}）？\n将执行 am force-stop。'],
+  'process.confirmKill': ['kill -9 PID {pid} ({name})?\nForce-killing a non-app process may destabilize the system!', 'kill -9 PID {pid}（{name}）？\n非应用进程被强杀可能导致系统不稳定！'],
+  'process.opFailed': ['Operation failed: ', '操作失败: '],
+  'process.noMatch': ['No matching processes', '无匹配进程'],
+
+  // ---------- 性能 ----------
+  'perf.title': ['Performance', '性能'],
+  'perf.pause': ['Pause', '暂停'],
+  'perf.resume': ['Resume', '继续'],
+  'perf.battTip': ['Voltage {v}V · Temp {t}°C', '电压 {v}V · 温度 {t}°C'],
+  'perf.uptime': ['Uptime {u}', 'Uptime {u}'],
+  'perf.memory': ['Memory', '内存'],
+
+  // ---------- 布局 ----------
+  'layout.title': ['Layout', '布局'],
+  'layout.shotFailed': ['Screenshot failed HTTP {code}', '截图失败 HTTP {code}'],
+  'layout.capturing': ['Capturing…', '采集中…'],
+  'layout.refresh': ['Refresh layout', '刷新布局'],
+  'layout.showBorder': ['Show borders', '显示边框'],
+  'layout.nodeCount': ['{n} widgets (rotation {r})', '{n} 个控件（rotation {r}）'],
+  'layout.exportXml': ['Export XML', '导出 XML'],
+  'layout.clickRefresh': ['Click “Refresh layout” to start', '点击「刷新布局」开始'],
+  'layout.tree': ['Hierarchy tree', '层级树'],
+  'layout.noData': ['No data', '无数据'],
+  'layout.attrs': ['Attributes', '属性'],
+  'layout.clickForAttrs': ['Click the screenshot or a tree node to view attributes', '点击截图或树节点查看属性'],
+
+  // ---------- 日志 ----------
+  'logcat.connecting': ['Connecting…', '连接中…'],
+  'logcat.disconnected': ['Disconnected: {reason}', '已断开：{reason}'],
+  'logcat.interruptReason': ['logcat connection interrupted', 'logcat 连接中断'],
+  'logcat.disconnectedOffline': ['Disconnected (device offline?)', '已断开（设备离线？）'],
+  'logcat.minLevel': ['Minimum level', '最低级别'],
+  'logcat.keywordPh': ['Keyword filter', '关键字过滤'],
+  'logcat.tagPh': ['Tag filter', 'Tag 过滤'],
+  'logcat.lines': ['{f}/{t} lines', '{f}/{t} 行'],
+  'logcat.pause': ['Pause', '暂停'],
+  'logcat.resume': ['Resume', '恢复'],
+  'logcat.waiting': ['Waiting for logs…', '等待日志…'],
+  'logcat.notConnected': ['Not connected', '未连接'],
+  'logcat.noDevice': ['No device selected', '未选择设备'],
+  'logcat.toBottom': ['↓ Back to bottom', '↓ 回到底部'],
+
+  // ---------- 终端 ----------
+  'term.open': ['Open terminal', '打开终端'],
+  'term.connected': ['Connected', '已连接'],
+  'term.deviceOf': ['Device: {s}', '设备：{s}'],
+  'term.closed': ['[Terminal closed{reason}]', '[终端已关闭{reason}]'],
+  'term.reasonSuffix': [': {reason}', '：{reason}'],
+  'term.openFailed': ['[Failed to open: {msg}]', '[打开失败: {msg}]'],
+
+  // ---------- 工具 ----------
+  'tools.shell': ['One-off shell{serial}', '一次性 Shell{serial}'],
+  'tools.serialSuffix': [' ({serial})', '（{serial}）'],
+  'tools.shellPh': ['e.g. getprop ro.product.model', '如 getprop ro.product.model'],
+  'tools.batch': ['Batch commands', '批量命令'],
+  'tools.batchPh': ['Command to run on the selected devices in parallel', '对勾选设备并行执行的命令'],
+  'tools.batchNeedSel': ['Select devices and enter a command', '勾选设备并输入命令'],
+  'tools.batchRunning': ['Running on {n} devices in parallel…', '并行执行于 {n} 台设备…'],
+  'tools.batchHeader': ['==== {serial} ====', '==== {serial} ===='],
+  'tools.apk': ['APK install{serial}', 'APK 安装{serial}'],
+  'tools.pickApk': ['Select APK and install', '选择 APK 并安装'],
+  'tools.installing': ['Installing {name}…', '正在安装 {name}…'],
+  'tools.installDone': ['Installed: ', '安装完成：'],
+  'tools.installFailed': ['Install failed: ', '安装失败: '],
+  'tools.capturing': ['Capturing…', '截图…'],
+  'tools.shotFailed': ['Screenshot failed: ', '截图失败: '],
+  'tools.shotClip': ['Screenshot / clipboard{serial}', '截图 / 剪贴板{serial}'],
+  'tools.shotPreview': ['Screenshot preview', '截图预览'],
+  'tools.clipRead': ['Read clipboard', '读取剪贴板'],
+  'tools.clipWrite': ['Write clipboard', '写入剪贴板'],
+  'tools.clipDevice': ['Device clipboard: ', '设备剪贴板: '],
+  'tools.clipEmpty': ['(empty)', '(空)'],
+
+  // ---------- 预览弹窗 ----------
+  'preview.downloadPng': ['Download PNG', '下载 PNG'],
+} as const
+
+export type MsgKey = keyof typeof MESSAGES
+
+// 模块级语言状态：切换时通知订阅者（组件）重渲染
+let lang: Lang = readLang()
+const listeners = new Set<() => void>()
+
+function readLang(): Lang {
+  try {
+    const v = localStorage.getItem(LANG_KEY)
+    if (v === 'zh' || v === 'en') return v
+  } catch { /* 无 localStorage（隐私模式）时用默认 */ }
+  return 'en' // 项目默认英文
+}
+
+function applyLang(l: Lang) {
+  try { localStorage.setItem(LANG_KEY, l) } catch { /* 忽略 */ }
+  document.documentElement.lang = l === 'zh' ? 'zh-CN' : 'en'
+  document.title = t('app.title')
+}
+
+export function getLang(): Lang {
+  return lang
+}
+
+export function setLang(l: Lang) {
+  if (l === lang) return
+  lang = l
+  applyLang(l)
+  listeners.forEach(f => f())
+}
+
+export function toggleLang(): Lang {
+  setLang(lang === 'en' ? 'zh' : 'en')
+  return lang
+}
+
+/** 翻译 + {name} 插值。非组件代码（controller.ts 等）直接用本函数 */
+export function t(key: MsgKey, vars?: Record<string, string | number>): string {
+  const pair = MESSAGES[key]
+  let s: string = pair[lang === 'zh' ? 1 : 0]
+  if (vars) {
+    for (const k of Object.keys(vars)) {
+      s = s.split(`{${k}}`).join(String(vars[k]))
+    }
+  }
+  return s
+}
+
+// React 绑定：订阅语言变化，变化时重渲染
+export function useLang(): Lang {
+  const subscribe = (fn: () => void) => {
+    listeners.add(fn)
+    return () => { listeners.delete(fn) }
+  }
+  return useSyncExternalStore(subscribe, getLang, getLang)
+}
+
+/** 组件里取翻译函数：const t = useT()；语言切换自动重渲染 */
+export function useT(): typeof t {
+  useLang()
+  return t
+}
+
+// 初始同步 <html lang>
+applyLang(lang)

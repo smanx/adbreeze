@@ -14,6 +14,7 @@ import ProcessPanel from '../panels/ProcessPanel'
 import PerfPanel from '../panels/PerfPanel'
 import LayoutPanel from '../panels/LayoutPanel'
 import { Icon } from './Icon'
+import { toggleLang, useT } from '../i18n'
 
 // 应用外壳：
 //   PC（≥880px）：顶栏 + 左侧设备栏 + 主内容（标签页面板）
@@ -30,6 +31,7 @@ export default function Shell() {
   const retryBackend = useStore(s => s.retryBackend)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [loggedOut, setLoggedOut] = useState(false)
+  const t = useT()
 
   // 后端配置变更（backendRevision 自增）时重建事件通道，切到新后端立即生效
   useEffect(() => {
@@ -41,7 +43,7 @@ export default function Shell() {
   // 退出：清除后端会话 cookie 并断开事件通道。
   // Basic 凭证由浏览器按源缓存、无法由脚本清除，故此处仅做降级退出提示。
   const logout = async () => {
-    if (!confirm('退出将结束当前会话（浏览器记住的登录凭证需关闭标签页后才会失效），确定？')) return
+    if (!confirm(t('shell.logoutConfirm'))) return
     clearReconnectTimer()
     await clearSession()
     setLoggedOut(true)
@@ -51,9 +53,9 @@ export default function Shell() {
     return (
       <div className="auth-page">
         <div className="auth-card">
-          <h1>已退出</h1>
-          <p className="auth-sub">会话已结束。关闭此标签页即可彻底清除浏览器保存的登录凭证。</p>
-          <button className="btn primary" onClick={() => location.reload()}>重新登录</button>
+          <h1>{t('shell.signedOut')}</h1>
+          <p className="auth-sub">{t('shell.signedOutHint')}</p>
+          <button className="btn primary" onClick={() => location.reload()}>{t('shell.loginAgain')}</button>
         </div>
       </div>
     )
@@ -65,38 +67,47 @@ export default function Shell() {
         <div className="backend-banner" role="alert">
           <span>
             {backendIssue === 'unreachable'
-              ? `无法连接后端（${backendBase() || location.host}）：请检查网络是否连通，或在「设置」中手动配置后端地址`
-              : '后端拒绝了当前账号密码：跨源访问时浏览器不会弹出登录框，请在「设置」中核对后端地址、账号与密码'}
+              ? t('banner.unreachable', { host: backendBase() || location.host })
+              : t('banner.auth')}
           </span>
           <span className="spacer" />
-          <button className="btn tiny" onClick={() => setPanel('settings')}>去配置</button>
-          <button className="btn tiny ghost" onClick={retryBackend}>重试</button>
+          <button className="btn tiny" onClick={() => setPanel('settings')}>{t('banner.configure')}</button>
+          <button className="btn tiny ghost" onClick={retryBackend}>{t('common.retry')}</button>
         </div>
       )}
       <header className="topbar">
         <button className="icon-btn drawer-toggle" onClick={() => setDrawerOpen(true)}>☰</button>
         <span className="brand">ADBreeze</span>
-        {version && <span className="version-badge">v{version}</span>}
-        <span className={'conn-dot' + (serverConnected ? ' ok' : '')} title={serverConnected ? '服务在线' : '重连中'} />
-        <span className="current-device">{selected || '未选择设备'}</span>
+        {version && <span className="version-badge">{version}</span>}
+        <span className={'conn-dot' + (serverConnected ? ' ok' : '')} title={serverConnected ? t('topbar.serviceOnline') : t('topbar.reconnecting')} />
+        <span className="current-device">{selected || t('topbar.noDevice')}</span>
         <span className="spacer" />
         <nav className="topbar-tabs">
-          {TABS.map(t => (
+          {TABS.map(tab => (
             <button
-              key={t.id}
-              className={'tab has-tip' + (panel === t.id ? ' active' : '')}
-              data-tip={t.label}
-              aria-label={t.label}
-              onClick={() => setPanel(t.id)}
-            ><Icon name={t.id} /></button>
+              key={tab.id}
+              className={'tab has-tip' + (panel === tab.id ? ' active' : '')}
+              data-tip={t(tab.labelKey)}
+              aria-label={t(tab.labelKey)}
+              onClick={() => setPanel(tab.id)}
+            ><Icon name={tab.id} /></button>
           ))}
         </nav>
-        <button className="btn ghost" onClick={logout}>退出</button>
+        <button className="btn tiny ghost lang-btn" onClick={() => toggleLang()} title={t('topbar.langTip')}>{t('topbar.langBtn')}</button>
+        <a
+          className="icon-btn gh-link has-tip"
+          data-tip={t('topbar.github')}
+          href="https://github.com/smanx/adbreeze"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={t('topbar.github')}
+        ><Icon name="github" /></a>
+        <button className="btn ghost" onClick={logout}>{t('topbar.logout')}</button>
       </header>
 
       <div className="app-body">
         <aside className="sidebar">
-          <h3 className="side-title">设备</h3>
+          <h3 className="side-title">{t('topbar.devices')}</h3>
           <DeviceList />
         </aside>
 
@@ -112,8 +123,8 @@ export default function Shell() {
             : panel === 'tools' ? <ToolsPanel />
             : panel === 'logcat' ? <LogcatPanel />
             : panel === 'settings' ? <SettingsPanel />
-            : <Placeholder title={TABS.find(t => t.id === panel)!.label}
-                phase={TABS.find(t => t.id === panel)!.phase || '后续阶段'} selected={selected} />}
+            : <Placeholder title={t(TABS.find(tab => tab.id === panel)!.labelKey)}
+                phase={TABS.find(tab => tab.id === panel)!.phase || t('placeholder.laterPhase')} selected={selected} />}
         </main>
       </div>
 
@@ -121,21 +132,21 @@ export default function Shell() {
         <>
           <div className="drawer-mask" onClick={() => setDrawerOpen(false)} />
           <aside className="drawer">
-            <h3 className="side-title">设备</h3>
+            <h3 className="side-title">{t('topbar.devices')}</h3>
             <DeviceList />
           </aside>
         </>
       )}
 
       <nav className="tabbar">
-        {TABS.map(t => (
+        {TABS.map(tab => (
           <button
-            key={t.id}
-            className={'tab' + (panel === t.id ? ' active' : '')}
-            onClick={() => setPanel(t.id)}
+            key={tab.id}
+            className={'tab' + (panel === tab.id ? ' active' : '')}
+            onClick={() => setPanel(tab.id)}
           >
-            <Icon name={t.id} />
-            <span className="tab-txt">{t.label}</span>
+            <Icon name={tab.id} />
+            <span className="tab-txt">{t(tab.labelKey)}</span>
           </button>
         ))}
       </nav>
@@ -149,6 +160,7 @@ function SettingsPanel() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
+  const t = useT()
 
   const load = async () => {
     try {
@@ -157,9 +169,10 @@ function SettingsPanel() {
       setDraft(r.path)
       setErr('')
     } catch (e) {
-      setErr('读取 ADB 设置失败: ' + (e as Error).message)
+      setErr(t('settings.adbReadFailed') + (e as Error).message)
     }
   }
+
   useEffect(() => { void load() }, [])
 
   // 保存并立即生效：后端会用新路径执行 adb version 验证，再重启 adb server
@@ -171,59 +184,54 @@ function SettingsPanel() {
       await load()
     } catch (e) {
       setErr((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
+    } finally { setBusy(false) }
   }
 
   const usingDefault = !!info && info.path === ''
 
   return (
     <div className="panel settings-panel">
-      <h2>设置</h2>
+      <h2>{t('settings.title')}</h2>
 
       <BackendSettings />
 
       <TlsSettings />
 
       <div className="settings-block">
-        <h3>ADB 路径</h3>
+        <h3>{t('settings.adbPath')}</h3>
         <p className="hint">
-          后端只在「拉起 / 重启 adb server」时用到 adb 可执行文件；
-          切换后会立即用新路径重启一次 server 使其生效。可留空使用默认（从 PATH 查找）。
+          {t('settings.adbHint')}
         </p>
         <div className="adb-path-row">
           <input
             type="text"
             value={draft}
-            placeholder={info?.available ? '留空使用默认：' + info.default : '未在 PATH 中找到 adb，请填写完整路径'}
+            placeholder={info?.available ? t('settings.adbDefaultPrefix') + info.default : t('settings.adbNotFound')}
             onChange={e => { setDraft(e.target.value); setErr(''); setMsg('') }}
             onKeyDown={e => e.key === 'Enter' && !busy && save(draft.trim())}
             disabled={busy}
           />
           <button className="btn primary" disabled={busy || usingDefault && draft.trim() === ''}
             onClick={() => save(draft.trim())}>
-            {busy ? '切换中…' : '保存并切换'}
+            {busy ? t('settings.switching') : t('settings.saveSwitch')}
           </button>
           <button className="btn" disabled={busy || usingDefault}
-            onClick={() => save('')} title="改回从 PATH 查找">
-            恢复默认
+            onClick={() => save('')} title={t('settings.usePathTitle')}>
+            {t('settings.resetDefault')}
           </button>
         </div>
         {err && <p className="hint error-text">{err}</p>}
         {msg && <p className="hint ok-text">{msg}</p>}
         {info && (
           <p className="hint">
-            当前生效：<code>{info.path || '默认（' + (info.available ? info.default : 'PATH 中未找到 adb') + '）'}</code>
-            {'　'}存档：<code>{info.configFile || '（未启用持久化）'}</code>
+            {t('settings.active')}<code>{info.path || t('settings.defaultWith', { x: info.available ? info.default : t('settings.notInPath') })}</code>
+            {'　'}{t('settings.saved')}<code>{info.configFile || t('settings.noPersistence')}</code>
           </p>
         )}
       </div>
 
       <p className="hint">
-        登录使用浏览器自带的 Basic Auth（账号密码由服务启动时配置，浏览器按站点缓存）。
-        修改密码需重启服务并指定 -password；切换账号或彻底退出需关闭标签页 / 清除浏览器站点数据。
-        投屏画质/声音等设置在投屏面板内按设备单独保存。
+        {t('settings.authHint')}
       </p>
     </div>
   )
@@ -237,26 +245,27 @@ function BackendSettings() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
+  const t = useT()
 
   // 仅探活（/api/health 无需鉴权）：验证地址可达
   const test = async () => {
     setBusy(true); setErr(''); setMsg('')
     const r = await probeBackend(draft.base)
-    if (r.ok) setMsg('连接成功' + (r.version ? `（后端 v${r.version}）` : ''))
-    else setErr('连接失败：' + (r.error || '未知错误'))
+    if (r.ok) setMsg(t('settings.connected') + (r.version ? t('settings.backendOf', { v: r.version }) : ''))
+    else setErr(t('settings.connectFailed') + (r.error || t('settings.unknownError')))
     setBusy(false)
   }
 
   // 保存并重连：先探活再落盘，避免把明显不可达的地址存进去
   const save = async () => {
     const norm = normalizeBackendBase(draft.base)
-    if (norm === null) { setErr('地址格式不正确：需以 http:// 或 https:// 开头'); return }
-    if (norm && !draft.user.trim()) { setErr('跨源访问需填写账号密码（浏览器不会弹出登录框）'); return }
+    if (norm === null) { setErr(t('settings.badAddress')); return }
+    if (norm && !draft.user.trim()) { setErr(t('settings.crossOriginNeedUser')); return }
     setBusy(true); setErr(''); setMsg('')
     const r = await probeBackend(norm)
-    if (!r.ok) { setErr('保存前连接测试失败：' + (r.error || '未知错误')); setBusy(false); return }
+    if (!r.ok) { setErr(t('settings.preSaveFailed')); setBusy(false); return }
     applyBackend({ base: norm, user: draft.user.trim(), pass: draft.pass })
-    setMsg('已保存，正在重连…')
+    setMsg(t('settings.savedReconnecting'))
     setBusy(false)
   }
 
@@ -264,58 +273,50 @@ function BackendSettings() {
     const c = { base: '', user: '', pass: '' }
     setDraft(c)
     applyBackend(c)
-    setErr(''); setMsg('已恢复为同源访问')
+    setErr(''); setMsg(t('settings.backSameOrigin'))
   }
 
   return (
     <div className="settings-block">
-      <h3>后端地址</h3>
+      <h3>{t('settings.backend')}</h3>
       <p className="hint">
-        默认与页面同源（当前 <code>{location.host}</code>），由浏览器自动携带登录凭证。
-        前端托管在别的地址时（静态 Pages、反代等），填写后端地址（如 <code>http://192.168.1.5:9080</code>）
-        并保存，之后所有请求与投屏流都打到该后端。
-        注意：HTTPS 页面无法访问 HTTP 后端（浏览器混合内容拦截），此时应填后端的 HTTPS 地址
-        （本服务默认同时监听 :9443，需先在浏览器信任其证书）。
-        跨源时账号密码仅保存在本浏览器 localStorage，用于拼装 Authorization 头。
+        {t('settings.backendHint', { host: location.host })}
       </p>
       <div className="adb-path-row">
         <input
           type="text"
           value={draft.base}
-          placeholder={'留空 = 与页面同源（' + location.host + '）'}
+          placeholder={t('settings.sameOriginEmpty', { host: location.host })}
           onChange={e => { setDraft({ ...draft, base: e.target.value }); setErr(''); setMsg('') }}
           disabled={busy}
         />
         <input
           type="text"
           value={draft.user}
-          placeholder="账号（跨源必填）"
+          placeholder={t('settings.userPlaceholder')}
           onChange={e => { setDraft({ ...draft, user: e.target.value }); setErr(''); setMsg('') }}
           disabled={busy}
         />
         <input
           type="password"
           value={draft.pass}
-          placeholder="密码（跨源必填）"
           onChange={e => { setDraft({ ...draft, pass: e.target.value }); setErr(''); setMsg('') }}
-          onKeyDown={e => e.key === 'Enter' && !busy && void save()}
+          onKeyDown={e => e.key === 'Enter' && void save()}
           disabled={busy}
         />
       </div>
       <div className="adb-path-row">
         <button className="btn" disabled={busy} onClick={() => void test()}>
-          {busy ? '测试中…' : '测试连接'}
+          {busy ? t('settings.testing') : t('settings.testConnection')}
         </button>
         <button className="btn primary" disabled={busy} onClick={() => void save()}>
-          {busy ? '保存中…' : '保存并重连'}
+          {busy ? t('settings.testing') : t('settings.saveReconnect')}
         </button>
-        <button className="btn ghost" disabled={busy} onClick={reset} title="改回与页面同源">
-          恢复同源
-        </button>
+        <button className="btn ghost" disabled={busy} onClick={reset} title={t('settings.backSameOriginTip')}>{t('settings.backSameOrigin')}</button>
       </div>
       {err && <p className="hint error-text">{err}</p>}
       {msg && <p className="hint ok-text">{msg}</p>}
-      <p className="hint">当前生效：<code>{backendBase() || '同源（' + location.host + '）'}</code></p>
+      <p className="hint">{t('settings.active')}<code>{backendBase() || t('settings.activeSameOrigin', { host: location.host })}</code></p>
     </div>
   )
 }
@@ -336,15 +337,17 @@ interface TlsStatus {
 function TlsSettings() {
   const [info, setInfo] = useState<TlsStatus | null>(null)
   const [err, setErr] = useState('')
+  const t = useT()
 
   const load = async () => {
     try {
       setInfo(await api<TlsStatus>('GET', '/api/settings/tls'))
       setErr('')
     } catch (e) {
-      setErr('读取证书状态失败: ' + (e as Error).message)
+      setErr(t('settings.tlsReadFailed') + (e as Error).message)
     }
   }
+
   useEffect(() => { void load() }, [])
 
   // 下载 CA / 描述文件。同源走导航（自动带凭证；iOS 只在导航时才弹「安装描述文件」）；
@@ -367,15 +370,15 @@ function TlsSettings() {
       a.click()
       setTimeout(() => URL.revokeObjectURL(a.href), 1000)
     } catch (e) {
-      setErr('下载失败: ' + (e as Error).message)
+      setErr(t('settings.downloadFailed') + (e as Error).message)
     }
   }
 
   if (!info) {
     return (
       <div className="settings-block">
-        <h3>HTTPS 证书</h3>
-        <p className="hint">{err || '加载中…'}</p>
+        <h3>{t('settings.tls')}</h3>
+        <p className="hint">{err || t('common.loading')}</p>
       </div>
     )
   }
@@ -383,10 +386,9 @@ function TlsSettings() {
   if (!info.https) {
     return (
       <div className="settings-block">
-        <h3>HTTPS 证书</h3>
+        <h3>{t('settings.tls')}</h3>
         <p className="hint">
-          HTTPS 未开启（启动参数 <code>-https=false</code>）。开启后浏览器才会把本站视为安全上下文
-          （WebCodecs 硬解可用），届时按本页指引安装一次 CA 证书即可消除「不受信任」提示。
+          {t('settings.tlsOff')}
         </p>
       </div>
     )
@@ -395,10 +397,9 @@ function TlsSettings() {
   if (info.custom) {
     return (
       <div className="settings-block">
-        <h3>HTTPS 证书</h3>
+        <h3>{t('settings.tls')}</h3>
         <p className="hint">
-          正在使用自备证书（<code>-tls-cert</code> / <code>-tls-key</code>）。
-          请确保证书由受信任的 CA 签发；若是自签证书，需在客户端导入对应的根证书（与下方自签 CA 流程相同，只是文件换成你的根证书）。
+          {t('settings.tlsCustom')}
         </p>
       </div>
     )
@@ -409,45 +410,38 @@ function TlsSettings() {
 
   return (
     <div className="settings-block">
-      <h3>HTTPS 证书</h3>
+      <h3>{t('settings.tls')}</h3>
       <p className="hint">
-        浏览器提示「这个页面不受信任」，是因为本服务使用自签证书（局域网 IP 申请不到受信任证书）。
-        <b>把下面的 CA 证书安装进系统信任库即可彻底消除提示</b>——PC、安卓、iOS 都适用；
-        安装一次长期有效，之后换网络、换 IP、重启服务都不用再装（CA 不变，叶证书自动按当前网卡重签）。
+        {t('settings.tlsIntro')}
       </p>
       <div className="adb-path-row">
         <button className="btn primary" onClick={() => void download('/api/settings/tls/ca.crt', 'adbreeze-ca.crt')}>
-          下载 CA 证书（.crt）
+          {t('settings.downloadCa')}
         </button>
-        <button className="btn" onClick={() => void download('/api/settings/tls/ca.mobileconfig', null)} title="iOS / iPadOS 专用">
-          下载 iOS 描述文件（.mobileconfig）
+        <button className="btn" onClick={() => void download('/api/settings/tls/ca.mobileconfig', null)} title={t('settings.iosOnly')}>
+          {t('settings.downloadMobileconfig')}
         </button>
       </div>
       <p className="hint">
-        CA 指纹（SHA-256，可核对安装的是哪张）：<code>{info.caFingerprint || '（未知）'}</code>
+        {t('settings.caFingerprint')}<code>{info.caFingerprint || t('settings.fingerprintUnknown')}</code>
       </p>
       <p className="hint">
-        证书覆盖主机名：<code>{info.dns.join('、') || '（无）'}</code>
-        ；IP：<code>{info.ips.join('、') || '（无）'}</code>
+        {t('settings.certHosts')}<code>{info.dns.join('、') || t('settings.certNone')}</code>
+        {t('settings.certIps')}<code>{info.ips.join('、') || t('settings.certNone')}</code>
         {!covered && (
           <><br /><span className="error-text">
-            当前访问地址「{host}」不在证书覆盖范围内——装 CA 也会提示名称不符，请改用上面列出的地址访问，
-            或在启动参数加 -tls-hosts/-tls-ips 追加后重启。
+            {t('settings.hostNotCovered', { host })}
           </span></>
         )}
       </p>
       <details className="cert-help">
-        <summary>各平台安装方法</summary>
+        <summary>{t('settings.installHelp')}</summary>
         <ul>
-          <li><b>Windows</b>：双击 .crt → 安装证书 → 当前用户 → 受信任的根证书颁发机构。
-            或 Chrome 进 <code>chrome://settings/certificates</code> → 权威机构 → 导入。</li>
-          <li><b>macOS</b>：双击 .crt → 添加到「系统」钥匙串 → 在钥匙串访问中右键该证书 → 显示简介 → 「始终信任」。</li>
-          <li><b>Linux</b>：Chrome <code>chrome://settings/certificates</code> → 权威机构 → 导入；
-            或放入 /usr/local/share/ca-certificates 后执行 update-ca-certificates。</li>
-          <li><b>安卓</b>：设置 → 安全 → 加密与凭据 → 安装证书 → CA 证书 → 选择下载的 .crt（需锁屏 PIN）。
-            Chrome 信任用户 CA；其他 App 按安卓 7+ 策略默认不信任用户 CA。</li>
-          <li><b>iOS / iPadOS</b>：下载 .mobileconfig → 设置 → 通用 → VPN与设备管理 → 安装；
-            <b>然后必须</b>到 设置 → 通用 → 关于本机 → 证书信任设置 → 打开「ADBreeze Local CA」的完全信任（少这一步浏览器仍会告警）。</li>
+          <li>{t('settings.installWin')}</li>
+          <li>{t('settings.installMac')}</li>
+          <li>{t('settings.installLinux')}</li>
+          <li>{t('settings.installAndroid')}</li>
+          <li>{t('settings.installIos')}</li>
         </ul>
       </details>
       {err && <p className="hint error-text">{err}</p>}

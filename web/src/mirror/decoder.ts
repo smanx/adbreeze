@@ -12,6 +12,7 @@
 //      仍失败才上报失败。
 //   4. 统计埋点：framesDecoded / framesSkippedDecoding / decoderResets /
 //      decodeQueueSize / 实际软硬解模式，供状态栏与自适应丢帧使用。
+import { t } from '../i18n'
 
 /** 送入解码器的一帧（已按 scrcpy 规则拼好 SPS/PPS） */
 export interface RawChunk {
@@ -204,7 +205,7 @@ export class H264Decoder {
         }
         return
       }
-      this.opts.onError('解码投递失败: ' + (e as Error).message)
+      this.opts.onError(t('dec.dispatchFailed') + (e as Error).message)
     }
   }
 
@@ -245,7 +246,7 @@ export class H264Decoder {
       const pending = this.buffered
       void VideoDecoder.isConfigSupported(swConfig).then(support => {
         if (!support.supported || this.closed) {
-          this.opts.onError('解码错误 ' + e.message)
+          this.opts.onError(t('dec.error', { msg: e.message }))
           return
         }
         this.hwMode = 'prefer-software'
@@ -259,10 +260,10 @@ export class H264Decoder {
           for (const f of pending.slice(firstKey)) this.rawDecode(d, f)
         }
         this.opts.onStats?.()
-      }).catch(() => this.opts.onError('解码错误 ' + e.message))
+      }).catch(() => this.opts.onError(t('dec.error', { msg: e.message })))
       return
     }
-    this.opts.onError('解码错误 ' + e.message)
+    this.opts.onError(t('dec.error', { msg: e.message }))
   }
 
   close() {

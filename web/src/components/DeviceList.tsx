@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
+import { useT } from '../i18n'
 
 // 设备列表（PC 侧栏 / 手机抽屉共用）：连接方式、状态徽标、选中、无线连接（带历史）、断开。
 // 掉线的无线设备保留在列表中（offline 灰显），支持一键重连或从列表移除。
@@ -16,6 +17,7 @@ export default function DeviceList() {
   const [busy, setBusy] = useState(false)
   const [connecting, setConnecting] = useState('') // 正在重连的 serial
   const histRef = useRef<HTMLDataListElement>(null)
+  const t = useT()
 
   useEffect(() => { renderHistory() }, [])
 
@@ -72,7 +74,7 @@ export default function DeviceList() {
   return (
     <div className="device-list">
       <div className="device-items">
-        {devices.length === 0 && <div className="hint">无设备</div>}
+        {devices.length === 0 && <div className="hint">{t('device.empty')}</div>}
         {devices.map(d => {
           const offline = d.state !== 'device'
           const wireless = isWireless(d.serial)
@@ -88,10 +90,10 @@ export default function DeviceList() {
                   {/* ADB 的 serial 自带连接方式：TCP/IP 设备渲染为 host:port（含冒号），
                       USB 设备就是序列号本身（无冒号）——据此区分，无需后端改动 */}
                   <span className={'conn-badge ' + (wireless ? 'wireless' : 'usb')}
-                    title={wireless ? '无线连接（TCP/IP）' : '有线连接（USB）'}>
-                    {wireless ? '无线' : '有线'}
+                    title={wireless ? t('device.wirelessTip') : t('device.wiredTip')}>
+                    {wireless ? t('device.wireless') : t('device.wired')}
                   </span>
-                  <span className={'state-badge ' + d.state}>{offline ? '已断开' : d.state}</span>
+                  <span className={'state-badge ' + d.state}>{offline ? t('device.disconnected') : d.state}</span>
                 </span>
               </div>
               {offline ? (
@@ -100,17 +102,17 @@ export default function DeviceList() {
                     className="btn tiny"
                     disabled={connecting === d.serial}
                     onClick={e => { e.stopPropagation(); reconnect(d.serial) }}
-                  >{connecting === d.serial ? '重连中…' : '重连'}</button>
+                  >{connecting === d.serial ? t('device.reconnecting') : t('device.reconnect')}</button>
                   <button
                     className="btn tiny ghost"
                     onClick={e => { e.stopPropagation(); forget(d.serial) }}
-                  >移除</button>
+                  >{t('device.remove')}</button>
                 </div>
               ) : (
                 <button
                   className="btn tiny danger"
                   onClick={e => { e.stopPropagation(); disconnect(d.serial) }}
-                >断开</button>
+                >{t('device.disconnect')}</button>
               )}
             </div>
           )
@@ -125,7 +127,7 @@ export default function DeviceList() {
           onKeyDown={e => e.key === 'Enter' && connect()}
         />
         <datalist id="addr-history" ref={histRef} />
-        <button className="btn" disabled={busy} onClick={connect}>{busy ? '连接中…' : '连接设备'}</button>
+        <button className="btn" disabled={busy} onClick={connect}>{busy ? t('device.connecting') : t('device.connect')}</button>
         {error && <p className="hint error-text">{error}</p>}
       </div>
     </div>

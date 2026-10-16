@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { useStore } from '../store'
+import { useT } from '../i18n'
 
 // 性能面板：CPU（总/每核+频率）、内存、FPS 折线图 + 电池/温度/uptime 工具栏（对齐 AYA Performance）。
 // 1.5 秒轮询（服务端一次采样约 1.2s），仅面板激活时采集；图表为自绘 canvas，保留 60 点。
@@ -44,6 +45,7 @@ export default function PerfPanel() {
   const [latest, setLatest] = useState<PerfSample | null>(null)
   const [err, setErr] = useState('')
   const [running, setRunning] = useState(true)
+  const t = useT()
 
   const cpuHist = useRef<number[]>([])
   const memHist = useRef<number[]>([])
@@ -86,7 +88,7 @@ export default function PerfPanel() {
   }, [selected])
 
   if (!selected) {
-    return <div className="panel panel-placeholder"><h2>性能</h2><p className="hint">请先在设备列表中选择设备</p></div>
+    return <div className="panel panel-placeholder"><h2>{t('perf.title')}</h2><p className="hint">{t('panel.selectDevice')}</p></div>
   }
 
   const b = latest?.battery
@@ -95,16 +97,16 @@ export default function PerfPanel() {
   return (
     <div className="panel perf-panel">
       <div className="perf-bar">
-        <button className="btn ghost" onClick={() => setRunning(r => !r)}>{running ? '暂停' : '继续'}</button>
+        <button className="btn ghost" onClick={() => setRunning(r => !r)}>{running ? t('perf.pause') : t('perf.resume')}</button>
         {err && <span className="error-text">{err}</span>}
         <span className="spacer" />
-        <span className="perf-batt" title={`电压 ${(b?.voltage || 0) / 1000}V · 温度 ${b?.temperature}°C`}>
+        <span className="perf-batt" title={t('perf.battTip', { v: (b?.voltage || 0) / 1000, t: b?.temperature ?? 0 })}>
           <span className={'batt-icon' + (b && b.level <= 20 ? ' low' : '')}>
             <span className="batt-level" style={{ width: `${b?.level || 0}%` }} />
           </span>
           {b ? `${b.level}% ${(b.acPowered || b.usbPowered) ? '⚡' : ''} ${b.temperature}°C` : ''}
         </span>
-        <span className="hint">{latest ? `Uptime ${fmtUptime(latest.uptime)}` : ''}</span>
+        <span className="hint">{latest ? t('perf.uptime', { u: fmtUptime(latest.uptime) }) : ''}</span>
       </div>
 
       <div className="perf-grid">
@@ -115,7 +117,7 @@ export default function PerfPanel() {
           data={cpuHist.current}
         />
         <ChartCard
-          title={latest ? `内存 ${fmtMem(latest.memUsed)} / ${fmtMem(latest.memTotal)}` : '内存'}
+          title={latest ? `${t('perf.memory')} ${fmtMem(latest.memUsed)} / ${fmtMem(latest.memTotal)}` : t('perf.memory')}
           value={latest ? `${memPct}` : ''}
           color="#722ed1" max={100} unit="%"
           data={memHist.current}

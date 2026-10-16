@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { wsUrl } from '../api'
+import { useT } from '../i18n'
 
 // Logcat 面板：实时日志流（threadtime 格式）+ 客户端过滤（级别/关键字/Tag）+
 // 级别着色 + 暂停/恢复 + 清屏 + 导出。对齐 AYA Logcat 面板功能子集。
@@ -44,6 +45,7 @@ export default function LogcatPanel() {
   const [keyword, setKeyword] = useState('')
   const [tag, setTag] = useState('')
   const [autoScroll, setAutoScroll] = useState(true)
+  const tr = useT()
 
   const wsRef = useRef<WebSocket | null>(null)
   const pausedRef = useRef(false)
@@ -65,7 +67,7 @@ export default function LogcatPanel() {
   useEffect(() => {
     if (!selected) return
     setLines([])
-    setStatus('连接中…')
+    setStatus(tr('logcat.connecting'))
     const ws = new WebSocket(wsUrl(`/ws/logcat/${encodeURIComponent(selected)}`))
     wsRef.current = ws
     ws.onopen = () => { setConnected(true); setStatus('') }
@@ -74,10 +76,10 @@ export default function LogcatPanel() {
       if (wsRef.current !== ws) return
       wsRef.current = null
       setConnected(false)
-      setStatus(ev.reason || ev.code === 4000 ? `已断开：${ev.reason || 'logcat 连接中断'}` : '已断开（设备离线？）')
+      setStatus(ev.reason || ev.code === 4000 ? tr('logcat.disconnected', { reason: ev.reason || tr('logcat.interruptReason') }) : tr('logcat.disconnectedOffline'))
     }
     return () => { ws.onclose = null; ws.close(); wsRef.current = null; setConnected(false) }
-  }, [selected, append])
+  }, [selected, append, tr])
 
   // 自动滚动
   useEffect(() => {
@@ -116,18 +118,18 @@ export default function LogcatPanel() {
   return (
     <div className="panel logcat-panel">
       <div className="logcat-bar">
-        <select value={minLevel} onChange={e => setMinLevel(e.target.value)} title="最低级别">
+        <select value={minLevel} onChange={e => setMinLevel(e.target.value)} title={tr('logcat.minLevel')}>
           {LEVELS.map(l => <option key={l} value={l}>{LEVEL_NAMES[l]}</option>)}
         </select>
-        <input className="logcat-filter" placeholder="关键字过滤" value={keyword} onChange={e => setKeyword(e.target.value)} />
-        <input className="logcat-filter" placeholder="Tag 过滤" value={tag} onChange={e => setTag(e.target.value)} />
+        <input className="logcat-filter" placeholder={tr('logcat.keywordPh')} value={keyword} onChange={e => setKeyword(e.target.value)} />
+        <input className="logcat-filter" placeholder={tr('logcat.tagPh')} value={tag} onChange={e => setTag(e.target.value)} />
         <span className="spacer" />
-        <span className="hint">{connected ? `${filtered.length}/${lines.length} 行` : ''}{status && ` ${status}`}</span>
-        <button className="btn ghost" disabled={!connected} onClick={() => setPaused(p => !p)}>{paused ? '恢复' : '暂停'}</button>
-        <button className="btn ghost" onClick={clear}>清屏</button>
-        <button className="btn ghost" disabled={!lines.length} onClick={exportLog}>导出</button>
+        <span className="hint">{connected ? tr('logcat.lines', { f: filtered.length, t: lines.length }) : ''}{status && ` ${status}`}</span>
+        <button className="btn ghost" disabled={!connected} onClick={() => setPaused(p => !p)}>{paused ? tr('logcat.resume') : tr('logcat.pause')}</button>
+        <button className="btn ghost" onClick={clear}>{tr('common.clear')}</button>
+        <button className="btn ghost" disabled={!lines.length} onClick={exportLog}>{tr('common.export')}</button>
       </div>
-      {!selected && <p className="hint">请先在设备列表中选择设备</p>}
+      {!selected && <p className="hint">{tr('panel.selectDevice')}</p>}
       <div className="logcat-box" ref={boxRef} onScroll={onScroll}>
         {filtered.map((l, i) => (
           <div key={i} className="logcat-line">
@@ -138,11 +140,11 @@ export default function LogcatPanel() {
             <span className="ms">{l.msg}</span>
           </div>
         ))}
-        {!filtered.length && <div className="logcat-empty hint">{selected ? (connected ? '等待日志…' : status || '未连接') : '未选择设备'}</div>}
+        {!filtered.length && <div className="logcat-empty hint">{selected ? (connected ? tr('logcat.waiting') : status || tr('logcat.notConnected')) : tr('logcat.noDevice')}</div>}
         <div ref={tailRef} />
       </div>
       {!autoScroll && (
-        <button className="btn tiny logcat-bottom" onClick={() => tailRef.current?.scrollIntoView({ block: 'end' })}>↓ 回到底部</button>
+        <button className="btn tiny logcat-bottom" onClick={() => tailRef.current?.scrollIntoView({ block: 'end' })}>{tr('logcat.toBottom')}</button>
       )}
     </div>
   )

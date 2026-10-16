@@ -4,6 +4,8 @@
 
 > 本地只跑 ADB，所有功能 UI 全部在 Web 上。
 
+项目地址：<https://github.com/smanx/adbreeze>
+
 ## 特性
 
 - **实时投屏**：基于 scrcpy 协议（H.264），浏览器 WebCodecs 硬解，延迟约 100ms；一路流支持多观众

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, apiUrl, authHeaders } from '../api'
 import { useStore } from '../store'
+import { useT } from '../i18n'
 
 // 布局检查面板：截图 + 控件边框叠加 + 命中拾取 + 层级树 + 盒模型详情（对齐 AYA Layout）。
 // 数据：uiautomator dump XML（服务端拉回），截图：已有 /screenshot 端点。
@@ -78,6 +79,7 @@ export default function LayoutPanel() {
   const [err, setErr] = useState('')
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const imgRef = useRef<HTMLImageElement>(null)
+  const t = useT()
 
   const refresh = useCallback(async () => {
     if (!selected) return
@@ -86,14 +88,14 @@ export default function LayoutPanel() {
       // 并发：截图 + dump
       const [shot, dump] = await Promise.all([
         fetch(apiUrl(`/api/devices/${encodeURIComponent(selected)}/screenshot`), { headers: authHeaders() })
-          .then(r => { if (!r.ok) throw new Error('截图失败 HTTP ' + r.status); return r.blob() }),
+          .then(r => { if (!r.ok) throw new Error(t('layout.shotFailed', { code: r.status })); return r.blob() }),
         api<{ xml: string; rotation: string }>('GET', `/api/devices/${encodeURIComponent(selected)}/ui-dump`),
       ])
       setShotURL(URL.createObjectURL(shot))
       setXmlRaw(dump.xml)
       setRoot(parseXML(dump.xml).root)
     } catch (e) { setErr((e as Error).message) } finally { setLoading(false) }
-  }, [selected])
+  }, [selected, t])
 
   useEffect(() => { setRoot(null); setShotURL(''); refresh() }, [refresh])
 
@@ -163,7 +165,7 @@ export default function LayoutPanel() {
   }
 
   if (!selected) {
-    return <div className="panel panel-placeholder"><h2>布局</h2><p className="hint">请先在设备列表中选择设备</p></div>
+    return <div className="panel panel-placeholder"><h2>{t('layout.title')}</h2><p className="hint">{t('panel.selectDevice')}</p></div>
   }
 
   let nodeCount = 0
@@ -172,14 +174,14 @@ export default function LayoutPanel() {
   return (
     <div className="panel layout-panel">
       <div className="layout-bar">
-        <button className="btn" disabled={loading} onClick={refresh}>{loading ? '采集中…' : '刷新布局'}</button>
+        <button className="btn" disabled={loading} onClick={refresh}>{loading ? t('layout.capturing') : t('layout.refresh')}</button>
         <label className="layout-chk">
           <input type="checkbox" checked={showBorder} onChange={e => setShowBorder(e.target.checked)} />
-          显示边框
+          {t('layout.showBorder')}
         </label>
-        {root && <span className="hint">{nodeCount} 个控件（rotation {xmlRaw.includes('rotation="1"') ? '90°' : '0°'}）</span>}
+        {root && <span className="hint">{t('layout.nodeCount', { n: nodeCount, r: xmlRaw.includes('rotation="1"') ? '90°' : '0°' })}</span>}
         <span className="spacer" />
-        <button className="btn ghost" disabled={!xmlRaw} onClick={exportXML}>导出 XML</button>
+        <button className="btn ghost" disabled={!xmlRaw} onClick={exportXML}>{t('layout.exportXml')}</button>
       </div>
       {err && <p className="error-text">{err}</p>}
 
@@ -188,19 +190,19 @@ export default function LayoutPanel() {
           <canvas ref={canvasRef} className="layout-canvas" onClick={onCanvasClick}
             style={{ aspectRatio: imgSize.h ? `${imgSize.w}/${imgSize.h}` : '9/19' }} />
           <img ref={imgRef} src={shotURL} style={{ display: 'none' }} alt="" />
-          {!shotURL && <div className="hint layout-empty">{loading ? '采集中…' : '点击「刷新布局」开始'}</div>}
+          {!shotURL && <div className="hint layout-empty">{loading ? t('layout.capturing') : t('layout.clickRefresh')}</div>}
         </div>
 
         <div className="layout-tree">
-          <h3>层级树</h3>
+          <h3>{t('layout.tree')}</h3>
           <div className="layout-tree-body">
             {root && <TreeNode node={root} sel={sel} onSelect={setSel} depth={0} />}
-            {!root && <div className="hint">无数据</div>}
+            {!root && <div className="hint">{t('layout.noData')}</div>}
           </div>
         </div>
 
         <div className="layout-detail">
-          <h3>属性</h3>
+          <h3>{t('layout.attrs')}</h3>
           {sel ? (
             <div className="layout-detail-body">
               <div className="layout-boxmodel">
@@ -222,7 +224,7 @@ export default function LayoutPanel() {
                 </tbody>
               </table>
             </div>
-          ) : <div className="hint">点击截图或树节点查看属性</div>}
+          ) : <div className="hint">{t('layout.clickForAttrs')}</div>}
         </div>
       </div>
     </div>

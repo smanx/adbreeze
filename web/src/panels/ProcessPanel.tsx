@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import { useStore } from '../store'
 import { Th, useColWidths, type SortSpec } from '../components/TableTh'
+import { useT, type MsgKey } from '../i18n'
 
 // 进程面板：top -b -n 1 采样（CPU/MEM），5 秒轮询（仅面板激活时），支持过滤与停止（对齐 AYA Process）。
 // 列：PID/用户/CPU%/内存/进程名，全部支持升降序排序（与应用面板一致），列宽可拖拽调整。
@@ -16,7 +17,7 @@ interface ProcEntry {
 
 type ProcSortKey = 'pid' | 'user' | 'cpu' | 'mem' | 'name'
 const PROC_KEYS: ProcSortKey[] = ['pid', 'user', 'cpu', 'mem', 'name']
-const PROC_COLS = ['PID', '用户', 'CPU%', '内存', '进程名']
+const PROC_COLS: MsgKey[] = ['process.colPid', 'process.colUser', 'process.colCpu', 'process.colMem', 'process.colName']
 
 export default function ProcessPanel() {
   const selected = useStore(s => s.selected)
@@ -31,6 +32,7 @@ export default function ProcessPanel() {
   const [widths, setWidth] = useColWidths('adbreeze-proc-colwidths', PROC_COLS.length)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const aliveRef = useRef(true)
+  const t = useT()
 
   const load = useCallback(async () => {
     if (!selected) return
@@ -57,18 +59,18 @@ export default function ProcessPanel() {
     if (!p) return
     const isApp = /^u0_a/.test(p.user) || /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/.test(p.name)
     const msg = p.name.includes('.') || isApp
-      ? `停止进程 ${p.name}（PID ${p.pid}）？\n将执行 am force-stop。`
-      : `kill -9 PID ${p.pid}（${p.name}）？\n非应用进程被强杀可能导致系统不稳定！`
+      ? t('process.confirmStopApp', { name: p.name, pid: p.pid })
+      : t('process.confirmKill', { pid: p.pid, name: p.name })
     if (!confirm(msg)) return
     setHint('')
     try {
       const r = await api<{ message: string }>('POST', `/api/devices/${encodeURIComponent(selected!)}/processes/kill`, {
         pid: p.pid, package: isApp ? p.name : '',
       })
-      setHint(r.message || '完成')
+      setHint(r.message || t('common.done'))
       setSelectedPid('')
       load()
-    } catch (e) { setHint('操作失败: ' + (e as Error).message) }
+    } catch (e) { setHint(t('process.opFailed') + (e as Error).message) }
   }
 
   const clickSort = (k: ProcSortKey) =>
@@ -101,30 +103,30 @@ export default function ProcessPanel() {
   }, [procs, keyword, onlyApp, sort])
 
   if (!selected) {
-    return <div className="panel panel-placeholder"><h2>进程</h2><p className="hint">请先在设备列表中选择设备</p></div>
+    return <div className="panel panel-placeholder"><h2>{t('process.title')}</h2><p className="hint">{t('panel.selectDevice')}</p></div>
   }
 
   return (
     <div className="panel proc-panel">
       <div className="proc-bar">
-        <input className="proc-search" placeholder="搜索进程/PID/用户" value={keyword} onChange={e => setKeyword(e.target.value)} />
+        <input className="proc-search" placeholder={t('process.searchPh')} value={keyword} onChange={e => setKeyword(e.target.value)} />
         <label className="proc-app-chk">
           <input type="checkbox" checked={onlyApp} onChange={e => setOnlyApp(e.target.checked)} />
-          仅应用进程
+          {t('process.onlyApp')}
         </label>
-        <span className="hint">{loading ? '采样中…' : `${filtered.length} / ${procs.length} 个进程`}</span>
+        <span className="hint">{loading ? t('process.sampling') : t('process.count', { f: filtered.length, t: procs.length })}</span>
         <span className="spacer" />
         {hint && <span className="hint">{hint}</span>}
-        <button className="btn tiny danger" disabled={!selectedPid} onClick={kill}>停止</button>
-        <button className="btn ghost" onClick={load}>刷新</button>
+        <button className="btn tiny danger" disabled={!selectedPid} onClick={kill}>{t('process.stop')}</button>
+        <button className="btn ghost" onClick={load}>{t('common.refresh')}</button>
       </div>
       {err && <p className="error-text">{err}</p>}
       <div className="proc-table-wrap">
         <table className="proc-table">
           <thead>
             <tr>
-              {PROC_COLS.map((text, i) => (
-                <Th key={text} colKey={PROC_KEYS[i]} text={text}
+              {PROC_COLS.map((key, i) => (
+                <Th key={key} colKey={PROC_KEYS[i]} text={t(key)}
                   sort={sort} onSort={clickSort}
                   width={widths[i] || undefined} onResize={w => setWidth(i, w)}
                   align={i === 2 || i === 3 ? 'right' : 'left'} />
@@ -144,7 +146,7 @@ export default function ProcessPanel() {
             ))}
           </tbody>
         </table>
-        {!filtered.length && <div className="hint proc-empty">{loading ? '采样中…' : '无匹配进程'}</div>}
+        {!filtered.length && <div className="hint proc-empty">{loading ? t('process.sampling') : t('process.noMatch')}</div>}
       </div>
     </div>
   )

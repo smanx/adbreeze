@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useT } from '../i18n'
 
 // 通用表格增强：
 // 1. 可排序表头（点击切换升降序，▲/▼ 指示，与应用面板样式一致）；
@@ -97,6 +98,7 @@ export function PreviewModal(props: {
   footer?: ReactNode
 }) {
   const { url, title, filename, onClose, footer } = props
+  const t = useT()
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
@@ -113,14 +115,14 @@ export function PreviewModal(props: {
       <div className="preview-modal" onClick={e => e.stopPropagation()}>
         <div className="preview-head">
           <h3>{title}</h3>
-          <button className="btn ghost tiny" onClick={onClose}>关闭</button>
+          <button className="btn ghost tiny" onClick={onClose}>{t('common.close')}</button>
         </div>
         <div className="preview-body">
           <img src={url} alt={title} />
         </div>
         <div className="preview-foot">
           {footer}
-          <button className="btn" onClick={download}>下载 PNG</button>
+          <button className="btn" onClick={download}>{t('preview.downloadPng')}</button>
         </div>
       </div>
     </div>

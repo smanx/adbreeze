@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, apiUrl, authHeaders, authHeaderValue, isCrossOrigin } from '../api'
 import { useStore } from '../store'
+import { useT } from '../i18n'
 
 interface FileEntry { name: string; size: number; mode: number; time: number; dir: boolean }
 
@@ -48,6 +49,7 @@ export default function FilesPanel() {
   const [batchBusy, setBatchBusy] = useState(false)
   const uploadRef = useRef<HTMLInputElement>(null)
   const dirUploadRef = useRef<HTMLInputElement>(null)
+  const t = useT()
 
   useEffect(() => { if (selected) list(path).catch(() => {}) /* 设备切换回到默认目录 */ }, [selected]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -126,7 +128,7 @@ export default function FilesPanel() {
         a.download = e.dir ? e.name + '.zip' : e.name
         a.click()
         setTimeout(() => URL.revokeObjectURL(a.href), 1000)
-      } catch (err) { setError('下载失败: ' + (err as Error).message) }
+      } catch (err) { setError(t('files.downloadFailed') + (err as Error).message) }
       return
     }
     // 同源导航自动携带 Basic 凭证/会话 cookie，无需再拼 token
@@ -137,7 +139,9 @@ export default function FilesPanel() {
   }
 
   const remove = async (e: FileEntry) => {
-    if (!confirm(`删除 ${e.dir ? '目录' : '文件'} ${e.name}？${e.dir ? '（目录内容将一并删除）' : ''}`)) return
+    const type = e.dir ? t('files.dir') : t('files.file')
+    const warn = e.dir ? t('files.confirmDeleteDirWarn') : ''
+    if (!confirm(t('files.confirmDelete', { type, name: e.name, warn }))) return
     try {
       await api('DELETE', `/api/devices/${encodeURIComponent(selected!)}/files?path=${encodeURIComponent(joinPath(path, e.name))}`)
       await list(path)
@@ -149,7 +153,7 @@ export default function FilesPanel() {
     if (!checkedEntries.length) return
     const dirs = checkedEntries.filter(e => e.dir).length
     const files = checkedEntries.length - dirs
-    const msg = `删除选中的 ${checkedEntries.length} 项（${dirs} 个目录、${files} 个文件）？目录内容将一并删除，不可恢复！`
+    const msg = t('files.confirmBatchDelete', { n: checkedEntries.length, d: dirs, f: files })
     if (!confirm(msg)) return
     setBatchBusy(true); setError('')
     let failed = 0
@@ -159,7 +163,7 @@ export default function FilesPanel() {
       } catch { failed++ }
     }
     setBatchBusy(false)
-    if (failed) setError(`${failed} 项删除失败`)
+    if (failed) setError(t('files.batchFailed', { n: failed }))
     await list(path) // list 会清空选择
   }
 
@@ -170,7 +174,7 @@ export default function FilesPanel() {
   }
 
   const mkdir = async () => {
-    const name = prompt('新目录名称：')
+    const name = prompt(t('files.newDirPrompt'))
     if (!name) return
     try {
       await api('POST', `/api/devices/${encodeURIComponent(selected!)}/files/mkdir?path=${encodeURIComponent(joinPath(path, name))}`)
@@ -179,9 +183,9 @@ export default function FilesPanel() {
   }
 
   const rename = async (e: FileEntry) => {
-    const newName = prompt(`重命名（${e.dir ? '文件夹' : '文件'}）：`, e.name)
+    const newName = prompt(t('files.renamePrompt', { type: e.dir ? t('files.folder') : t('files.file') }), e.name)
     if (!newName || newName === e.name) return
-    if (/[\\/]/.test(newName)) { setError('名称不能包含 / 或 \\'); return }
+    if (/[\\/]/.test(newName)) { setError(t('files.badName')); return }
     try {
       await api('POST', `/api/devices/${encodeURIComponent(selected!)}/files/rename`, {
         from: joinPath(path, e.name),
@@ -202,22 +206,22 @@ export default function FilesPanel() {
     if (auth) xhr.setRequestHeader('Authorization', auth)
     xhr.upload.onprogress = ev => {
       if (ev.lengthComputable) {
-        setXfers(q => q.map(t => t.id === id ? { ...t, loaded: ev.loaded } : t))
+        setXfers(q => q.map(tt => tt.id === id ? { ...tt, loaded: ev.loaded } : tt))
       }
     }
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        setXfers(q => q.map(t => t.id === id ? { ...t, status: 'done', loaded: file.size } : t))
+        setXfers(q => q.map(tt => tt.id === id ? { ...tt, status: 'done', loaded: file.size } : tt))
         resolve()
       } else {
         const msg = `HTTP ${xhr.status}`
-        setXfers(q => q.map(t => t.id === id ? { ...t, status: 'error', error: msg } : t))
+        setXfers(q => q.map(tt => tt.id === id ? { ...tt, status: 'error', error: msg } : tt))
         reject(new Error(msg))
       }
     }
     xhr.onerror = () => {
-      setXfers(q => q.map(t => t.id === id ? { ...t, status: 'error', error: '网络错误' } : t))
-      reject(new Error('网络错误'))
+      setXfers(q => q.map(tt => tt.id === id ? { ...tt, status: 'error', error: t('common.networkError') } : tt))
+      reject(new Error(t('common.networkError')))
     }
     xhr.send(file)
   })
@@ -270,7 +274,7 @@ export default function FilesPanel() {
   const onDrop = async (e: React.DragEvent) => {
     e.preventDefault()
     setDragOver(false)
-    if (!selected) { setError('请先选择设备'); return }
+    if (!selected) { setError(t('panel.selectDeviceShort')); return }
     const items = Array.from(e.dataTransfer.items || [])
     const results: { file: File; relDir: string }[] = []
     const walkEntry = async (entry: FileSystemEntry, relDir: string): Promise<void> => {
@@ -311,7 +315,7 @@ export default function FilesPanel() {
     if (results.length) uploadMany(results)
   }
 
-  if (!selected) return <div className="panel"><p className="hint">请先在设备列表中选择设备。</p></div>
+  if (!selected) return <div className="panel"><p className="hint">{t('panel.selectDevice.')}</p></div>
 
   const activeXfers = xfers.filter(x => x.status === 'uploading').length
   const totalLoaded = xfers.reduce((s, x) => s + x.loaded, 0)
@@ -323,40 +327,40 @@ export default function FilesPanel() {
       onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false) }}
       onDrop={onDrop}>
       <div className="files-bar">
-        <button className="btn tiny" onClick={() => list(parentOf(path))} disabled={path === '/'}>↑ 上级</button>
+        <button className="btn tiny" onClick={() => list(parentOf(path))} disabled={path === '/'}>{t('files.up')}</button>
         <input className="files-path" value={path} onChange={e => setPath(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && list(path)} />
-        <button className="btn tiny" onClick={() => list(path)} disabled={busy}>刷新</button>
-        <button className="btn tiny" onClick={mkdir}>新建目录</button>
-        <button className="btn tiny" onClick={() => uploadRef.current?.click()}>上传文件</button>
-        <button className="btn tiny" onClick={() => dirUploadRef.current?.click()}>上传文件夹</button>
+        <button className="btn tiny" onClick={() => list(path)} disabled={busy}>{t('common.refresh')}</button>
+        <button className="btn tiny" onClick={mkdir}>{t('files.newDir')}</button>
+        <button className="btn tiny" onClick={() => uploadRef.current?.click()}>{t('files.uploadFiles')}</button>
+        <button className="btn tiny" onClick={() => dirUploadRef.current?.click()}>{t('files.uploadDir')}</button>
         <input ref={uploadRef} type="file" multiple style={{ display: 'none' }} onChange={onPickFiles} />
         <input ref={dirUploadRef} type="file" style={{ display: 'none' }}
           {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} onChange={onPickDir} />
       </div>
       <div className="files-bar">
-        <input className="files-filter" placeholder="过滤文件/文件夹（模糊匹配）" value={filter}
+        <input className="files-filter" placeholder={t('files.filterPh')} value={filter}
           onChange={e => setFilter(e.target.value)} />
-        <span className="hint">{filter ? `${filtered.length} / ${entries.length} 项` : `${entries.length} 项`}</span>
+        <span className="hint">{filter ? t('files.countOf', { f: filtered.length, t: entries.length }) : t('files.count', { n: entries.length })}</span>
         <span className="spacer" />
-        <span className="hint">支持拖拽文件 / 文件夹到列表上传</span>
+        <span className="hint">{t('files.dragHint')}</span>
       </div>
       {error && <p className="hint error-text">{error}</p>}
 
       {/* 批量操作栏：勾选 ≥1 项时出现 */}
       {checkedEntries.length > 0 && (
         <div className="files-batchbar">
-          <span className="bb-count">已选 {checkedEntries.length} 项</span>
+          <span className="bb-count">{t('files.selected', { n: checkedEntries.length })}</span>
           <span className="hint">
-            {checkedEntries.filter(e => e.dir).length} 个目录 · {checkedEntries.filter(e => !e.dir).length} 个文件
+            {t('files.dirFileCount', { d: checkedEntries.filter(e => e.dir).length, f: checkedEntries.filter(e => !e.dir).length })}
           </span>
-          <button className="btn tiny ghost" onClick={selectAll} disabled={allChecked}>全选</button>
-          <button className="btn tiny ghost" onClick={invertSelection}>反选</button>
-          <button className="btn tiny ghost" onClick={clearSelection}>取消选择</button>
+          <button className="btn tiny ghost" onClick={selectAll} disabled={allChecked}>{t('files.selectAll')}</button>
+          <button className="btn tiny ghost" onClick={invertSelection}>{t('files.invert')}</button>
+          <button className="btn tiny ghost" onClick={clearSelection}>{t('files.clearSel')}</button>
           <span className="spacer" />
-          <button className="btn tiny" disabled={batchBusy} onClick={batchDownload}>下载（{checkedEntries.length}）</button>
+          <button className="btn tiny" disabled={batchBusy} onClick={batchDownload}>{t('files.downloadN', { n: checkedEntries.length })}</button>
           <button className="btn tiny danger" disabled={batchBusy} onClick={batchDelete}>
-            {batchBusy ? '删除中…' : `删除（${checkedEntries.length}）`}
+            {batchBusy ? t('files.deleting') : t('files.deleteN', { n: checkedEntries.length })}
           </button>
         </div>
       )}
@@ -364,9 +368,9 @@ export default function FilesPanel() {
       {xfers.length > 0 && (
         <div className="files-xfer">
           <div className="files-xfer-head">
-            <span>传输{activeXfers > 0 ? `（${activeXfers} 个进行中）` : '（已完成）'}</span>
+            <span>{t('files.transfers')}{activeXfers > 0 ? t('files.inProgress', { n: activeXfers }) : t('files.completed')}</span>
             <span className="hint">{fmtSize(totalLoaded)} / {fmtSize(totalSize)}</span>
-            <button className="btn tiny ghost" onClick={() => setXfers([])}>清空</button>
+            <button className="btn tiny ghost" onClick={() => setXfers([])}>{t('common.clear')}</button>
           </div>
           {xfers.map(x => (
             <div key={x.id} className={'files-xfer-row' + (x.status === 'error' ? ' err' : '')}>
@@ -378,7 +382,7 @@ export default function FilesPanel() {
                 }} />
               </div>
               <span className="fx-info">
-                {x.status === 'error' ? x.error : x.status === 'done' ? '完成' : fmtSize(x.loaded)}
+                {x.status === 'error' ? x.error : x.status === 'done' ? t('files.xferDone') : fmtSize(x.loaded)}
               </span>
             </div>
           ))}
@@ -389,12 +393,12 @@ export default function FilesPanel() {
         <thead>
           <tr>
             <th className="col-chk">
-              <input type="checkbox" title="全选/全不选"
+              <input type="checkbox" title={t('files.selectAllTip')}
                 checked={allChecked}
                 ref={el => { if (el) el.indeterminate = checkedEntries.length > 0 && !allChecked }}
                 onChange={e => (e.target.checked ? selectAll() : clearSelection())} />
             </th>
-            <th>名称</th><th>大小</th><th>修改时间</th><th>操作</th>
+            <th>{t('common.name')}</th><th>{t('common.size')}</th><th>{t('common.time')}</th><th>{t('common.actions')}</th>
           </tr>
         </thead>
         <tbody>
@@ -414,13 +418,13 @@ export default function FilesPanel() {
               <td>{e.dir ? '-' : fmtSize(e.size)}</td>
               <td>{fmtTime(e.time)}</td>
               <td className="file-ops">
-                <button className="btn tiny ghost" onClick={() => void download(e)}>{e.dir ? '下载zip' : '下载'}</button>
-                <button className="btn tiny ghost" onClick={() => rename(e)}>重命名</button>
-                <button className="btn tiny danger" onClick={() => remove(e)}>删除</button>
+                <button className="btn tiny ghost" onClick={() => void download(e)}>{e.dir ? t('files.downloadZip') : t('common.download')}</button>
+                <button className="btn tiny ghost" onClick={() => rename(e)}>{t('common.rename')}</button>
+                <button className="btn tiny danger" onClick={() => remove(e)}>{t('common.delete')}</button>
               </td>
             </tr>
           ))}
-          {filtered.length === 0 && !busy && <tr><td colSpan={5} className="hint">{filter ? '无匹配项' : '空目录'}</td></tr>}
+          {filtered.length === 0 && !busy && <tr><td colSpan={5} className="hint">{filter ? t('files.noMatch') : t('files.emptyDir')}</td></tr>}
         </tbody>
       </table>
     </div>

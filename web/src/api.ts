@@ -3,6 +3,8 @@
 // 填写后端地址（如 http://192.168.1.5:9080）后，所有 API / WS 均打往该后端，
 // 并以 Authorization 头发送下面配置的账号密码——跨源 fetch 不会自动带 Basic 凭证，
 // SameSite=Lax 的会话 cookie 也不会随跨站请求发送。
+import { t } from './i18n'
+
 const BACKEND_KEY = 'ADBreeze-backend'
 export interface BackendConfig { base: string; user: string; pass: string }
 const DEFAULT_BACKEND: BackendConfig = { base: '', user: '', pass: '' }
@@ -124,7 +126,7 @@ export async function probeBackend(base: string): Promise<{ ok: boolean; version
     const j = await res.json().catch(() => ({})) as { version?: string }
     return { ok: true, version: j.version }
   } catch (e) {
-    return { ok: false, error: (e as Error).message || '网络错误' }
+    return { ok: false, error: (e as Error).message || t('common.networkError') }
   }
 }
 

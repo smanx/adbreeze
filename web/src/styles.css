@@ -85,6 +85,11 @@ input, select {
 }
 .drawer-toggle { display: none; }
 .version-badge { color: var(--muted); font-size: 12px; }
+/* 顶栏 GitHub 外链（新标签页打开仓库）：弱化色，悬停显主色 */
+.gh-link { color: var(--muted); display: inline-flex; align-items: center; text-decoration: none; }
+.gh-link:hover, .gh-link:focus-visible { color: var(--primary); }
+/* 顶栏语言切换按钮：固定宽度不压缩（中/英标签长度不同） */
+.lang-btn { flex: 0 0 auto; min-width: 44px; }
 
 /* PC 顶栏 Tab 切换（手机隐藏，用底部 TabBar）：纯图标，悬停才出名称 */
 .topbar-tabs { display: flex; gap: 2px; }
@@ -118,6 +123,9 @@ input, select {
 .topbar-tabs .tab:nth-last-child(-n+2)::after {
   left: auto; right: 0; transform: none;
 }
+/* 顶栏右侧外链（GitHub，其右只剩「退出」）：气泡右缘贴按钮右缘，
+   防止居中墨迹伸出顶栏右缘、被祖先滚动区计出横向滚动条 */
+.topbar .gh-link[data-tip]::after { left: auto; right: 0; transform: none; }
 
 /* 结构化提示列表（统计行的链路延迟明细）：真实 DOM，支持多行对齐与合计行 */
 .tip-list {

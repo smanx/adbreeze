@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Terminal } from '@xterm/xterm'
 import { ensureSession, wsUrl } from '../api'
 import { useStore } from '../store'
+import { t, useT } from '../i18n'
 
 // 交互式终端：/ws/term/{serial} PTY（上行 JSON input，下行二进制 ANSI 输出）
 export default function TermPanel() {
@@ -10,6 +11,7 @@ export default function TermPanel() {
   const termRef = useRef<Terminal | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const [state, setState] = useState<'closed' | 'opening' | 'open'>('closed')
+  const tr = useT()
 
   // 动态加载 xterm（避免首屏体积）
   const ensureXterm = async () => {
@@ -48,11 +50,11 @@ export default function TermPanel() {
         dataHandler.dispose()
         setState('closed')
         wsRef.current = null
-        term.write(`\r\n\x1b[33m[终端已关闭${ev.reason ? '：' + ev.reason : ''}]\x1b[0m\r\n`)
+        term.write(`\r\n\x1b[33m[${t('term.closed', { reason: ev.reason ? t('term.reasonSuffix', { reason: ev.reason }) : '' })}]\x1b[0m\r\n`)
       }
     } catch (e) {
       setState('closed')
-      termRef.current?.write(`\r\n\x1b[31m[打开失败: ${(e as Error).message}]\x1b[0m\r\n`)
+      termRef.current?.write(`\r\n\x1b[31m[${t('term.openFailed', { msg: (e as Error).message })}]\x1b[0m\r\n`)
     }
   }
 
@@ -72,10 +74,10 @@ export default function TermPanel() {
   return (
     <div className="panel term-panel">
       <div className="term-bar">
-        <button className="btn" disabled={!selected || state === 'open'} onClick={openTerm}>打开终端</button>
-        <button className="btn ghost" disabled={state !== 'open'} onClick={closeTerm}>关闭</button>
+        <button className="btn" disabled={!selected || state === 'open'} onClick={openTerm}>{tr('term.open')}</button>
+        <button className="btn ghost" disabled={state !== 'open'} onClick={closeTerm}>{tr('common.close')}</button>
         <span className="hint">
-          {state === 'open' ? '已连接' : state === 'opening' ? '连接中…' : selected ? `设备：${selected}` : '请先选择设备'}
+          {state === 'open' ? tr('term.connected') : state === 'opening' ? tr('common.loading') : selected ? tr('term.deviceOf', { s: selected }) : tr('panel.selectDeviceShort')}
         </span>
       </div>
       <div className="term-box" ref={boxRef} />

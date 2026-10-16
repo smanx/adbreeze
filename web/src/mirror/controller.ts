@@ -7,6 +7,7 @@
 //   * WebGL 上屏 + 着色器缩放 + rAF 帧门控 + ResizeObserver 重绘（render.ts）
 //   * h264bsd WASM 软解兜底，可在 HTTP 非安全上下文使用（soft-decoder.ts）
 import { api, wsUrl } from '../api'
+import { t } from '../i18n'
 import { FrameRenderer, type RenderKind } from './render'
 import { H264Decoder, spsProfileIdc } from './decoder'
 import { SoftH264Decoder, hasWebAssembly } from './soft-decoder'
@@ -179,20 +180,20 @@ export interface LatencyInfo {
   note?: string
 }
 
-/** 全链路 8 段的列表行标签（WS 与 WebRTC 共用同一套编号） */
-const STAGE = {
-  capture: '① 设备屏幕合成/采集',
-  encode: '② 设备 H.264 编码',
-  pack: '③ 设备端 scrcpy 打包',
-  adb: '④ adb 隧道（设备→主机）',
-  fanout: '⑤ 后端扇出',
-  net: '⑥ 网络+派发',
-  decode: '⑦ 解码（含排队）',
-  submit: '⑧ 上屏提交',
-  composite: '⑧ 合成等待',
-}
+/** 全链路 8 段的列表行标签（WS 与 WebRTC 共用同一编号；语言切换时随取随译） */
+const stage = () => ({
+  capture: t('lat.stage.capture'),
+  encode: t('lat.stage.encode'),
+  pack: t('lat.stage.pack'),
+  adb: t('lat.stage.adb'),
+  fanout: t('lat.stage.fanout'),
+  net: t('lat.stage.net'),
+  decode: t('lat.stage.decode'),
+  submit: t('lat.stage.submit'),
+  composite: t('lat.stage.composite'),
+})
 /** 不可测段的值：设备侧无时间戳出口 / 时钟不同源，就地标注、不删行 */
-const UNMEASURABLE = '无法计算'
+const unmeasurable = () => t('lat.unmeasurable')
 
 function latReset() {
   lat.fSum = lat.fN = lat.nSum = lat.nN = lat.dSum = lat.dN = lat.rSum = lat.rN = lat.cSum = lat.cN = 0
@@ -228,33 +229,33 @@ function latInfo(): LatencyInfo | null {
   const avg = (sum: number, n: number) => (n > 0 ? Math.round(sum / n) + 'ms' : '—')
   const mean = (sum: number, n: number) => (n > 0 ? sum / n : 0)
   const calib = clockOffsetMs === null
-    ? '时钟未校准'
-    : '时钟校准误差 ±' + Math.max(1, Math.round((clockRttMs ?? 0) / 2)) + 'ms'
+    ? t('lat.clockUncalibrated')
+    : t('lat.clockError', { n: Math.max(1, Math.round((clockRttMs ?? 0) / 2)) })
   // 完整 8 段全列：①~④ 位于设备侧不可测（就地标注，不删行）
   const rows: LatencyRow[] = [
-    { label: STAGE.capture, value: UNMEASURABLE },
-    { label: STAGE.encode, value: UNMEASURABLE },
-    { label: STAGE.pack, value: UNMEASURABLE },
-    { label: STAGE.adb, value: UNMEASURABLE },
-    { label: STAGE.fanout, value: avg(lat.fSum, lat.fN) },
-    { label: STAGE.net, value: avg(lat.nSum, lat.nN) },
+    { label: stage().capture, value: unmeasurable() },
+    { label: stage().encode, value: unmeasurable() },
+    { label: stage().pack, value: unmeasurable() },
+    { label: stage().adb, value: unmeasurable() },
+    { label: stage().fanout, value: avg(lat.fSum, lat.fN) },
+    { label: stage().net, value: avg(lat.nSum, lat.nN) },
   ]
   let total = mean(lat.fSum, lat.fN) + mean(lat.nSum, lat.nN)
   if (decoderKind === 'wasm') {
-    rows.push({ label: '⑦+⑧ 解码+上屏（同步融合）', value: avg(lat.dSum, lat.dN) })
+    rows.push({ label: t('lat.fused'), value: avg(lat.dSum, lat.dN) })
     total += mean(lat.dSum, lat.dN)
   } else {
-    rows.push({ label: STAGE.decode, value: avg(lat.dSum, lat.dN) })
-    rows.push({ label: STAGE.submit, value: avg(lat.rSum, lat.rN) })
+    rows.push({ label: stage().decode, value: avg(lat.dSum, lat.dN) })
+    rows.push({ label: stage().submit, value: avg(lat.rSum, lat.rN) })
     total += mean(lat.dSum, lat.dN) + mean(lat.rSum, lat.rN)
   }
-  rows.push({ label: STAGE.composite, value: avg(lat.cSum, lat.cN) })
+  rows.push({ label: stage().composite, value: avg(lat.cSum, lat.cN) })
   total += mean(lat.cSum, lat.cN)
   return {
-    title: '链路延迟（后端读取→屏幕，' + calib + '）',
+    title: t('lat.title', { calib }),
     rows,
     total: Math.round(total) + 'ms',
-    note: '①~④ 位于设备侧：无时间戳出口 / PTS 时钟与墙钟不同源，无法测算',
+    note: t('lat.noteDevice'),
   }
 }
 
@@ -345,7 +346,7 @@ export function viewRotation(): number {
 function waitKeyframe() {
   waitingKeyframe = true
   setStatus({ phase: 'loading' })
-  showMsg('正在等待画面关键帧…（编码器 GOP 约 2 秒，静止画面下个别机型可能更久）')
+  showMsg(t('mirror.overlayLoading'))
   armFirstFrameTimeout()
 }
 function clearKeyframeWait() {
@@ -371,8 +372,8 @@ function armFirstFrameTimeout() {
     setStatus({
       phase: 'failed',
       msg: webrtcMode
-        ? '画面获取失败：WebRTC 等待首帧超时（设备编码器可能未推流或 ICE 连接失败），可重试或改用 WebCodecs 方案'
-        : '画面获取失败：等待首帧超时（设备可能离线、熄屏或编码器未响应）',
+        ? t('mirror.failWebrtcTimeout')
+        : t('mirror.failTimeout'),
     })
   }, FIRST_FRAME_TIMEOUT)
 }
@@ -404,9 +405,9 @@ function tickStats() {
       const dropTotal = c.skipped + (hwDecoder?.counters.framesDroppedBackpressure ?? 0)
       const dropDelta = dropTotal - lastDropTotal
       lastDropTotal = dropTotal
-      if (dropDelta > 0) parts.push(`丢帧 ${dropDelta}`)
+      if (dropDelta > 0) parts.push(t('stats.drop', { n: dropDelta }))
       const q = hwDecoder?.decodeQueueSize ?? 0
-      if (q > 3) parts.push(`积压 ${q}`)
+      if (q > 3) parts.push(t('stats.backlog', { n: q }))
     }
     setStatus({ stats: parts.join(' · '), latency: latInfo() })
     latReset()
@@ -435,7 +436,7 @@ function ensureRenderer(): FrameRenderer | null {
       // 只能刷新页面重建画布
       onUnrecoverable: () => setStatus({
         phase: 'failed',
-        msg: '画面获取失败：GPU 上下文丢失且无法恢复，请刷新页面后重试',
+        msg: t('mirror.failGpuLost'),
       }),
     })
     if (viewDeg) renderer.setViewRotation(viewDeg)
@@ -452,9 +453,9 @@ function pickDecoderKind(): 'webcodecs' | 'wasm' {
 /** 软解跑不动时可改选的方案（按浏览器真实能力列，避免推荐一个本机也没有的选项） */
 function decodeAlternatives(): string {
   const opts: string[] = []
-  if (hasCodecsSupport()) opts.push('「WebCodecs 硬解」')
+  if (hasCodecsSupport()) opts.push(t('mirror.altCodecs'))
   if (hasRTCSupport()) opts.push('「WebRTC」')
-  return opts.length ? opts.join(' 或 ') : '其他可用方案'
+  return opts.length ? opts.join(t('mirror.altJoin')) : t('mirror.altOthers')
 }
 
 /**
@@ -465,10 +466,9 @@ function decodeAlternatives(): string {
  */
 function softDecodeFailMsg(profile: number | null): string {
   const codec = profile === null
-    ? '当前码流'
-    : '设备输出的 ' + (profile === 100 ? 'High' : 'profile ' + profile) + ' 码流'
-  return '画面获取失败：' + codec + '超出软解码器能力（仅支持 Baseline profile）。'
-    + '请改选' + decodeAlternatives() + '，或把「投屏方案」设为「自动」交给它自动选择'
+    ? t('mirror.currentStream')
+    : t('mirror.deviceStream', { profile: profile === 100 ? 'High' : 'profile ' + profile })
+  return t('mirror.failWasmProfile', { codec, alts: decodeAlternatives() })
 }
 
 /** 重建解码管线（新会话/切换方案/换流）：丢弃解码器、要求新的配置包 */
@@ -615,14 +615,15 @@ let lastTitle = ''
 
 /** meta：设备型号 + 编码尺寸 */
 function setTitleMeta(device: string, w: number, h: number) {
-  lastTitle = `${device}（${w}×${h}）`
+  lastTitle = t('mirror.titleWithSize', { device, w, h })
   setStatus({ title: lastTitle })
 }
 
 /** resize：只换尺寸（没有 meta 就不写，否则会把设备名弄丢） */
 function setTitleSize(w: number, h: number) {
   if (!lastTitle) return
-  lastTitle = lastTitle.replace(/（.*）/, `（${w}×${h}）`)
+  // 括号内整体替换（中英文括号都匹配）：只换尺寸，设备名复用
+  lastTitle = lastTitle.replace(/（.*）|\(.*\)/, t('mirror.titleWithSize', { device: lastTitle.replace(/（.*）|\(.*\)/, ''), w, h }))
   setStatus({ title: lastTitle })
 }
 
@@ -671,9 +672,9 @@ function openVideoWS(serial: string) {
       if (waitingKeyframe) {
         waitingKeyframe = false
         disarmFirstFrameTimeout()
-        setStatus({ phase: 'failed', msg: '画面获取失败：' + (ev.reason || '投屏流未建立即断开') })
+        setStatus({ phase: 'failed', msg: t('mirror.failPrefix') + (ev.reason || t('mirror.streamClosedEarly')) })
       } else {
-        showMsg(ev.reason || '投屏流已结束')
+        showMsg(ev.reason || t('mirror.streamEnded'))
       }
     }
   }
@@ -702,7 +703,7 @@ function tryAudioConnect(serial: string, attempt: number) {
     audioWS = null
     // 4003 = 设备端已明确禁用音频（如 audio_dup 需 Android 13+），不再重试
     if (ev.code === 4003) {
-      if (mirrorSerial === serial) showMsg('设备端音频不可用（audio_dup 需 Android 13+），已按仅视频继续')
+      if (mirrorSerial === serial) showMsg(t('mirror.audioUnavailable'))
       return
     }
     // 尚未就绪：300ms 重试（采集初始化有 1~2 秒延迟）
@@ -738,7 +739,7 @@ function setupAudio(opusHead: Uint8Array) {
   if (audioReady) return
   const channels = opusHead[9]
   const sampleRate = new DataView(opusHead.buffer, opusHead.byteOffset).getUint32(12, true)
-  if (channels < 1 || channels > 8 || sampleRate < 8000) { showMsg('音频头解析失败'); return }
+  if (channels < 1 || channels > 8 || sampleRate < 8000) { showMsg(t('mirror.audioHeaderFail')); return }
   audioReady = true
 
   // 优先 WebCodecs：硬件/低延迟路径（仅在安全上下文可用）
@@ -748,7 +749,7 @@ function setupAudio(opusHead: Uint8Array) {
         if (audioNode) pushAudioData(audioData)
         else audioData.close()
       },
-      error: e => showMsg('音频解码错误: ' + e.message),
+      error: e => showMsg(t('mirror.audioDecodeErr') + e.message),
     })
     audioDecoder.configure({ codec: 'opus', sampleRate, numberOfChannels: channels, description: opusHead.slice() })
     setupAudioWorklet(channels, sampleRate)
@@ -757,13 +758,13 @@ function setupAudio(opusHead: Uint8Array) {
 
   // 兜底：非安全上下文（HTTP + IP）没有 AudioDecoder，改用 libopus WASM 解码。
   // 输出同样是 Float32 PCM，喂进同一条 AudioWorklet 播放管线。
-  if (!hasWebAssembly()) { showMsg('浏览器不支持 WebAssembly，音频不可用'); return }
+  if (!hasWebAssembly()) { showMsg(t('mirror.noWasmAudio')); return }
   const seq = audioSeq
   setupAudioWorklet(channels, sampleRate)
   void createOpusWasmDecoder(opusHead).then(dec => {
     // 等待期间会话可能已结束/切换：丢弃迟到的解码器
     if (seq !== audioSeq || audioDecoder || wasmOpus) { dec?.free(); return }
-    if (!dec) { showMsg('音频软解模块加载失败（WASM），已按仅视频继续'); return }
+    if (!dec) { showMsg(t('mirror.audioWasmLoadFail')); return }
     wasmOpus = dec
     // 排空加载期间缓存的帧：解码器就绪前收到的包无法解，等后续帧自然接上即可
     audioPackets = 0
@@ -902,7 +903,7 @@ function setupAudioWorklet(channels: number, sampleRate: number) {
   const ctx = new AudioContext({ latencyHint: 'interactive', sampleRate })
   audioCtx = ctx
   ctx.onstatechange = () => {
-    if (ctx.state === 'suspended') showMsg('浏览器限制了自动播放——点击画面即可恢复声音')
+    if (ctx.state === 'suspended') showMsg(t('mirror.autoplayBlocked'))
   }
   ctx.resume().catch(() => {})
   const blob = new Blob([workletCode], { type: 'application/javascript' })
@@ -915,7 +916,7 @@ function setupAudioWorklet(channels: number, sampleRate: number) {
     audioGain = ctx.createGain()
     audioGain.gain.value = pageMuted ? 0 : 1
     audioNode.connect(audioGain).connect(ctx.destination)
-  }).catch(e => showMsg('音频播放初始化失败: ' + e.message))
+  }).catch(e => showMsg(t('mirror.audioInitFail') + e.message))
 }
 
 /** WebCodecs 路径：把 AudioData 转成按声道分离的 Float32，交给工作器播放 */
@@ -995,9 +996,9 @@ function openCtrlWS(serial: string) {
     if (!firstFrameShown) {
       // 首帧到达前通道断开：明确转失败，不能停在 loading
       disarmFirstFrameTimeout()
-      setStatus({ phase: 'failed', msg: '画面获取失败：' + (ev.reason || 'WebRTC 控制通道断开') })
+      setStatus({ phase: 'failed', msg: t('mirror.failPrefix') + (ev.reason || t('mirror.failWebrtcCtrlClosed')) })
     } else {
-      showMsg(ev.reason || '投屏流已结束')
+      showMsg(ev.reason || t('mirror.streamEnded'))
     }
   }
 }
@@ -1077,22 +1078,22 @@ async function startWebrtcViewer(serial: string) {
           const bufMs = dFrames > 0 && jbd >= prevJbd ? Math.round((jbd - prevJbd) / dFrames * 1000) : null
           const submitMs = lat.rN > 0 ? lat.rSum / lat.rN : 0
           const latency: LatencyInfo = {
-            title: '链路延迟（RTP 无逐帧打戳）',
+            title: t('lat.titleRtp'),
             rows: [
-              { label: STAGE.capture, value: UNMEASURABLE },
-              { label: STAGE.encode, value: UNMEASURABLE },
-              { label: STAGE.pack, value: UNMEASURABLE },
-              { label: STAGE.adb, value: '合并在抖动缓冲' },
-              { label: STAGE.fanout, value: '合并在抖动缓冲' },
-              { label: STAGE.net, value: '合并在抖动缓冲' },
-              { label: STAGE.decode, value: '合并在抖动缓冲' },
-              { label: STAGE.submit, value: lat.rN > 0 ? Math.round(submitMs) + 'ms' : '—' },
-              { label: STAGE.composite, value: '≈0（rAF 内）' },
-              { label: '抖动缓冲（④~⑦）', value: bufMs === null ? '—' : bufMs + 'ms' },
-              { label: '网络抖动', value: Math.round(jitter * 1000) + 'ms' },
+              { label: stage().capture, value: unmeasurable() },
+              { label: stage().encode, value: unmeasurable() },
+              { label: stage().pack, value: unmeasurable() },
+              { label: stage().adb, value: t('lat.mergedJitter') },
+              { label: stage().fanout, value: t('lat.mergedJitter') },
+              { label: stage().net, value: t('lat.mergedJitter') },
+              { label: stage().decode, value: t('lat.mergedJitter') },
+              { label: stage().submit, value: lat.rN > 0 ? Math.round(submitMs) + 'ms' : '—' },
+              { label: stage().composite, value: t('lat.approxZero') },
+              { label: t('lat.jitterBuffer'), value: bufMs === null ? '—' : bufMs + 'ms' },
+              { label: t('lat.networkJitter'), value: Math.round(jitter * 1000) + 'ms' },
             ],
             total: bufMs === null ? undefined : Math.round(bufMs + submitMs) + 'ms',
-            note: '①~③ 位于设备侧无法测算；RTP 无逐帧打戳，④~⑦ 只能合并报抖动缓冲',
+            note: t('lat.noteRtp'),
           }
           setStatus({ stats: `${fps} fps · ${mbps} Mbps`, latency })
           prevFrames = decoded
@@ -1114,17 +1115,17 @@ async function startWebrtcViewer(serial: string) {
         // 首帧前连接失败：立即转失败并说明原因（如 ICE 不通），不等 12 秒超时
         disarmFirstFrameTimeout()
         waitingKeyframe = false
-        setStatus({ phase: 'failed', msg: '画面获取失败：WebRTC 连接失败（ICE 无法连通，检查网络/防火墙），可重试或改用 WebCodecs 方案' })
+        setStatus({ phase: 'failed', msg: t('mirror.failWebrtcIce') })
       } else {
-        showMsg('WebRTC 连接断开')
+        showMsg(t('mirror.webrtcDisconnected'))
       }
     } else if (pc.connectionState === 'disconnected') {
       if (!firstFrameShown) {
         disarmFirstFrameTimeout()
         waitingKeyframe = false
-        setStatus({ phase: 'failed', msg: '画面获取失败：WebRTC 连接断开' })
+        setStatus({ phase: 'failed', msg: t('mirror.failPrefix') + t('mirror.webrtcDisconnected') })
       } else {
-        showMsg('WebRTC 连接断开')
+        showMsg(t('mirror.webrtcDisconnected'))
       }
     }
   }
@@ -1169,7 +1170,7 @@ export function stopMirror(callApi: boolean) {
   deviceAudio = false
   audioDup = false
   waitingKeyframe = false
-  setStatus({ running: false, title: '投屏', stats: '', msg: '', phase: 'loading', decoderKind: '', renderKind: '', latency: null })
+  setStatus({ running: false, title: t('mirror.title'), stats: '', msg: '', phase: 'loading', decoderKind: '', renderKind: '', latency: null })
 }
 
 // 观众感知停止：还有其他观看者时仅断开本页，不停止共享流
@@ -1179,7 +1180,7 @@ export async function stopMirrorViewerAware() {
     const info = await api<{ viewers?: number }>('GET', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`)
     if ((info.viewers ?? 1) > 1) {
       stopMirror(false)
-      alert('其他页面仍在观看该设备，已仅断开本页（设备端投屏流保持运行）')
+      alert(t('mirror.othersWatching'))
       return
     }
   } catch { /* 查询失败按原行为停止 */ }
@@ -1198,14 +1199,14 @@ function resolveMode(want: MirrorSettings['mode']): { mode: 'codecs' | 'webrtc' 
   let notice = ''
   if (mode === 'auto') mode = hasCodecs ? 'codecs' : hasRTC ? 'webrtc' : 'wasm'
   if (mode === 'codecs' && !hasCodecs) {
-    if (hasRTC) { mode = 'webrtc'; notice = '当前浏览器不支持 WebCodecs（HTTP 非安全上下文或版本过旧），已自动改用 WebRTC 投屏' }
-    else if (hasSoft) { mode = 'wasm'; notice = '当前浏览器不支持 WebCodecs，已自动改用 WASM 软解投屏' }
+    if (hasRTC) { mode = 'webrtc'; notice = t('mirror.fallbackWebrtc') }
+    else if (hasSoft) { mode = 'wasm'; notice = t('mirror.fallbackWasm') }
   } else if (mode === 'webrtc' && !hasRTC) {
-    if (hasCodecs) { mode = 'codecs'; notice = '当前浏览器不支持 WebRTC，已自动改用 WebCodecs 投屏' }
-    else if (hasSoft) { mode = 'wasm'; notice = '当前浏览器不支持 WebRTC，已改用 WASM 软解投屏' }
+    if (hasCodecs) { mode = 'codecs'; notice = t('mirror.fallbackCodecs') }
+    else if (hasSoft) { mode = 'wasm'; notice = t('mirror.fallbackWasm2') }
   } else if (mode === 'wasm' && !hasSoft) {
     mode = hasCodecs ? 'codecs' : 'webrtc'
-    notice = '当前浏览器不支持 WebAssembly，已改用' + (mode === 'codecs' ? ' WebCodecs' : ' WebRTC') + ' 投屏'
+    notice = t('mirror.fallbackNoWasm', { plan: mode === 'codecs' ? 'WebCodecs' : 'WebRTC' })
   }
   return { mode, notice }
 }
@@ -1239,9 +1240,7 @@ function effectiveMode(): 'codecs' | 'webrtc' | 'wasm' {
 export async function startMirror(serial: string) {
   const s = loadMirrorSettings(serial)
   if (!hasCodecsSupport() && !hasRTCSupport() && !hasSoftDecodeSupport()) {
-    alert('当前浏览器不支持 WebCodecs、WebRTC 与 WebAssembly，无法投屏。'
-      + '请使用 Chrome / Edge 94+ 或较新的 Safari'
-      + (codecsBlockedByInsecureContext() ? '\n（当前为 HTTP 非安全上下文访问：WebCodecs 被浏览器禁用，可改用 WebRTC / WASM 软解，或用 localhost 访问、为服务配置 HTTPS 反向代理）' : ''))
+    alert(t('mirror.noSupportAtAll', { httpNote: codecsBlockedByInsecureContext() ? t('mirror.insecureHttpNote') : '' }))
     return
   }
   // 一个标签页只投一台：切换设备前先干净结束当前会话（不删服务端流）
@@ -1252,7 +1251,7 @@ export async function startMirror(serial: string) {
   videoW = 720; videoH = 1280
 
   const { mode, notice } = resolveMode(s.mode || 'auto')
-  setStatus({ running: true, title: serial + ' — 连接中…', stats: '', phase: 'loading', decoderKind: '', renderKind: '', latency: null })
+  setStatus({ running: true, title: t('mirror.connecting', { serial }), stats: '', phase: 'loading', decoderKind: '', renderKind: '', latency: null })
   showMsg(notice)
   // 清掉上一次的画面：等待新首帧前不能让旧帧造成"已在投"的错觉
   resetPipeline()
@@ -1265,7 +1264,7 @@ export async function startMirror(serial: string) {
     openViewer(serial, mode)
     armFirstFrameTimeout() // 启动请求成功但迟迟无首帧 → 超时失败
   } catch (e) {
-    setStatus({ phase: 'failed', msg: '画面获取失败：启动投屏失败 ' + (e as Error).message })
+    setStatus({ phase: 'failed', msg: t('mirror.failStart', { msg: (e as Error).message }) })
   }
 }
 
@@ -1285,7 +1284,7 @@ export async function applySettings(serial: string, next: MirrorSettings) {
       closeViewers()
       openViewer(serial, mode)
     } catch (e) {
-      setStatus({ phase: 'failed', msg: '画面获取失败：切换投屏方案失败 ' + (e as Error).message })
+      setStatus({ phase: 'failed', msg: t('mirror.failSwitch', { msg: (e as Error).message }) })
     } finally {
       mirrorRestarting = false
     }
@@ -1299,7 +1298,7 @@ async function restartStream() {
   if (!serial || mirrorRestarting) return
   mirrorRestarting = true
   // 参数切换（码率/分辨率/帧率/声音）：清画面 + loading，等新参数流首帧
-  setStatus({ phase: 'loading', msg: '正在应用新参数…' })
+  setStatus({ phase: 'loading', msg: t('mirror.applying') })
   try {
     closeViewers()
     await api('DELETE', `/api/devices/${encodeURIComponent(serial)}/mirror`).catch(() => {})
@@ -1314,7 +1313,7 @@ async function restartStream() {
     waitKeyframe()
     openViewer(serial, mode)
   } catch (e) {
-    setStatus({ phase: 'failed', msg: '画面获取失败：重启投屏流失败 ' + (e as Error).message })
+    setStatus({ phase: 'failed', msg: t('mirror.failRestart', { msg: (e as Error).message }) })
   } finally {
     mirrorRestarting = false
   }
