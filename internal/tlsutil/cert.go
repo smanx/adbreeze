@@ -17,6 +17,13 @@
 // 因此改为两层结构：CA 证书长期不变（指纹稳定，作为信任锚只导入一次），
 // 叶证书每次启动按当前网卡 IP + 主机名重新计算 SAN，仅在名字集变化时重签，
 // 重签不影响 CA 指纹，用户无需再信任。这也是 mkcert 的做法。
+//
+// # 追加覆盖名字（ExtraNames）
+//
+// 自动探测只能看到本机网卡 IP 与主机名。Docker 桥接 / NAT 后的外部地址、
+// 自定义域名、反向代理域名等探测不到，可用环境变量 ADBREEZE_TLS_HOSTS /
+// ADBREEZE_TLS_IPS（或 -tls-hosts / -tls-ips）显式追加进 SAN：
+// 自动探测的名字始终保留，两者取并集，不会因为追加而丢掉 localhost 等入口。
 package tlsutil
 
 import (
@@ -68,12 +75,62 @@ func (n certNames) key() string {
 	return strings.Join(d, ",") + "|" + strings.Join(ips, ",")
 }
 
+// ExtraNames 是用户显式指定、要追加进叶证书 SAN 的名字。
+//
+// 来源为环境变量 ADBREEZE_TLS_HOSTS / ADBREEZE_TLS_IPS（或等价的
+// -tls-hosts / -tls-ips 命令行参数），逗号分隔。与自动探测的名字取并集：
+// 自动部分（localhost / 主机名 / 网卡 IP）始终保留，这里只做补充。
+type ExtraNames struct {
+	DNS []string
+	IPs []net.IP
+}
+
+// ParseExtraNames 解析逗号分隔的主机名与 IP 列表（容忍首尾空白与空条目）。
+//
+// 两个容错：
+//   - 主机名写成 IP 形式（如 "192.168.1.5" / "::1" / "[::1]"）时自动归位到 IPs，
+//     这样只配一个变量也不会把 IP 错塞进 DNS SAN；
+//   - 非法 IP 不致命：收集进返回的错误列表由调用方记日志，其余合法条目照常生效。
+func ParseExtraNames(hosts, ips string) (ExtraNames, []error) {
+	var extra ExtraNames
+	var errs []error
+	for _, h := range splitList(hosts) {
+		if ip := net.ParseIP(strings.Trim(h, "[]")); ip != nil {
+			extra.IPs = append(extra.IPs, ip)
+			continue
+		}
+		extra.DNS = append(extra.DNS, h)
+	}
+	for _, s := range splitList(ips) {
+		ip := net.ParseIP(strings.Trim(s, "[]"))
+		if ip == nil {
+			errs = append(errs, fmt.Errorf("不是合法 IP: %q（已忽略）", s))
+			continue
+		}
+		extra.IPs = append(extra.IPs, ip)
+	}
+	return extra, errs
+}
+
+// splitList 按逗号切分并去掉空白与空条目。
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // Ensure 返回可用的证书与私钥路径（叶证书优先，CA 作为信任锚）。
+//
+// extra 是用户显式追加的覆盖名字（见 ExtraNames），与自动探测结果取并集。
 //
 // 已有叶证书且其名字集与当前环境一致时直接复用：保持指纹稳定，
 // 避免每次重启都要在浏览器重新信任一次（浏览器按证书指纹记忆例外）。
-func Ensure(dir string) (certPath, keyPath string, err error) {
-	return ensureWith(dir, sans())
+func Ensure(dir string, extra ExtraNames) (certPath, keyPath string, err error) {
+	return ensureWith(dir, sansWith(extra))
 }
 
 // ensureWith 是 Ensure 的可测版本：允许注入名字集合，便于测试「名字变化触发重签」。
@@ -307,9 +364,44 @@ func sans() certNames {
 	return certNames{dns: dns, ips: ips}
 }
 
-// CoveredNames 返回当前证书覆盖的主机名与 IP（供启动日志与界面展示）。
-func CoveredNames() (dns []string, ips []string) {
+// sansWith 在自动探测的名字集合之上追加用户显式配置的名字，取并集并去重。
+//
+// 去重同时覆盖两种重复：与自动结果重复（如探测到的网卡 IP 又配了一遍），
+// 以及 extra 内部重复。主机名按大小写不敏感去重（DNS 名本身大小写不敏感），
+// 保留首次出现的写法。追加的名字排在自动结果之后，证书内容确定稳定。
+func sansWith(extra ExtraNames) certNames {
 	n := sans()
+	seenDNS := make(map[string]bool, len(n.dns))
+	for _, d := range n.dns {
+		seenDNS[strings.ToLower(d)] = true
+	}
+	seenIP := make(map[string]bool, len(n.ips))
+	for _, ip := range n.ips {
+		seenIP[ip.String()] = true
+	}
+	for _, d := range extra.DNS {
+		k := strings.ToLower(d)
+		if seenDNS[k] {
+			continue
+		}
+		seenDNS[k] = true
+		n.dns = append(n.dns, d)
+	}
+	for _, ip := range extra.IPs {
+		k := ip.String()
+		if seenIP[k] {
+			continue
+		}
+		seenIP[k] = true
+		n.ips = append(n.ips, ip)
+	}
+	return n
+}
+
+// CoveredNames 返回当前证书覆盖的主机名与 IP（供启动日志与界面展示）。
+// extra 为用户显式追加的名字（见 ExtraNames），与自动探测取并集。
+func CoveredNames(extra ExtraNames) (dns []string, ips []string) {
+	n := sansWith(extra)
 	dns = append(dns, n.dns...)
 	for _, ip := range n.ips {
 		ips = append(ips, ip.String())
@@ -319,8 +411,8 @@ func CoveredNames() (dns []string, ips []string) {
 }
 
 // AdvertisedIPs 返回可用于访问的本机 IP 列表（去掉由 localhost 代表的回环地址）。
-func AdvertisedIPs() []string {
-	_, ips := CoveredNames()
+func AdvertisedIPs(extra ExtraNames) []string {
+	_, ips := CoveredNames(extra)
 	out := make([]string, 0, len(ips))
 	for _, ip := range ips {
 		if ip == "127.0.0.1" || ip == "::1" {
@@ -333,7 +425,8 @@ func AdvertisedIPs() []string {
 
 // LocalURLs 依据监听地址（如 ":8443"）拼出可直接访问的 HTTPS 地址列表，
 // 主机名与 IP 都列出——主机名那条在换网后仍免信任，是更稳的入口。
-func LocalURLs(addr string) []string {
+// extra 为用户显式追加的名字，同样会出现在列表里（配域名就是为了用它访问）。
+func LocalURLs(addr string, extra ExtraNames) []string {
 	port := addr
 	if _, p, err := net.SplitHostPort(addr); err == nil {
 		port = p
@@ -343,12 +436,12 @@ func LocalURLs(addr string) []string {
 	if port == "" {
 		port = "443"
 	}
-	dns, _ := CoveredNames()
-	urls := make([]string, 0, len(dns)+len(AdvertisedIPs()))
+	dns, _ := CoveredNames(extra)
+	urls := make([]string, 0, len(dns)+len(AdvertisedIPs(extra)))
 	for _, h := range dns {
 		urls = append(urls, "https://"+net.JoinHostPort(h, port))
 	}
-	for _, ip := range AdvertisedIPs() {
+	for _, ip := range AdvertisedIPs(extra) {
 		urls = append(urls, "https://"+net.JoinHostPort(ip, port))
 	}
 	return urls

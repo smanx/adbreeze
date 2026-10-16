@@ -38,6 +38,10 @@ type Config struct {
 	TLSCert   string // 证书路径，留空则自动生成本地 CA + 叶证书
 	TLSKey    string // 私钥路径，与 TLSCert 成对使用
 	TLSSubdir string // 自动生成证书的存放目录名（位于 DataDir 下）
+	// 追加进自动证书 SAN 的主机名 / IP（逗号分隔），留空则仅按网卡自动探测。
+	// 用于探测不到的场景：Docker 桥接 / NAT 后的外部地址、自定义域名等。
+	TLSHosts string
+	TLSIPs   string
 }
 
 // Parse 解析配置（命令行参数 + 环境变量 + 默认值）。
@@ -55,6 +59,8 @@ func Parse() *Config {
 	flag.StringVar(&cfg.TLSCert, "tls-cert", "", "TLS 证书路径，留空则自动生成本地 CA + 叶证书")
 	flag.StringVar(&cfg.TLSKey, "tls-key", "", "TLS 私钥路径，与 -tls-cert 成对使用")
 	flag.StringVar(&cfg.TLSSubdir, "tls-dir", "tls", "自动生成证书的存放目录名（位于数据目录下）")
+	flag.StringVar(&cfg.TLSHosts, "tls-hosts", "", "追加到证书 SAN 的主机名（逗号分隔），自动探测之外补漏，如反向代理域名")
+	flag.StringVar(&cfg.TLSIPs, "tls-ips", "", "追加到证书 SAN 的 IP（逗号分隔），如 Docker 桥接 / NAT 后的外部地址")
 	flag.Parse()
 
 	if cfg.ShowVersion {
@@ -133,6 +139,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := envStr("TLS_DIR"); v != "" && !set["tls-dir"] {
 		cfg.TLSSubdir = v
+	}
+	if v := envStr("TLS_HOSTS"); v != "" && !set["tls-hosts"] {
+		cfg.TLSHosts = v
+	}
+	if v := envStr("TLS_IPS"); v != "" && !set["tls-ips"] {
+		cfg.TLSIPs = v
 	}
 }
 

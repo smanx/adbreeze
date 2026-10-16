@@ -82,11 +82,19 @@ func main() {
 	if cfg.HTTPS {
 		certPath, keyPath := cfg.TLSCert, cfg.TLSKey
 		var tlsDir string
+		// 用户显式追加的证书覆盖名字（-tls-hosts / -tls-ips，环境变量
+		// ADBREEZE_TLS_HOSTS / ADBREEZE_TLS_IPS）：自动探测只覆盖本机网卡 IP
+		// 与主机名，Docker 桥接 / NAT 后的外部地址、自定义域名靠这里补。
+		// 非法条目不致命：记日志后忽略，其余合法配置照常生效。
+		extra, extraErrs := tlsutil.ParseExtraNames(cfg.TLSHosts, cfg.TLSIPs)
+		for _, e := range extraErrs {
+			log.Printf("[tls] 忽略非法的证书覆盖名字配置: %v", e)
+		}
 		if certPath == "" {
 			// 未指定证书：用本地 CA 签发叶证书（局域网 IP 申请不到受信任证书）。
 			// CA 长期不变，叶证书随当前网卡 IP / 主机名自动重签，故只需信任 CA 一次。
 			tlsDir = filepath.Join(cfg.DataDir, cfg.TLSSubdir)
-			certPath, keyPath, err = tlsutil.Ensure(tlsDir)
+			certPath, keyPath, err = tlsutil.Ensure(tlsDir, extra)
 			if err != nil {
 				log.Fatalf("准备证书失败: %v", err)
 			}
@@ -100,11 +108,11 @@ func main() {
 			}
 		}()
 		log.Printf("HTTPS 就绪（安全上下文，WebCodecs 可用）: https://localhost%s", addr)
-		for _, u := range tlsutil.LocalURLs(addr) {
+		for _, u := range tlsutil.LocalURLs(addr, extra) {
 			log.Printf("       %s", u)
 		}
 		if tlsDir != "" {
-			dns, ips := tlsutil.CoveredNames()
+			dns, ips := tlsutil.CoveredNames(extra)
 			log.Printf("       证书覆盖主机名: %s", strings.Join(dns, ", "))
 			log.Printf("       证书覆盖 IP: %s", strings.Join(ips, ", "))
 			log.Printf("       首次使用请把 CA 导入系统信任库（只需一次，之后 IP/主机名变化都免重导）:")

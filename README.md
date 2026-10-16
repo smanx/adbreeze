@@ -71,6 +71,8 @@ go build -o bin/adbreeze.exe ./cmd/adbreeze
 | adb 路径 | `-adb` | `ADBREEZE_ADB` | 从 PATH 查找 | 也可在网页设置里随时切换 |
 | 数据目录 | `-data` | `ADBREEZE_DATA` | 用户配置目录下的 `ADBreeze` | 存放 TLS 证书，需持久保存 |
 | TLS 证书 | `-tls-cert` / `-tls-key` | `ADBREEZE_TLS_CERT` / `ADBREEZE_TLS_KEY` | 自动生成 | 指定正式证书时成对使用 |
+| 追加证书主机名 | `-tls-hosts` | `ADBREEZE_TLS_HOSTS` | 空 | 逗号分隔；追加进自动证书 SAN 的域名等 |
+| 追加证书 IP | `-tls-ips` | `ADBREEZE_TLS_IPS` | 空 | 逗号分隔；追加进自动证书 SAN 的 IP |
 
 ```bash
 # 环境变量示例（容器 / systemd 等场景）
@@ -114,6 +116,26 @@ WebCodecs（`VideoDecoder` / `AudioDecoder`）只在**安全上下文**暴露，
 CA 与叶证书有效期均为 10 年，无需轮换。想彻底重置就删掉 `tls/` 目录后重启（会生成全新的 CA，此时需重新导入一次）。
 
 > Windows 上的 `curl`（schannel）会因 CA 无吊销信息而报 `revocation status unknown`，这不影响浏览器——Chrome / Edge / Firefox 用自身逻辑校验，导入 CA 后即视为受信任。
+
+#### 追加证书覆盖的主机名 / IP（环境变量）
+
+自动探测只覆盖**本机网卡 IP 与主机名**。下面这些场景里，访问时用的名字探测不到，需要用环境变量显式追加进证书 SAN（逗号分隔，与自动探测取**并集**，localhost 等入口始终保留）：
+
+| 场景 | 配置 |
+|---|---|
+| 自定义域名 / 反向代理域名 | `ADBREEZE_TLS_HOSTS=adb.example.com` |
+| Docker 桥接 / NAT 后的外部地址 | `ADBREEZE_TLS_IPS=203.0.113.10` |
+
+```bash
+# 域名 + 外部 IP 一起配（等价命令行：-tls-hosts adb.example.com -tls-ips 203.0.113.10）
+ADBREEZE_TLS_HOSTS=adb.example.com ADBREEZE_TLS_IPS=203.0.113.10 ./adbreeze
+```
+
+行为说明：
+
+- 追加的名字与自动探测的名字享受同一套机制——**信任一次 CA 永久有效**：名字集变化只重签叶证书，CA 指纹不变，无需重新导入信任
+- 非法 IP 只记日志并忽略，不影响启动；主机名写成 IP 形式（如 `ADBREEZE_TLS_HOSTS=192.168.1.5`）会自动按 IP 处理
+- 仅在**自动生成证书**时有效；指定了 `-tls-cert` 时以该证书自身的 SAN 为准
 
 ### 安装为应用（PWA）
 
