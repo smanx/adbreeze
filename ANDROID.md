@@ -219,3 +219,49 @@ GOOS=android GOARCH=arm64 CGO_ENABLED=0 \
 - [ ] 退到桌面 5 分钟后回来，服务与流仍在
 - [ ] 杀 adb server（Service 停止再拉起）后自动恢复
 - [ ] APK 不含任何源码改动痕迹（主仓库 diff 为空）
+
+---
+
+## 9. 实施落地记录（与设计的差异点）
+
+> 实现见 `android/`（Kotlin 壳）、`scripts/fetch-adb-android.py`（adb 资产拉取）、
+> `Makefile`（android-go / android-apk）、`.github/workflows/android.yml`（CI 自动出包）。
+
+1. **adb 资产自动化**：不把 25MB 二进制提交进 git，由
+   `python scripts/fetch-adb-android.py [aarch64|x86_64]` 从 Termux 仓库拉取
+   android-tools + 依赖 + termux-exec，纯 Python 解析 deb（ar → tar.xz）并按
+   ELF DT_NEEDED 算依赖闭包（只带真实需要的 58 个 so；libc/libdl/liblog/libm
+   用系统自带）。`make android-go` 时资产缺失会自动触发拉取。
+2. **adb server 用 `adb server nodaemon` 前台常驻（最终方案，实测通过）**。
+   不能用 `adb start-server`：其内部 fork+execv 拉起 fork-server 子进程，
+   Android 10+ 下被 SELinux 拦；LD_PRELOAD 钩子（termux-exec）也救不了——
+   它把 execv 重定向到写死的 `/system/bin/linker64`，x86 主机（模拟器）上是
+   x86 版 linker，跑不了 arm64 ELF；且 Go 侧裸 syscall exec 根本不受钩子保护。
+   `server nodaemon` = is_server + no_daemon 且非 fork-server → 不需要
+   ack reply fd、无任何内部 exec，进程由壳的 Service 持有、退出即回收，
+   两个平台通吃。实测在 MuMu 模拟器（x86_64 + houdini）上 server 起来后
+   `adb devices` 直接发现本机设备。termux-exec 库仍随资产打包备用。
+3. **linker64 调用形态 + houdini 兜底**：`ProcessBuilder("/system/bin/linker64",
+   binary, args...)` —— bionic linker 直接调用模式，目标程序看到的 argv[0] 是
+   自己真实路径。x86_64 模拟器（MuMu 等，首选 ABI 非 arm64）改用 NativeBridge
+   自带的 `/system/bin/arm64/linker64` 转译执行 arm64 ELF 及其全部 arm64 so 依赖
+   （x86 版 linker64 会报 "is for EM_AARCH64 (183) instead of EM_X86_64 (62)"）。
+   已实测：Go 静态 PIE 二进制与 adb + 58 个依赖 so 都能跑通。
+4. **Go 原始 syscall exec 不受 LD_PRELOAD 保护**（Go 走 SYS_execve 裸系统调用）：
+   Go 服务内部 `EnsureServer` 的 exec adb 在安卓上永远失败——设计上让壳前置
+   拉起 adb server 使其不可达分支永不触发；副作用是网页设置里「adb 路径测试」
+   在安卓端不可用（已知限制）。已实测：壳前置拉起后 Go 的 Ping 直连 5037，
+   设备发现/列表 API 正常（MuMu 上自动发现本机 adbd）。
+5. **一期仅 arm64-v8a**：Go 的 `android/amd64` 目标需要 cgo 外部链接
+   （纯 Go 不支持），x86_64 依赖 NDK 工具链，列入后续。x86_64 的 adb 资产
+   可用 fetch 脚本随时生成（脚本已双 ABI 支持）。
+6. **HTTPS 关闭**：`ADBREEZE_HTTPS=false`，WebView 加载 `http://127.0.0.1:9080`
+   ——回环地址是浏览器安全上下文，WebCodecs 照常可用，免整套自签 CA。
+7. **构建链**：`make android-apk` = web 构建 → Go 交叉编译（**必须
+   `-checklinkname=0`**：pion 依赖的 wlynxg/anet 用 go:linkname 访问 net 包
+   内部符号，Go 1.23+ 默认拒绝）→ gradlew assembleDebug。CI 见
+   `.github/workflows/android.yml`（push 构建检查，ubuntu-latest 自带 Android
+   SDK）与 `.github/workflows/release.yml`（**release 统一出包**：tag 触发时
+   在 build job 里拉 adb 资产 → assembleRelease → 以 `adbreeze-android.apk`
+   随桌面平台一起挂 release 并计入 checksums；版本号经 `-PappVersion` 注入，
+   versionCode = x*10000+y*100+z 自动推导）。

@@ -275,6 +275,16 @@ pkg install android-tools
 adb connect 127.0.0.1:5555      # 无线调试自连
 ```
 
+### Android（APK）
+
+点击图标即启动服务并用内置 WebView 界面操作设备（Go 服务端 + adb 全部打进 APK，零额外依赖）。
+
+- **获取**：GitHub Release 直接下载 `adbreeze-android.apk`（打 tag 后 CI 自动随桌面平台一起打进 release）；或本地 `make android-apk` 自行打包
+- 点图标 → 前台服务拉起 adb server + Go 服务 → WebView 打开 `http://127.0.0.1:9080`（admin/admin）
+- 连接方式为**无线**：目标设备开「开发者选项 → 无线调试」，在界面里 `adb connect <ip>:<端口>`；也可 `adb connect 127.0.0.1:5555` 投本机自己
+- 常驻通知可「停止服务」；服务掉线自动重拉
+- 架构与实现细节见 [ANDROID.md](ANDROID.md)；CI 见 `.github/workflows/release.yml`（release 统一出包）与 `.github/workflows/android.yml`（push 构建检查）
+
 ## API 概览
 
 HTTP 接口通过 Basic Auth 认证（`Authorization: Basic ...`）。WebSocket 不支持 Basic 弹窗，需先 `POST /api/session` 换取短期会话 cookie，握手时由浏览器自动携带。`/api/health` 与 `/api/session` 之外的接口均受保护。

@@ -1,0 +1,72 @@
+name: android
+
+# 安卓 APK 打包：web 前端 → Go(android/arm64) 服务端 → gradlew assembleDebug
+# adb 及依赖由 scripts/fetch-adb-android.py 从 Termux 仓库拉取（不进 git）
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "android/**"
+      - "scripts/fetch-adb-android.py"
+      - "Makefile"
+      - "cmd/**"
+      - "internal/**"
+      - "assets.go"
+      - "web/src/**"
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Android SDK：ubuntu-latest 自带 ANDROID_HOME 与 platforms/build-tools，
+      # 无需手动安装；gradle wrapper 版本由 android/gradle/wrapper 锁定
+      - name: Build frontend
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+
+      # 拉取 Termux 的 adb + 依赖 so + termux-exec（写入 android assets）
+      - name: Fetch android adb
+        run: python3 scripts/fetch-adb-android.py aarch64
+
+      - name: Cross compile Go server (android/arm64)
+        run: make android-go
+
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew assembleDebug --console=plain --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: adbreeze-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk

@@ -1,0 +1,17 @@
+# 本机路径，不进仓库
+local.properties
+
+# 构建产物
+build/
+.gradle/
+app/build/
+
+# IDE
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 由 scripts/fetch-adb-android.py 与 make android-go 生成的二进制资产（不进 git）
+app/src/main/assets/
