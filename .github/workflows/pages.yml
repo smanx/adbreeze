@@ -1,0 +1,61 @@
+name: pages
+
+# 将前端产物（web/dist）部署到 GitHub Pages。
+# 注意：Pages 上只有静态外壳——/api 与 /ws 需要 ADBreeze 的 Go 服务端，
+# 在 Pages 域名下这些请求会失败（属预期，用作界面预览/演示）。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# GITHUB_TOKEN 部署 Pages 所需的最小权限
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时刻只保留一个 Pages 部署；新推送时取消排队中的旧部署
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Build frontend
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+
+      # Pages 默认经 Jekyll 处理；.nojekyll 关闭它以原样服务 dist 内容
+      - name: Disable Jekyll processing
+        run: touch web/dist/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
