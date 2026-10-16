@@ -86,13 +86,29 @@ input, select {
 .drawer-toggle { display: none; }
 .version-badge { color: var(--muted); font-size: 12px; }
 
-/* PC 顶栏 Tab 切换（手机隐藏，用底部 TabBar） */
+/* PC 顶栏 Tab 切换（手机隐藏，用底部 TabBar）：纯图标，悬停才出名称 */
 .topbar-tabs { display: flex; gap: 2px; }
 .topbar-tabs .tab {
-  border: 0; background: transparent; padding: 6px 12px; border-radius: 6px;
-  font-size: 14px; color: var(--text); cursor: pointer;
+  border: 0; background: transparent; padding: 7px 9px; border-radius: 6px;
+  color: var(--text); cursor: pointer; display: inline-flex; align-items: center;
 }
-.topbar-tabs .tab.active { background: #eaf6ef; color: var(--primary); font-weight: 600; }
+.topbar-tabs .tab.active { background: #eaf6ef; color: var(--primary); }
+
+/* 名称气泡（data-tip）：hover / 键盘聚焦时才显示，触屏无 hover 故底栏保留文字。
+   顶栏 Tab 与投屏工具栏共用；长说明限宽 240px 自动换行 */
+.has-tip { position: relative; }
+.has-tip::after {
+  content: attr(data-tip);
+  position: absolute; top: calc(100% + 7px); left: 50%; transform: translateX(-50%);
+  background: var(--text); color: #fff; font-size: 12px; line-height: 1.5;
+  padding: 5px 9px; border-radius: 4px; white-space: normal; max-width: 240px;
+  width: max-content; text-align: center;
+  opacity: 0; pointer-events: none; transition: opacity .12s; z-index: 90;
+}
+.has-tip:hover::after, .has-tip:focus-visible::after { opacity: 1; }
+
+/* Tab 图标：块级排除行内基线间隙 */
+.ico { display: block; flex: 0 0 auto; }
 
 .app-body { flex: 1; display: flex; min-height: 0; }
 .sidebar {
@@ -567,8 +583,10 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
     padding-bottom: env(safe-area-inset-bottom);
   }
   .tab {
-    flex: 1; border: 0; background: transparent; font-size: 13px; color: var(--muted);
-    cursor: pointer;
+    flex: 1; border: 0; background: transparent; color: var(--muted);
+    cursor: pointer; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 2px; padding: 4px 0;
   }
+  .tab .tab-txt { font-size: 11px; line-height: 1; }
   .tab.active { color: var(--primary); font-weight: 600; }
 }

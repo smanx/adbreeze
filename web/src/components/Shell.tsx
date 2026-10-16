@@ -13,6 +13,7 @@ import AppsPanel from '../panels/AppsPanel'
 import ProcessPanel from '../panels/ProcessPanel'
 import PerfPanel from '../panels/PerfPanel'
 import LayoutPanel from '../panels/LayoutPanel'
+import { Icon } from './Icon'
 
 // 应用外壳：
 //   PC（≥880px）：顶栏 + 左侧设备栏 + 主内容（标签页面板）
@@ -83,12 +84,13 @@ export default function Shell() {
           {TABS.map(t => (
             <button
               key={t.id}
-              className={'tab' + (panel === t.id ? ' active' : '')}
+              className={'tab has-tip' + (panel === t.id ? ' active' : '')}
+              data-tip={t.label}
+              aria-label={t.label}
               onClick={() => setPanel(t.id)}
-            >{t.label}</button>
+            ><Icon name={t.id} /></button>
           ))}
         </nav>
-        <a className="btn ghost" href="./legacy.html" target="_blank" rel="noreferrer">旧版页面</a>
         <button className="btn ghost" onClick={logout}>退出</button>
       </header>
 
@@ -131,7 +133,10 @@ export default function Shell() {
             key={t.id}
             className={'tab' + (panel === t.id ? ' active' : '')}
             onClick={() => setPanel(t.id)}
-          >{t.label}</button>
+          >
+            <Icon name={t.id} />
+            <span className="tab-txt">{t.label}</span>
+          </button>
         ))}
       </nav>
     </div>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
+import { Icon, IconButton } from '../components/Icon'
 import {
   androidKeyFor, applySettings, clipboardGet, clipboardSet, codecsBlockedByInsecureContext, controllerSerial,
   hasCodecsSupport, hasRTCSupport, hasSoftDecodeSupport, initController, loadMirrorSettings, rotateView, sendKey, sendOp, sendScroll, sendText,
@@ -269,26 +270,38 @@ export default function MirrorPanel() {
         )}
         <span className="spacer" />
         {ops.map(op => (
-          <button key={op} className="btn tiny ghost" disabled={!running} onClick={() => sendOp(op)}>{opLabel[op]}</button>
+          <IconButton key={op} tip={opLabel[op]} className="btn tiny ghost" disabled={!running} onClick={() => sendOp(op)}>
+            <Icon name={op} />
+          </IconButton>
         ))}
-        <button className="btn tiny ghost" disabled={!running} onClick={rotateViewClick}
-          title="只旋转网页上的画面，不改变手机方向（点击循环 0°→90°→180°→270°）">
-          ⟳ 旋转画面 {viewDeg}°
-        </button>
-        <button className="btn tiny ghost" disabled={!running} onClick={clipboardGetClick}>取剪贴板</button>
-        <button className="btn tiny ghost" disabled={!running} onClick={clipboardPasteClick}>粘贴到设备</button>
-        <button className="btn tiny" onClick={muteClick}>{muted ? '🔇 已静音' : '🔊 声音'}</button>
-        <button className="btn tiny ghost" onClick={toggleFullscreen} disabled={!fsSupported}>
-          {!fsSupported ? '⛶ 不支持' : fsOn ? '⛶ 退出全屏' : '⛶ 全屏显示'}
-        </button>
-        <button className="btn tiny ghost" onClick={() => setMaxed(v => !v)}
-          title="隐藏页面外壳，让画面占满浏览器窗口（浏览器界面仍在）">
-          {maxed ? '⤡ 退出最大化' : '⤢ 最大化窗口'}
-        </button>
-        <button className="btn tiny ghost" onClick={() => setSettingsOpen(v => !v)}>⚙ 设置</button>
+        <IconButton tip={`旋转画面（只转网页画面）· 当前 ${viewDeg}°`} className="btn tiny ghost" disabled={!running} onClick={rotateViewClick}>
+          <Icon name="rotate" />
+        </IconButton>
+        <IconButton tip="取剪贴板（设备 → 本机）" className="btn tiny ghost" disabled={!running} onClick={clipboardGetClick}>
+          <Icon name="copy" />
+        </IconButton>
+        <IconButton tip="粘贴到设备（本机 → 设备）" className="btn tiny ghost" disabled={!running} onClick={clipboardPasteClick}>
+          <Icon name="clipboard" />
+        </IconButton>
+        <IconButton tip={muted ? '取消静音' : '静音'} className="btn tiny" onClick={muteClick}>
+          <Icon name={muted ? 'speaker-off' : 'speaker'} />
+        </IconButton>
+        <IconButton
+          tip={!fsSupported ? '全屏显示（当前浏览器不支持）' : fsOn ? '退出全屏' : '全屏显示'}
+          className="btn tiny ghost" disabled={!fsSupported} onClick={toggleFullscreen}>
+          <Icon name={fsOn ? 'minimize' : 'maximize'} />
+        </IconButton>
+        <IconButton
+          tip={maxed ? '退出最大化' : '最大化窗口（隐藏页面外壳，画面占满浏览器窗口）'}
+          className="btn tiny ghost" onClick={() => setMaxed(v => !v)}>
+          <Icon name={maxed ? 'collapse' : 'expand'} />
+        </IconButton>
+        <IconButton tip="设置" className="btn tiny ghost" onClick={() => setSettingsOpen(v => !v)}>
+          <Icon name="settings" />
+        </IconButton>
         {running
-          ? <button className="btn tiny danger" onClick={stopClick}>停止</button>
-          : <button className="btn tiny" disabled={!selected} onClick={startClick}>开始投屏</button>}
+          ? <IconButton tip="停止" className="btn tiny danger" onClick={stopClick}><Icon name="stop" /></IconButton>
+          : <IconButton tip="开始投屏" className="btn tiny" disabled={!selected} onClick={startClick}><Icon name="play" /></IconButton>}
       </div>
 
       {settingsOpen && (
@@ -365,9 +378,9 @@ export default function MirrorPanel() {
       </div>
       {/* 最大化时工具栏整体收起，留这个悬浮按钮退出（在 .mirror-head 之外，不会被一起藏） */}
       {maxed && (
-        <button className="btn tiny ghost max-exit" onClick={() => setMaxed(false)}>
-          ⤡ 退出最大化
-        </button>
+        <IconButton tip="退出最大化" className="btn tiny ghost max-exit" onClick={() => setMaxed(false)}>
+          <Icon name="collapse" />
+        </IconButton>
       )}
       {msg && <div className="mirror-msg">{msg}</div>}
       {!selected && <div className="hint" style={{ padding: '6px 2px' }}>请先在设备列表中选择设备。</div>}

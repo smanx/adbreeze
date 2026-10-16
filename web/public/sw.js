@@ -38,7 +38,7 @@ self.addEventListener('fetch', (e) => {
   if (isRealtime(url)) return
 
   // 导航请求：网络优先，断网时回退预缓存的外壳（保证离线可打开）。
-  // 不在此处写缓存——否则打开 /legacy.html 等其它页面会污染离线外壳。
+  // 不在此处写缓存——否则其它页面的导航会污染离线外壳。
   if (req.mode === 'navigate') {
     e.respondWith(
       fetch(req).catch(() =>
