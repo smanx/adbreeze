@@ -30,8 +30,10 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -161,6 +163,102 @@ func ensureWith(dir string, want certNames) (certPath, keyPath string, err error
 
 // CACertPath 返回 CA 证书路径（供界面提示用户导入哪一个文件）。
 func CACertPath(dir string) string { return filepath.Join(dir, caCertName) }
+
+// Info 是当前 HTTPS 证书的可展示元信息（供 API 与设置界面使用）。
+// JSON 字段名与前端 TlsStatus 接口一一对应（驼峰），缺了 tag 序列化出的就是
+// Go 字段名，前端读 undefined 会把「HTTPS 已开启」误判成未开启。
+type Info struct {
+	Enabled     bool     `json:"https"`          // HTTPS 是否开启
+	Custom      bool     `json:"custom"`         // 是否使用用户自备证书（-tls-cert / -tls-key）
+	CAFile      string   `json:"caFile"`         // 自签模式下的 CA 证书文件路径（界面提示用）
+	CADER       []byte   `json:"-"`              // 自签模式下的 CA 证书 DER（下载 / 描述文件用）；自备证书时为空
+	Fingerprint string   `json:"caFingerprint"`  // CA 的 SHA-256 指纹（冒号分隔大写十六进制），便于用户核对装的是哪张
+	DNS         []string `json:"dns"`            // 叶证书覆盖的主机名
+	IPs         []string `json:"ips"`            // 叶证书覆盖的 IP
+	URLs        []string `json:"urls"`           // 可直接访问的 HTTPS 地址（含端口）
+}
+
+// Describe 汇总当前 TLS 配置。enabled 为 HTTPS 是否开启；dir 为自签证书目录
+// （custom 时忽略）；addr 为 HTTPS 监听地址（如 ":9443"），用于拼访问 URL。
+// 读不到 CA（异常场景）时 CADER 与 Fingerprint 为空，由调用方降级展示。
+func Describe(enabled bool, dir string, custom bool, extra ExtraNames, addr string) Info {
+	info := Info{Enabled: enabled, Custom: custom}
+	if !enabled {
+		return info
+	}
+	info.DNS, info.IPs = CoveredNames(extra)
+	info.URLs = LocalURLs(addr, extra)
+	if custom {
+		return info // 自备证书：没有本服务签发的 CA 可安装
+	}
+	info.CAFile = CACertPath(dir)
+	certPEM, err := os.ReadFile(info.CAFile)
+	if err != nil {
+		return info
+	}
+	cert, err := parseCert(certPEM)
+	if err != nil {
+		return info
+	}
+	info.CADER = cert.Raw
+	sum := sha256.Sum256(cert.Raw)
+	hexes := make([]string, len(sum))
+	for i, b := range sum {
+		hexes[i] = fmt.Sprintf("%02X", b)
+	}
+	info.Fingerprint = strings.Join(hexes, ":")
+	return info
+}
+
+// MobileConfig 把 CA 证书 DER 包装成 Apple 配置描述文件（.mobileconfig）。
+//
+// iOS/iPadOS 只能通过描述文件途径安装根证书（直接给 .crt 也会走到描述文件流程），
+// 且装完还必须到「设置 → 通用 → 关于本机 → 证书信任设置」打开完全信任，
+// 两步都做浏览器才不再告警——界面文案必须把第二步讲清楚。
+//
+// PayloadUUID 由证书内容派生：重复安装同一 CA 时 iOS 识别为同一描述文件直接替换，
+// 不会累积出一堆同名条目。
+func MobileConfig(caDER []byte) []byte {
+	sum := sha256.Sum256(caDER)
+	uuid := fmt.Sprintf("%x-%x-%x-%x-%x", sum[0:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
+	const displayName = "ADBreeze Local CA"
+	return []byte(fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.root.certificate</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadIdentifier</key>
+			<string>com.adbreeze.ca</string>
+			<key>PayloadUUID</key>
+			<string>%s</string>
+			<key>PayloadDisplayName</key>
+			<string>%s</string>
+			<key>PayloadContent</key>
+			<data>%s</data>
+		</dict>
+	</array>
+	<key>PayloadDisplayName</key>
+	<string>%s</string>
+	<key>PayloadDescription</key>
+	<string>安装 ADBreeze 本地 CA，用于信任自签 HTTPS 证书（安装后需在「证书信任设置」中开启完全信任）</string>
+	<key>PayloadIdentifier</key>
+	<string>com.adbreeze.ca.profile</string>
+	<key>PayloadUUID</key>
+	<string>%s-profile</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>
+`, uuid, displayName, base64.StdEncoding.EncodeToString(caDER), displayName, uuid))
+}
 
 // ---------- CA ----------
 

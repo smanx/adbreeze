@@ -12,6 +12,7 @@ import (
 	"adbreeze/internal/auth"
 	"adbreeze/internal/scrcpy"
 	"adbreeze/internal/settings"
+	"adbreeze/internal/tlsutil"
 	"adbreeze/internal/webrtc"
 )
 
@@ -29,12 +30,14 @@ type Server struct {
 	mirror   *scrcpy.Manager
 	webrtc   *webrtc.Manager
 	settings *settings.Store
+	tls      tlsutil.Info // HTTPS 证书元信息（设置页证书安装功能用）
 }
 
 // New 组装路由，返回可直接交给 http.Server 的 Handler。
 // corsOrigins 为跨域放行来源（逗号分隔，空 = 不限制），见 cors。
-func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS fs.FS, st *settings.Store, corsOrigins string) http.Handler {
-	s := &Server{auth: a, version: version, mgr: mgr, mirror: mirror, webrtc: webrtc.NewManager(), settings: st}
+// tlsInfo 为当前证书元信息（见 tlsutil.Describe），供证书下载端点使用。
+func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS fs.FS, st *settings.Store, corsOrigins string, tlsInfo tlsutil.Info) http.Handler {
+	s := &Server{auth: a, version: version, mgr: mgr, mirror: mirror, webrtc: webrtc.NewManager(), settings: st, tls: tlsInfo}
 	mux := http.NewServeMux()
 
 	// 健康检查（无需鉴权）
@@ -77,6 +80,10 @@ func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy
 	// 运行时设置（adb 可执行文件路径可随时切换）
 	authed.HandleFunc("GET /api/settings/adb", s.getAdbSettings)
 	authed.HandleFunc("POST /api/settings/adb", s.putAdbSettings)
+	// HTTPS 证书：状态查询 + CA 证书 / Apple 描述文件下载（设置页安装引导）
+	authed.HandleFunc("GET /api/settings/tls", s.tlsStatus)
+	authed.HandleFunc("GET /api/settings/tls/ca.crt", s.downloadCACert)
+	authed.HandleFunc("GET /api/settings/tls/ca.mobileconfig", s.downloadMobileConfig)
 	mux.Handle("/api/", a.Middleware(authed))
 
 	// WebSocket（需鉴权，凭 /api/session 签发的会话 cookie）

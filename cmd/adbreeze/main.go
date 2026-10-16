@@ -65,7 +65,35 @@ func main() {
 		log.Fatalf("内嵌前端资源缺失: %v", err)
 	}
 
-	handler := api.New(auth.New(cfg.Username, cfg.Password), version, mgr, mirror, webFS, st, cfg.CORSOrigins)
+	// 证书覆盖名（-tls-hosts / -tls-ips，环境变量 ADBREEZE_TLS_HOSTS / ADBREEZE_TLS_IPS）：
+	// 用户显式追加的名字覆盖 Docker 桥接 / NAT 后的外部地址、自定义域名等探测不到的场景。
+	// 非法条目不致命：记日志后忽略，其余合法配置照常生效。
+	extra, extraErrs := tlsutil.ParseExtraNames(cfg.TLSHosts, cfg.TLSIPs)
+	for _, e := range extraErrs {
+		log.Printf("[tls] 忽略非法的证书覆盖名字配置: %v", e)
+	}
+	// 自签证书目录（仅自签模式用到；Describe 在自备证书时忽略它）
+	tlsDir := filepath.Join(cfg.DataDir, cfg.TLSSubdir)
+
+	// HTTPS 证书准备（先于 Describe：CA 可能在此刻首次生成， Describe 要读它的指纹）。
+	// 自签模式用本地 CA 签叶证书（局域网 IP 申请不到受信任证书）：
+	// CA 长期不变，叶证书随当前网卡 IP / 主机名自动重签，故只需信任 CA 一次。
+	var certPath, keyPath string
+	if cfg.HTTPS {
+		certPath, keyPath = cfg.TLSCert, cfg.TLSKey
+		if certPath == "" {
+			certPath, keyPath, err = tlsutil.Ensure(tlsDir, extra)
+			if err != nil {
+				log.Fatalf("准备证书失败: %v", err)
+			}
+		}
+	}
+
+	// 证书元信息：设置页「HTTPS 证书」块据此展示指纹/覆盖名字，并提供 CA 下载。
+	// HTTPS 未开启时 Enabled=false，界面引导用户先开 HTTPS。
+	tlsInfo := tlsutil.Describe(cfg.HTTPS, tlsDir, cfg.TLSCert != "", extra, cfg.HTTPSAddr)
+
+	handler := api.New(auth.New(cfg.Username, cfg.Password), version, mgr, mirror, webFS, st, cfg.CORSOrigins, tlsInfo)
 
 	// HTTP 始终开启：它是保底入口——自签名证书在浏览器信任之前只能靠它进界面，
 	// 且 HTTPS 配置出错时不会导致完全失联。
@@ -80,25 +108,6 @@ func main() {
 	// 以 HTTP 访问时浏览器不提供 VideoDecoder，投屏会退化到 WebRTC / 软解。
 	var httpsSrv *http.Server
 	if cfg.HTTPS {
-		certPath, keyPath := cfg.TLSCert, cfg.TLSKey
-		var tlsDir string
-		// 用户显式追加的证书覆盖名字（-tls-hosts / -tls-ips，环境变量
-		// ADBREEZE_TLS_HOSTS / ADBREEZE_TLS_IPS）：自动探测只覆盖本机网卡 IP
-		// 与主机名，Docker 桥接 / NAT 后的外部地址、自定义域名靠这里补。
-		// 非法条目不致命：记日志后忽略，其余合法配置照常生效。
-		extra, extraErrs := tlsutil.ParseExtraNames(cfg.TLSHosts, cfg.TLSIPs)
-		for _, e := range extraErrs {
-			log.Printf("[tls] 忽略非法的证书覆盖名字配置: %v", e)
-		}
-		if certPath == "" {
-			// 未指定证书：用本地 CA 签发叶证书（局域网 IP 申请不到受信任证书）。
-			// CA 长期不变，叶证书随当前网卡 IP / 主机名自动重签，故只需信任 CA 一次。
-			tlsDir = filepath.Join(cfg.DataDir, cfg.TLSSubdir)
-			certPath, keyPath, err = tlsutil.Ensure(tlsDir, extra)
-			if err != nil {
-				log.Fatalf("准备证书失败: %v", err)
-			}
-		}
 		httpsSrv = &http.Server{Addr: cfg.HTTPSAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 		cp, kp, addr := certPath, keyPath, cfg.HTTPSAddr
 		go func() {
@@ -111,12 +120,13 @@ func main() {
 		for _, u := range tlsutil.LocalURLs(addr, extra) {
 			log.Printf("       %s", u)
 		}
-		if tlsDir != "" {
+		if cfg.TLSCert == "" {
 			dns, ips := tlsutil.CoveredNames(extra)
 			log.Printf("       证书覆盖主机名: %s", strings.Join(dns, ", "))
 			log.Printf("       证书覆盖 IP: %s", strings.Join(ips, ", "))
-			log.Printf("       首次使用请把 CA 导入系统信任库（只需一次，之后 IP/主机名变化都免重导）:")
+			log.Printf("       浏览器告警「不受信任」时，把 CA 导入系统信任库即可（只需一次，IP/主机名变化免重导）:")
 			log.Printf("         %s", tlsutil.CACertPath(tlsDir))
+			log.Printf("       也可在 设置 → HTTPS 证书 里直接下载 CA / iOS 描述文件")
 		}
 	}
 

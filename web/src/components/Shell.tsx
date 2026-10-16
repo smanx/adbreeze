@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { clearReconnectTimer, useStore } from '../store'
-import { api, clearSession, loadBackendConfig, normalizeBackendBase, probeBackend, backendBase, type AdbSettings, type AdbSettingsSaveResult } from '../api'
+import { api, apiUrl, authHeaders, clearSession, isCrossOrigin, loadBackendConfig, normalizeBackendBase, probeBackend, backendBase, type AdbSettings, type AdbSettingsSaveResult } from '../api'
 import { Placeholder, TABS } from '../panels'
 import DeviceList from './DeviceList'
 import MirrorPanel from '../panels/MirrorPanel'
@@ -179,6 +179,8 @@ function SettingsPanel() {
 
       <BackendSettings />
 
+      <TlsSettings />
+
       <div className="settings-block">
         <h3>ADB 路径</h3>
         <p className="hint">
@@ -309,6 +311,141 @@ function BackendSettings() {
       {err && <p className="hint error-text">{err}</p>}
       {msg && <p className="hint ok-text">{msg}</p>}
       <p className="hint">当前生效：<code>{backendBase() || '同源（' + location.host + '）'}</code></p>
+    </div>
+  )
+}
+
+interface TlsStatus {
+  https: boolean
+  custom: boolean
+  caFile: string
+  caFingerprint: string
+  dns: string[]
+  ips: string[]
+  urls: string[]
+}
+
+// HTTPS 证书安装引导：自签 CA 导入系统信任库后浏览器不再告警「页面不受信任」。
+// PC（Win/macOS/Linux）、安卓（用户 CA 存储）、iOS（描述文件 + 证书信任开关）均适用；
+// CA 长期不变，安装一次后换网/换 IP/重启都不用再装。
+function TlsSettings() {
+  const [info, setInfo] = useState<TlsStatus | null>(null)
+  const [err, setErr] = useState('')
+
+  const load = async () => {
+    try {
+      setInfo(await api<TlsStatus>('GET', '/api/settings/tls'))
+      setErr('')
+    } catch (e) {
+      setErr('读取证书状态失败: ' + (e as Error).message)
+    }
+  }
+  useEffect(() => { void load() }, [])
+
+  // 下载 CA / 描述文件。同源走导航（自动带凭证；iOS 只在导航时才弹「安装描述文件」）；
+  // 跨源导航带不上 Authorization 头，改 fetch 取 blob。
+  const download = async (path: string, filename: string | null) => {
+    if (!isCrossOrigin()) {
+      const a = document.createElement('a')
+      a.href = apiUrl(path)
+      if (filename) a.download = filename
+      a.click()
+      return
+    }
+    try {
+      const res = await fetch(apiUrl(path), { headers: authHeaders() })
+      if (!res.ok) throw new Error('HTTP ' + res.status)
+      const blob = await res.blob()
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = filename || 'adbreeze-ca'
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+    } catch (e) {
+      setErr('下载失败: ' + (e as Error).message)
+    }
+  }
+
+  if (!info) {
+    return (
+      <div className="settings-block">
+        <h3>HTTPS 证书</h3>
+        <p className="hint">{err || '加载中…'}</p>
+      </div>
+    )
+  }
+
+  if (!info.https) {
+    return (
+      <div className="settings-block">
+        <h3>HTTPS 证书</h3>
+        <p className="hint">
+          HTTPS 未开启（启动参数 <code>-https=false</code>）。开启后浏览器才会把本站视为安全上下文
+          （WebCodecs 硬解可用），届时按本页指引安装一次 CA 证书即可消除「不受信任」提示。
+        </p>
+      </div>
+    )
+  }
+
+  if (info.custom) {
+    return (
+      <div className="settings-block">
+        <h3>HTTPS 证书</h3>
+        <p className="hint">
+          正在使用自备证书（<code>-tls-cert</code> / <code>-tls-key</code>）。
+          请确保证书由受信任的 CA 签发；若是自签证书，需在客户端导入对应的根证书（与下方自签 CA 流程相同，只是文件换成你的根证书）。
+        </p>
+      </div>
+    )
+  }
+
+  const host = location.hostname
+  const covered = info.dns.some(d => d.toLowerCase() === host.toLowerCase()) || info.ips.includes(host)
+
+  return (
+    <div className="settings-block">
+      <h3>HTTPS 证书</h3>
+      <p className="hint">
+        浏览器提示「这个页面不受信任」，是因为本服务使用自签证书（局域网 IP 申请不到受信任证书）。
+        <b>把下面的 CA 证书安装进系统信任库即可彻底消除提示</b>——PC、安卓、iOS 都适用；
+        安装一次长期有效，之后换网络、换 IP、重启服务都不用再装（CA 不变，叶证书自动按当前网卡重签）。
+      </p>
+      <div className="adb-path-row">
+        <button className="btn primary" onClick={() => void download('/api/settings/tls/ca.crt', 'adbreeze-ca.crt')}>
+          下载 CA 证书（.crt）
+        </button>
+        <button className="btn" onClick={() => void download('/api/settings/tls/ca.mobileconfig', null)} title="iOS / iPadOS 专用">
+          下载 iOS 描述文件（.mobileconfig）
+        </button>
+      </div>
+      <p className="hint">
+        CA 指纹（SHA-256，可核对安装的是哪张）：<code>{info.caFingerprint || '（未知）'}</code>
+      </p>
+      <p className="hint">
+        证书覆盖主机名：<code>{info.dns.join('、') || '（无）'}</code>
+        ；IP：<code>{info.ips.join('、') || '（无）'}</code>
+        {!covered && (
+          <><br /><span className="error-text">
+            当前访问地址「{host}」不在证书覆盖范围内——装 CA 也会提示名称不符，请改用上面列出的地址访问，
+            或在启动参数加 -tls-hosts/-tls-ips 追加后重启。
+          </span></>
+        )}
+      </p>
+      <details className="cert-help">
+        <summary>各平台安装方法</summary>
+        <ul>
+          <li><b>Windows</b>：双击 .crt → 安装证书 → 当前用户 → 受信任的根证书颁发机构。
+            或 Chrome 进 <code>chrome://settings/certificates</code> → 权威机构 → 导入。</li>
+          <li><b>macOS</b>：双击 .crt → 添加到「系统」钥匙串 → 在钥匙串访问中右键该证书 → 显示简介 → 「始终信任」。</li>
+          <li><b>Linux</b>：Chrome <code>chrome://settings/certificates</code> → 权威机构 → 导入；
+            或放入 /usr/local/share/ca-certificates 后执行 update-ca-certificates。</li>
+          <li><b>安卓</b>：设置 → 安全 → 加密与凭据 → 安装证书 → CA 证书 → 选择下载的 .crt（需锁屏 PIN）。
+            Chrome 信任用户 CA；其他 App 按安卓 7+ 策略默认不信任用户 CA。</li>
+          <li><b>iOS / iPadOS</b>：下载 .mobileconfig → 设置 → 通用 → VPN与设备管理 → 安装；
+            <b>然后必须</b>到 设置 → 通用 → 关于本机 → 证书信任设置 → 打开「ADBreeze Local CA」的完全信任（少这一步浏览器仍会告警）。</li>
+        </ul>
+      </details>
+      {err && <p className="hint error-text">{err}</p>}
     </div>
   )
 }
