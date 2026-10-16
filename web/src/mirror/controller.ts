@@ -76,6 +76,8 @@ export interface MirrorStatus {
   // 画面阶段：loading = 等待首帧（画布盖遮罩，避免旧帧造成"已在投"的错觉），
   // ready = 首帧已渲染，failed = 等待超时/启动失败（显示失败提示）
   phase: 'loading' | 'ready' | 'failed'
+  /** 链路延迟明细（悬停统计行显示成分段列表；WS 与 WebRTC 口径不同） */
+  latency?: LatencyInfo | null
 }
 
 interface Events {
@@ -138,6 +140,123 @@ let lastTick = 0
 let configData: Uint8Array | null = null
 /** 最近一次对外广播的状态（含初始空值），供组件重挂载时回放 */
 let lastStatus: Partial<MirrorStatus> = {}
+
+// ---------- 链路延迟（悬停统计行出分段列表，按秒平均） ----------
+// 全链路共 8 段，按「同一时钟域内可拿到的时刻」划分可测性：
+//   ① 设备屏幕合成/采集   设备 SurfaceFlinger 内部，无时间戳出口   ❌
+//   ② 设备 H.264 编码     设备 MediaCodec 内部                    ❌
+//   ③ 设备端打包           设备 scrcpy server                     ❌
+//   ④ adb 隧道（设备→主机）PTS 为设备单调时钟，与墙钟不同源         ❌
+//      （①②③④ 合计通常 10~40ms+，视 USB/WiFi 与编码器而定）
+//   ⑤ 后端扇出（读→写）   RecvWall→SendWall，同为后端时钟，免校准 ✅
+//   ⑥ 网络+派发            SendWall→浏览器收到，跨双端墙钟          ✅（需时钟校准）
+//   ⑦ 解码（含排队）       浏览器收到→解码输出                     ✅
+//   ⑧ 上屏提交+合成等待    渲染提交→下一个 rAF（合成器取走画布）     ✅
+// 时钟校准：WS 上跑 NTP 式 ping/pong（浏览器 t0 → 后端 t1/t2 → 浏览器 t3），
+// offset=((t1-t0)+(t2-t3))/2，误差约 RTT/2（局域网 1~3ms）；不校准的话⑥测出来
+// 的是两台机器的时钟差而不是延迟。
+const lat = { fSum: 0, fN: 0, nSum: 0, nN: 0, dSum: 0, dN: 0, rSum: 0, rN: 0, cSum: 0, cN: 0 }
+/** PTS → 浏览器收到时刻：解码输出回调按 frame.timestamp 精确配对（WebCodecs 路径） */
+const arrivalByPts = new Map<number, number>()
+/** performance.now() 折成 Unix 毫秒的基准（老浏览器无 timeOrigin 时回退估算一次） */
+const timeOriginMs = performance.timeOrigin ?? (Date.now() - performance.now())
+/** 时钟偏移：后端时钟 − 浏览器时钟（ms）；null = 尚未校准（⑥ 的结果不可信） */
+let clockOffsetMs: number | null = null
+/** 最近一次 ping/pong 的 RTT（ms），用于标注校准误差 */
+let clockRttMs: number | null = null
+/** 渲染提交序号：只给「最后一帧」计合成等待（中间帧被覆盖，从未上屏） */
+let renderSeq = 0
+
+/** 悬停统计行显示的延迟明细（结构化，供界面渲染成列表） */
+export interface LatencyRow { label: string; value: string }
+export interface LatencyInfo {
+  /** 标题行：口径说明（含时钟校准状态） */
+  title: string
+  /** 全链路各段（按链路顺序；不可测的段也列出，值标「无法计算」） */
+  rows: LatencyRow[]
+  /** 可检测合计（仅各段可加时给出；WebRTC 口径不可加，不设） */
+  total?: string
+  note?: string
+}
+
+/** 全链路 8 段的列表行标签（WS 与 WebRTC 共用同一套编号） */
+const STAGE = {
+  capture: '① 设备屏幕合成/采集',
+  encode: '② 设备 H.264 编码',
+  pack: '③ 设备端 scrcpy 打包',
+  adb: '④ adb 隧道（设备→主机）',
+  fanout: '⑤ 后端扇出',
+  net: '⑥ 网络+派发',
+  decode: '⑦ 解码（含排队）',
+  submit: '⑧ 上屏提交',
+  composite: '⑧ 合成等待',
+}
+/** 不可测段的值：设备侧无时间戳出口 / 时钟不同源，就地标注、不删行 */
+const UNMEASURABLE = '无法计算'
+
+function latReset() {
+  lat.fSum = lat.fN = lat.nSum = lat.nN = lat.dSum = lat.dN = lat.rSum = lat.rN = lat.cSum = lat.cN = 0
+  arrivalByPts.clear()
+  clockOffsetMs = null
+  clockRttMs = null
+  renderSeq = 0
+}
+
+/** 渲染提交后测合成等待：下一个 rAF 即合成器取走画布内容的时刻（0~一个刷新周期） */
+function measureComposite(submitAt: number) {
+  const my = ++renderSeq
+  requestAnimationFrame(() => {
+    if (my !== renderSeq) return // 已被后续帧覆盖：这次提交从未上屏，不计
+    lat.cSum += performance.now() - submitAt
+    lat.cN++
+  })
+}
+
+/** 收到 pong：NTP 式偏移估计；RTT 过大的样本（调度抖动）弃用 */
+function onClockPong(t0: number, t1: number, t2: number) {
+  const t3 = Date.now()
+  const rtt = (t3 - t0) - (t2 - t1)
+  if (rtt < 0 || rtt > 100) return
+  const offset = ((t1 - t0) + (t2 - t3)) / 2
+  clockOffsetMs = clockOffsetMs === null ? offset : clockOffsetMs * 0.5 + offset * 0.5
+  clockRttMs = rtt
+}
+
+/** 生成统计行悬停的延迟列表（WS 路径）；样本不足返回 null（不显示） */
+function latInfo(): LatencyInfo | null {
+  if (lat.fN === 0 && lat.dN === 0) return null
+  const avg = (sum: number, n: number) => (n > 0 ? Math.round(sum / n) + 'ms' : '—')
+  const mean = (sum: number, n: number) => (n > 0 ? sum / n : 0)
+  const calib = clockOffsetMs === null
+    ? '时钟未校准'
+    : '时钟校准误差 ±' + Math.max(1, Math.round((clockRttMs ?? 0) / 2)) + 'ms'
+  // 完整 8 段全列：①~④ 位于设备侧不可测（就地标注，不删行）
+  const rows: LatencyRow[] = [
+    { label: STAGE.capture, value: UNMEASURABLE },
+    { label: STAGE.encode, value: UNMEASURABLE },
+    { label: STAGE.pack, value: UNMEASURABLE },
+    { label: STAGE.adb, value: UNMEASURABLE },
+    { label: STAGE.fanout, value: avg(lat.fSum, lat.fN) },
+    { label: STAGE.net, value: avg(lat.nSum, lat.nN) },
+  ]
+  let total = mean(lat.fSum, lat.fN) + mean(lat.nSum, lat.nN)
+  if (decoderKind === 'wasm') {
+    rows.push({ label: '⑦+⑧ 解码+上屏（同步融合）', value: avg(lat.dSum, lat.dN) })
+    total += mean(lat.dSum, lat.dN)
+  } else {
+    rows.push({ label: STAGE.decode, value: avg(lat.dSum, lat.dN) })
+    rows.push({ label: STAGE.submit, value: avg(lat.rSum, lat.rN) })
+    total += mean(lat.dSum, lat.dN) + mean(lat.rSum, lat.rN)
+  }
+  rows.push({ label: STAGE.composite, value: avg(lat.cSum, lat.cN) })
+  total += mean(lat.cSum, lat.cN)
+  return {
+    title: '链路延迟（后端读取→屏幕，' + calib + '）',
+    rows,
+    total: Math.round(total) + 'ms',
+    note: '①~④ 位于设备侧：无时间戳出口 / PTS 时钟与墙钟不同源，无法测算',
+  }
+}
 
 function setStatus(s: Partial<MirrorStatus>) {
   if (events) events.onStatus(s)
@@ -289,7 +408,8 @@ function tickStats() {
       const q = hwDecoder?.decodeQueueSize ?? 0
       if (q > 3) parts.push(`积压 ${q}`)
     }
-    setStatus({ stats: parts.join(' · ') })
+    setStatus({ stats: parts.join(' · '), latency: latInfo() })
+    latReset()
     frameCount = 0; byteCount = 0; lastTick = now
   }
 }
@@ -362,6 +482,7 @@ function resetPipeline() {
   configData = null
   decoderKind = ''
   renderer?.newSession()
+  latReset()
 }
 
 function reportPipeline() {
@@ -376,7 +497,7 @@ function onDecodeError(message: string) {
   if (!waitingKeyframe) showMsg(message)
 }
 
-function handleVideoFrame(flags: number, pts: number, payload: Uint8Array) {
+function handleVideoFrame(flags: number, pts: number, recvWall: number, sendWall: number, payload: Uint8Array) {
   const isConfig = (flags & 1) !== 0
   const isKey = (flags & 2) !== 0
 
@@ -395,9 +516,21 @@ function handleVideoFrame(flags: number, pts: number, payload: Uint8Array) {
     // 闭包抓住旧实例就会把帧画到已脱离文档的画布上——统计正常但屏幕冻结。
     const paint = (frame: VideoFrame) => {
       firstFrameReady()
+      const outAt = performance.now()
+      const arrival = arrivalByPts.get(frame.timestamp)
+      if (arrival !== undefined) {
+        // 解码：浏览器收到 → 输出（含解码器排队）
+        arrivalByPts.delete(frame.timestamp)
+        lat.dSum += outAt - arrival
+        lat.dN++
+      }
       const r = ensureRenderer()
       if (r) r.render(frame) // 所有权移交渲染器（内部 close）
       else frame.close()
+      // 上屏提交：渲染调用本身（合成在下一 rAF，由 measureComposite 另计）
+      lat.rSum += performance.now() - outAt
+      lat.rN++
+      measureComposite(performance.now())
     }
     if (kind === 'webcodecs') {
       hwDecoder = new H264Decoder({
@@ -445,12 +578,32 @@ function handleVideoFrame(flags: number, pts: number, payload: Uint8Array) {
 
   if (needConfig || (!hwDecoder && !softDecoder)) return // 等首个配置包
 
+  // 传输两段：后端扇出与网络+派发（口径见文件头延迟注释）。
+  // 扇出 = SendWall − RecvWall，同为后端时钟，相减不受双端时钟差影响；
+  // 网络 = 浏览器墙钟 − (SendWall − 时钟偏移)，偏移由 ping/pong 校准，
+  // 未校准时结果含时钟差（文案会标注）。
+  const now = performance.now()
+  const nowWall = now + timeOriginMs
+  lat.fSum += (sendWall - recvWall) / 1000
+  lat.fN++
+  const net = nowWall - (sendWall / 1000 - (clockOffsetMs ?? 0))
+  if (net >= 0 && net < 2000) { lat.nSum += net; lat.nN++ } // 超范围视为异常样本，弃用
+
   const data = (isKey && configData) ? concat(configData, payload) : payload
   if (hwDecoder) {
+    arrivalByPts.set(pts, now) // 供输出回调按 PTS 配对，算解码段耗时
+    if (arrivalByPts.size > 64) arrivalByPts.clear() // 防御：解码器丢帧致配对项残留
     hwDecoder.push({ key: isKey, timestamp: pts, duration: 33333, data })
     return
   }
-  if (softDecoder?.ready) softDecoder.push(data, isKey) // wasm 仍在加载时丢弃
+  if (softDecoder?.ready) {
+    // WASM 同步管线：解码与上屏融合计量
+    const t0 = performance.now()
+    softDecoder.push(data, isKey)
+    lat.dSum += performance.now() - t0
+    lat.dN++
+    measureComposite(performance.now())
+  }
 }
 
 /** 上一次的设备标题（`设备（宽×高）`）：resize 时只换尺寸，设备名复用这里 */
@@ -478,6 +631,12 @@ function openVideoWS(serial: string) {
   ws.binaryType = 'arraybuffer'
   mirrorWS = ws
 
+  // 时钟校准：NTP 式 ping/pong（见 onClockPong）。首帧立即发一次，
+  // 之后每 3s 重估（时钟会漂移，且首次样本可能遇到调度抖动）
+  const ping = () => { try { ws.send(JSON.stringify({ type: 'ping', t0: Date.now() })) } catch { /* 已断 */ } }
+  ping()
+  const pingTimer = setInterval(ping, 3000)
+
   ws.onmessage = ev => {
     if (typeof ev.data === 'string') {
       const msg = JSON.parse(ev.data)
@@ -487,19 +646,25 @@ function openVideoWS(serial: string) {
       } else if (msg.type === 'resize') {
         videoW = msg.width; videoH = msg.height
         setTitleSize(msg.width, msg.height)
+      } else if (msg.type === 'pong') {
+        onClockPong(msg.t0, msg.t1, msg.t2) // NTP 式时钟校准（延迟测量去掉双端时钟差）
       }
       return
     }
     const buf = new Uint8Array(ev.data)
-    if (buf.length < 9) return
+    if (buf.length < 25) return // [1B flags][8B PTS][8B RecvWall][8B SendWall][payload]
     const flags = buf[0]
-    const pts = Number(new DataView(buf.buffer, buf.byteOffset).getBigUint64(1))
-    const payload = buf.subarray(9)
+    const view = new DataView(buf.buffer, buf.byteOffset)
+    const pts = Number(view.getBigUint64(1))
+    const recvWall = Number(view.getBigUint64(9))
+    const sendWall = Number(view.getBigUint64(17))
+    const payload = buf.subarray(25)
     if (!(flags & 1)) { frameCount++; byteCount += payload.length }
     tickStats()
-    handleVideoFrame(flags, pts, payload)
+    handleVideoFrame(flags, pts, recvWall, sendWall, payload)
   }
   ws.onclose = ev => {
+    clearInterval(pingTimer)
     if (mirrorWS !== ws) return
     mirrorWS = null
     if (mirrorSerial) {
@@ -863,27 +1028,76 @@ async function startWebrtcViewer(serial: string) {
         if (webrtcPC !== pc) return
         if (v.videoWidth && canvasEl) {
           videoW = v.videoWidth; videoH = v.videoHeight
+          // 上屏提交耗时（WebRTC 路径唯一可测的浏览器内段；合成在 rAF 内紧跟，≈0）
+          const t0 = performance.now()
           const r = ensureRenderer()
           if (r) r.renderVideo(v)
           else canvasEl.getContext('2d')?.drawImage(v, 0, 0, v.videoWidth, v.videoHeight)
+          lat.rSum += performance.now() - t0
+          lat.rN++
           if (!drewFirst) { drewFirst = true; firstFrameReady() } // 首帧真正画上才解除 loading
         }
         requestAnimationFrame(drawLoop)
       }
       requestAnimationFrame(drawLoop)
-      // 帧率统计：getStats 的 framesDecoded 增量（隐藏 video 的 totalVideoFrames 不可靠）
+      // 帧率/码率统计：getStats 的 framesDecoded 与 bytesReceived 均为累计值，
+      // 取每秒增量（隐藏 video 的 totalVideoFrames 不可靠，故不用它）。
+      // WS 路径的 Mbps 来自帧载荷累计（openVideoWS），这里来自 RTP 层累计，
+      // 两者相差一个 RTP 头开销（<2%），显示口径一致。
       const statsLoop = async () => {
-        let prev = 0
+        let prevFrames = 0
+        let prevBytes = 0
+        let prevJbd = 0 // jitterBufferDelay 累计值（秒）
         while (webrtcPC === pc) {
           await new Promise(res => setTimeout(res, 1000))
           if (webrtcPC !== pc) return
           const st = await pc.getStats()
           let decoded = 0
-          st.forEach(s => { if (s.type === 'inbound-rtp' && s.kind === 'video') decoded = s.framesDecoded })
-          if (decoded > prev) clearKeyframeWait()
-          // 同 tickStats：方案与渲染后端交给徽标，统计行只报帧率
-          setStatus({ stats: `${Math.max(0, decoded - prev)} fps` })
-          prev = decoded
+          let bytes = 0
+          let jbd = 0    // jitterBufferDelay：帧在抖动缓冲累计停留（秒）
+          let jitter = 0 // 网络抖动（秒）
+          st.forEach(s => {
+            if (s.type === 'inbound-rtp' && s.kind === 'video') {
+              decoded = s.framesDecoded ?? decoded
+              bytes = s.bytesReceived ?? bytes
+              jbd = s.jitterBufferDelay ?? jbd
+              jitter = s.jitter ?? jitter
+            }
+          })
+          if (decoded > prevFrames) clearKeyframeWait()
+          const fps = Math.max(0, decoded - prevFrames)
+          // 累计值异常回退（统计重置/换轨）时按 0 计，避免负码率
+          const dBytes = bytes >= prevBytes ? bytes - prevBytes : 0
+          const mbps = (dBytes * 8 / 1e6).toFixed(1)
+          // 同 tickStats：方案与渲染后端交给徽标，统计行只报帧率+码率。
+          // 延迟明细：RTP 没有逐帧打戳通道，④~⑦ 只能合并报抖动缓冲深度
+          // （缓冲按累计秒/帧数增量摊平）；⑧ 上屏提交可测，合成在 rAF 内紧跟（≈0）。
+          // 合计 = 抖动缓冲 + 上屏提交；网络抖动是波动量，不计入合计。
+          const dFrames = decoded - prevFrames
+          const bufMs = dFrames > 0 && jbd >= prevJbd ? Math.round((jbd - prevJbd) / dFrames * 1000) : null
+          const submitMs = lat.rN > 0 ? lat.rSum / lat.rN : 0
+          const latency: LatencyInfo = {
+            title: '链路延迟（RTP 无逐帧打戳）',
+            rows: [
+              { label: STAGE.capture, value: UNMEASURABLE },
+              { label: STAGE.encode, value: UNMEASURABLE },
+              { label: STAGE.pack, value: UNMEASURABLE },
+              { label: STAGE.adb, value: '合并在抖动缓冲' },
+              { label: STAGE.fanout, value: '合并在抖动缓冲' },
+              { label: STAGE.net, value: '合并在抖动缓冲' },
+              { label: STAGE.decode, value: '合并在抖动缓冲' },
+              { label: STAGE.submit, value: lat.rN > 0 ? Math.round(submitMs) + 'ms' : '—' },
+              { label: STAGE.composite, value: '≈0（rAF 内）' },
+              { label: '抖动缓冲（④~⑦）', value: bufMs === null ? '—' : bufMs + 'ms' },
+              { label: '网络抖动', value: Math.round(jitter * 1000) + 'ms' },
+            ],
+            total: bufMs === null ? undefined : Math.round(bufMs + submitMs) + 'ms',
+            note: '①~③ 位于设备侧无法测算；RTP 无逐帧打戳，④~⑦ 只能合并报抖动缓冲',
+          }
+          setStatus({ stats: `${fps} fps · ${mbps} Mbps`, latency })
+          prevFrames = decoded
+          prevBytes = bytes
+          prevJbd = jbd
         }
       }
       statsLoop()
@@ -955,7 +1169,7 @@ export function stopMirror(callApi: boolean) {
   deviceAudio = false
   audioDup = false
   waitingKeyframe = false
-  setStatus({ running: false, title: '投屏', stats: '', msg: '', phase: 'loading', decoderKind: '', renderKind: '' })
+  setStatus({ running: false, title: '投屏', stats: '', msg: '', phase: 'loading', decoderKind: '', renderKind: '', latency: null })
 }
 
 // 观众感知停止：还有其他观看者时仅断开本页，不停止共享流
@@ -1038,7 +1252,7 @@ export async function startMirror(serial: string) {
   videoW = 720; videoH = 1280
 
   const { mode, notice } = resolveMode(s.mode || 'auto')
-  setStatus({ running: true, title: serial + ' — 连接中…', stats: '', phase: 'loading', decoderKind: '', renderKind: '' })
+  setStatus({ running: true, title: serial + ' — 连接中…', stats: '', phase: 'loading', decoderKind: '', renderKind: '', latency: null })
   showMsg(notice)
   // 清掉上一次的画面：等待新首帧前不能让旧帧造成"已在投"的错觉
   resetPipeline()

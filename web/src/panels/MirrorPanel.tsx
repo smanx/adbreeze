@@ -4,7 +4,7 @@ import { Icon, IconButton } from '../components/Icon'
 import {
   androidKeyFor, applySettings, clipboardGet, clipboardSet, codecsBlockedByInsecureContext, controllerSerial,
   hasCodecsSupport, hasRTCSupport, hasSoftDecodeSupport, initController, loadMirrorSettings, rotateView, sendKey, sendOp, sendScroll, sendText,
-  sendTouch, setPageMuted, startMirror, stopMirror, stopMirrorViewerAware, viewRotation, type MirrorSettings,
+  sendTouch, setPageMuted, startMirror, stopMirror, stopMirrorViewerAware, viewRotation, type LatencyInfo, type MirrorSettings,
 } from '../mirror/controller'
 
 const isAppleTouch = /iP(hone|ad|od)/i.test(navigator.userAgent)
@@ -25,6 +25,7 @@ export default function MirrorPanel() {
   const [phase, setPhase] = useState<'loading' | 'ready' | 'failed'>('loading')
   const [decoderKind, setDecoderKind] = useState('')
   const [renderKind, setRenderKind] = useState('')
+  const [latency, setLatency] = useState<LatencyInfo | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settings, setSettings] = useState<MirrorSettings>(loadMirrorSettings(selected))
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -83,6 +84,7 @@ export default function MirrorPanel() {
         if (s.phase !== undefined) setPhase(s.phase)
         if (s.decoderKind !== undefined) setDecoderKind(s.decoderKind)
         if (s.renderKind !== undefined) setRenderKind(s.renderKind)
+        if (s.latency !== undefined) setLatency(s.latency)
       },
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -257,7 +259,28 @@ export default function MirrorPanel() {
     <div className="mirror-panel">
       <div className="mirror-head">
         <span className="m-title">{title}</span>
-        <span className="m-stats">{stats}</span>
+        {/* 统计行悬停展开链路延迟分段列表（不可测的段不列入，见 controller.LatencyInfo） */}
+        <span className={'m-stats' + (latency ? ' has-tip' : '')}>
+          {stats}
+          {latency && (
+            <span className="tip-list">
+              <span className="tip-title">{latency.title}</span>
+              {latency.rows.map(r => (
+                <span className="tip-row" key={r.label}>
+                  <span className="tip-label">{r.label}</span>
+                  <span className="tip-value">{r.value}</span>
+                </span>
+              ))}
+              {latency.total && (
+                <span className="tip-row tip-total">
+                  <span className="tip-label">可检测合计</span>
+                  <span className="tip-value">{latency.total}</span>
+                </span>
+              )}
+              {latency.note && <span className="tip-note">{latency.note}</span>}
+            </span>
+          )}
+        </span>
         {running && decoderKind && (
           <span className="m-badge" title={'方案：' + planLabel(decoderKind) + '（解码 ' + decoderKind + ' / 渲染 ' + renderKind + '）'}>
             {/* 显示实际生效的方案名（与设置面板下拉一致）：硬解/软解是手段，

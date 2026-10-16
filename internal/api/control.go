@@ -7,7 +7,7 @@ import (
 // controlEvent 是视频 WS 上行的控制事件（浏览器 → 服务端）。
 // 坐标均为视频像素坐标（前端按 canvas 实际分辨率换算）。
 type controlEvent struct {
-	Type   string `json:"type"` // touch / key / text / scroll / op
+	Type   string `json:"type"` // touch / key / text / scroll / op / ping
 	Action string `json:"action,omitempty"`
 	X      int    `json:"x,omitempty"`
 	Y      int    `json:"y,omitempty"`
@@ -18,6 +18,7 @@ type controlEvent struct {
 	DX     int    `json:"dx,omitempty"`
 	DY     int    `json:"dy,omitempty"`
 	Name   string `json:"name,omitempty"` // op: back/home/menu/rotate/notify/power/volup/voldn
+	T0     int64  `json:"t0,omitempty"`   // ping: 浏览器发送时刻（墙钟毫秒），时钟同步用
 }
 
 // handleControlEvent 解析并编码为 scrcpy ControlMessage 发送到设备。

@@ -95,17 +95,45 @@ input, select {
 .topbar-tabs .tab.active { background: #eaf6ef; color: var(--primary); }
 
 /* 名称气泡（data-tip）：hover / 键盘聚焦时才显示，触屏无 hover 故底栏保留文字。
-   顶栏 Tab 与投屏工具栏共用；长说明限宽 240px 自动换行 */
+   顶栏 Tab 与投屏工具栏共用；长说明限宽 300px 自动换行。
+   仅在带 data-tip 时生成伪元素——结构化列表（.tip-list）走真实 DOM，两者互斥。
+   ⚠️ position:relative 是两类提示共同的定位锚，删了它们会全部错位到包含块底部。 */
 .has-tip { position: relative; }
-.has-tip::after {
+.has-tip[data-tip]::after {
   content: attr(data-tip);
   position: absolute; top: calc(100% + 7px); left: 50%; transform: translateX(-50%);
   background: var(--text); color: #fff; font-size: 12px; line-height: 1.5;
-  padding: 5px 9px; border-radius: 4px; white-space: normal; max-width: 240px;
+  padding: 5px 9px; border-radius: 4px; white-space: pre-line; max-width: 300px;
   width: max-content; text-align: center;
   opacity: 0; pointer-events: none; transition: opacity .12s; z-index: 90;
 }
-.has-tip:hover::after, .has-tip:focus-visible::after { opacity: 1; }
+.has-tip[data-tip]:hover::after, .has-tip[data-tip]:focus-visible::after { opacity: 1; }
+
+/* 右缘按钮的气泡改右对齐（右缘贴按钮右缘）：居中显示时会伸出容器右缘，
+   绝对定位墨迹被 .content（overflow:auto）计入滚动区而顶出横向滚动条
+   （不悬停也存在——opacity:0 的伪元素仍计布局溢出）。
+   气泡最宽 300px（max-width），右缘 4 个按钮右对齐后必然完全在容器内；
+   顶栏最后 2 个 Tab 同理（右侧还有「退出」兜底，这里再加一层保险）。 */
+.mirror-head .has-tip:nth-last-child(-n+4)::after,
+.topbar-tabs .tab:nth-last-child(-n+2)::after {
+  left: auto; right: 0; transform: none;
+}
+
+/* 结构化提示列表（统计行的链路延迟明细）：真实 DOM，支持多行对齐与合计行 */
+.tip-list {
+  position: absolute; top: calc(100% + 7px); left: 50%; transform: translateX(-50%);
+  background: var(--text); color: #fff; font-size: 12px; line-height: 1.5;
+  padding: 7px 10px; border-radius: 4px; min-width: 250px; max-width: 340px;
+  display: flex; flex-direction: column; gap: 2px; text-align: left;
+  box-shadow: 0 4px 14px #0003;
+  opacity: 0; pointer-events: none; transition: opacity .12s; z-index: 90;
+}
+.has-tip:hover .tip-list, .has-tip:focus-visible .tip-list { opacity: 1; }
+.tip-list .tip-title { color: #ffffffb3; margin-bottom: 2px; }
+.tip-list .tip-row { display: flex; justify-content: space-between; gap: 18px; }
+.tip-list .tip-value { font-variant-numeric: tabular-nums; }
+.tip-list .tip-total { border-top: 1px solid #ffffff40; margin-top: 3px; padding-top: 3px; font-weight: 600; }
+.tip-list .tip-note { color: #ffffffb3; font-size: 11px; margin-top: 4px; line-height: 1.4; }
 
 /* Tab 图标：块级排除行内基线间隙 */
 .ico { display: block; flex: 0 0 auto; }
@@ -178,8 +206,14 @@ input, select {
 /* ---------- 投屏面板 ---------- */
 /* 面板占满内容区高度：头部/设置为固定高度，画面区 flex:1 吃掉剩余空白，
    这样舞台才有「与画布无关的确定尺寸」供渲染器测量（否则画布尺寸←盒子尺寸
-   ←画布尺寸 循环，画面只能缩在中间）。 */
-.mirror-panel { height: 100%; display: flex; flex-direction: column; gap: 8px; }
+   ←画布尺寸 循环，画面只能缩在中间）。
+   overflow:hidden 是安全网：绝对定位的悬停气泡万一伸出面板（如更宽的新
+   tooltip），裁掉也不该把溢出传播到 .content（overflow:auto）顶出横向滚动条。
+   气泡的常规避让见下方 .has-tip 右对齐规则——两条配合才既无滚动条又不切气泡。 */
+.mirror-panel {
+  height: 100%; display: flex; flex-direction: column; gap: 8px;
+  overflow: hidden;
+}
 .mirror-head {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px;

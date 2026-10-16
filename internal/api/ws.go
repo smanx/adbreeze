@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -63,7 +64,12 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 //
 // 服务端 → 客户端：
 //   - 第一条 JSON 文本消息: {"type":"meta","serial":...,"device":...,"codec":"h264","width":...,"height":...}
-//   - 二进制帧: [1B flags( bit0=config, bit1=key )][8B PTS u64 BE][H.264 AnnexB 载荷]
+//   - 二进制帧: [1B flags( bit0=config, bit1=key )][8B PTS u64 BE][8B RecvWall u64 BE][8B SendWall u64 BE][H.264 AnnexB 载荷]
+//     RecvWall 是后端读到该帧的墙钟（Unix 微秒），SendWall 是 WS 写出的墙钟：
+//     前端据此把「后端→浏览器」拆成后端扇出（读→写，含 hub 队列）与网络+派发两段。
+//     设备 PTS 是设备编码器的单调时钟，与墙钟不同源，故延迟只能分段测。
+//   - 时钟同步: {"type":"pong","t0":<回显>,"t1":<后端收到>,"t2":<后端发出>}（墙钟毫秒，
+//     回应客户端的 {"type":"ping","t0":...}）——传输段要跨双端墙钟相减，必须先校准偏移
 //   - 尺寸变化时发送 JSON 文本消息: {"type":"resize","width":..,"height":..}
 //
 // 客户端 → 服务端：JSON 控制事件（touch/key/text/scroll/op，见 control.go）。
@@ -86,6 +92,20 @@ func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	// 写互斥：帧写出（主循环）与 pong 回复（读协程）共用同一 conn，
+	// gorilla 要求写操作串行
+	var writeMu sync.Mutex
+	sendFrame := func(p scrcpy.Packet) bool {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return sendVideoPacket(conn, p)
+	}
+	writeJSON := func(v any) bool {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return conn.WriteJSON(v) == nil
+	}
+
 	if err := conn.WriteJSON(map[string]any{
 		"type":   "meta",
 		"serial": info.Serial,
@@ -99,12 +119,13 @@ func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
 
 	// 补发缓存的配置包，让后加入的观看者尽快可解码
 	if cachedConfig != nil {
-		if !sendPacket(conn, scrcpy.Packet{Kind: scrcpy.PacketVideo, Config: true, Data: cachedConfig}) {
+		if !sendFrame(scrcpy.Packet{Kind: scrcpy.PacketVideo, Config: true, Data: cachedConfig}) {
 			return
 		}
 	}
 
-	// 读协程：控制事件（JSON）→ ControlMessage → 设备
+	// 读协程：控制事件（JSON）→ ControlMessage → 设备；
+	// ping 单独应答 pong（NTP 式时钟同步，见文件头注释）
 	go func() {
 		sink := &controlEventSink{
 			videoSize: func() (int, int) {
@@ -126,18 +147,27 @@ func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
 			if json.Unmarshal(data, &ev) != nil {
 				continue
 			}
+			if ev.Type == "ping" {
+				t1 := time.Now().UnixMilli()
+				t2 := time.Now().UnixMilli()
+				writeJSON(map[string]any{"type": "pong", "t0": ev.T0, "t1": t1, "t2": t2})
+				continue
+			}
 			_ = handleControlEvent(sink, &ev) // 控制失败不影响视频流
 		}
 	}()
 
 	for p := range sub.Chan() {
 		if p.Kind == scrcpy.PacketResize {
-			if err := conn.WriteMessage(websocket.TextMessage, p.Data); err != nil {
+			writeMu.Lock()
+			werr := conn.WriteMessage(websocket.TextMessage, p.Data)
+			writeMu.Unlock()
+			if werr != nil {
 				return
 			}
 			continue
 		}
-		if !sendPacket(conn, p) {
+		if !sendFrame(p) {
 			return
 		}
 	}
@@ -274,7 +304,7 @@ func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
 		websocket.FormatCloseMessage(websocket.CloseGoingAway, "audio ended"))
 }
 
-// sendPacket 把一帧按 [flags][pts][payload] 封帧写出。
+// sendPacket 把一帧按 [flags][pts][payload] 封帧写出（音频通道，9B 头）。
 func sendPacket(conn *websocket.Conn, p scrcpy.Packet) bool {
 	buf := make([]byte, 9, 9+len(p.Data))
 	var flags byte
@@ -288,4 +318,45 @@ func sendPacket(conn *websocket.Conn, p scrcpy.Packet) bool {
 	binary.BigEndian.PutUint64(buf[1:9], p.PTS)
 	buf = append(buf, p.Data...)
 	return conn.WriteMessage(websocket.BinaryMessage, buf) == nil
+}
+
+// sendVideoPacket 把一帧按 [flags][pts u64 BE][recvWall u64 BE][sendWall u64 BE][payload]
+// 封帧写出（视频通道，25B 头）。比音频多 16B 两个后端墙钟：
+//   - recvWall：从设备隧道读到该帧的时刻（调用方经 Packet.RecvWall 传入，0 则取当前）
+//   - sendWall：WS 写出时刻（本函数打戳）
+// 前端据此把「后端→浏览器」拆成 后端扇出（recvWall→sendWall，含 hub 队列）与
+// 网络+派发（sendWall→浏览器收到）两段；两戳同为后端时钟，相减不受双端时钟差影响，
+// 只有网络段需要先做 ping/pong 时钟校准。设备 PTS 为设备编码器的单调时钟，与墙钟
+// 不可比，只能分段测，见 scrcpy.Packet.RecvWall。
+func sendVideoPacket(conn *websocket.Conn, p scrcpy.Packet) bool {
+	recvWall := p.RecvWall
+	if recvWall == 0 {
+		recvWall = time.Now().UnixMicro()
+	}
+	sendWall := time.Now().UnixMicro()
+	var flags byte
+	if p.Config {
+		flags |= 1
+	}
+	if p.Key {
+		flags |= 2
+	}
+	buf := make([]byte, 25, 25+len(p.Data))
+	buf[0] = flags
+	binary.BigEndian.PutUint64(buf[1:9], p.PTS)
+	binary.BigEndian.PutUint64(buf[9:17], uint64(recvWall))
+	binary.BigEndian.PutUint64(buf[17:25], uint64(sendWall))
+	buf = append(buf, p.Data...)
+	return conn.WriteMessage(websocket.BinaryMessage, buf) == nil
+}
+
+// encodeVideoFrame 封一帧：[1B flags][8B PTS BE][8B recvWall BE][8B sendWall BE][payload]。
+// 与前端 controller.ts 的解析（偏移 0/1/9/17，载荷自 25 起）一一对应，改动需同步。
+func encodeVideoFrame(flags byte, pts, recvWall, sendWall uint64, payload []byte) []byte {
+	buf := make([]byte, 25, 25+len(payload))
+	buf[0] = flags
+	binary.BigEndian.PutUint64(buf[1:9], pts)
+	binary.BigEndian.PutUint64(buf[9:17], recvWall)
+	binary.BigEndian.PutUint64(buf[17:25], sendWall)
+	return append(buf, payload...)
 }

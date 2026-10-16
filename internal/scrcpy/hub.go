@@ -14,7 +14,11 @@ type Packet struct {
 	Config bool   // SPS/PPS 等配置包
 	Key    bool   // 关键帧
 	PTS    uint64 // 微秒
-	Data   []byte // H.264 AnnexB 裸流（PacketVideo）或 JSON（PacketResize）
+	// RecvWall 是后端从设备隧道读到该帧的墙钟（Unix 微秒）。
+	// 设备 PTS 取自设备编码器（单调时钟、任意原点），与墙钟不同源，
+	// 两端只能各算各的段：前端用它算「后端收到→浏览器收到」的传输延迟。
+	RecvWall int64
+	Data     []byte // H.264 AnnexB 裸流（PacketVideo）或 JSON（PacketResize）
 }
 
 // Subscriber 是一个流订阅者（对应一个 WebSocket 客户端）。

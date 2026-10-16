@@ -622,11 +622,12 @@ func (s *Stream) readLoop() {
 			return
 		}
 		s.hub.Broadcast(Packet{
-			Kind:   PacketVideo,
-			Config: ptsFlags&(1<<62) != 0,
-			Key:    ptsFlags&(1<<61) != 0,
-			PTS:    ptsFlags &^ (1<<63 | 1<<62 | 1<<61),
-			Data:   data,
+			Kind:     PacketVideo,
+			Config:   ptsFlags&(1<<62) != 0,
+			Key:      ptsFlags&(1<<61) != 0,
+			PTS:      ptsFlags &^ (1<<63 | 1<<62 | 1<<61),
+			RecvWall: time.Now().UnixMicro(),
+			Data:     data,
 		})
 
 		// 配置包携带 SPS：旋转/分辨率变化时解析新尺寸并广播 resize 事件
