@@ -31,13 +31,17 @@ func NewManager() *Manager {
 
 // Session 是单个观看者的 WebRTC 会话。
 type Session struct {
-	id        string
-	pc        *webrtc.PeerConnection
-	videoSub  *scrcpy.Subscriber
-	videoCap  func()
-	audioSub  *scrcpy.Subscriber
-	audioCap  func()
-	closeOnce sync.Once
+	id       string
+	pc       *webrtc.PeerConnection
+	videoSub *scrcpy.Subscriber
+	videoCap func()
+	// audioSub/audioCap 由 pumpAudio 协程后台晚到赋值（等设备采集就绪），
+	// close 可能并发读取：统一用 mu 保护，closed 保证 close 幂等
+	audioSub *scrcpy.Subscriber
+	audioCap func()
+
+	mu     sync.Mutex
+	closed bool
 }
 
 // Create 与浏览器完成信令（offer → answer）并开始推流。
@@ -82,21 +86,20 @@ func (m *Manager) Create(serial string, mirror *scrcpy.Manager, offer webrtc.Ses
 		return webrtc.SessionDescription{}, fmt.Errorf("创建视频轨失败: %w", err)
 	}
 
-	// 音频轨：音频采集就绪通常在投屏启动后 1~2 秒，轮询等待（不阻塞视频）。
-	// 超时上限 3 秒：设备禁用音频时（如 audio_dup 需 Android 13+）SubscribeAudio
-	// 永远失败，等太久会把 answer 拖到关键帧窗口之后，导致浏览器错过首个 IDR。
+	// 音频轨：按「流是否带音频 socket」立即决定，不再轮询等采集就绪。
+	// 设备音频采集初始化要 1~2 秒，等它会把 answer 拖到关键帧窗口之后——
+	// WebRTC 首帧预算总共只有 12 秒，视频不该给音频让路。采集未就绪时由
+	// pumpAudio 在后台等订阅（音频晚几秒出无声感），answer 立即返回。
 	var aTrack *webrtc.TrackLocalStaticSample
-	aSub, aCap := waitAudio(mirror, serial, 3*time.Second)
-	if aCap != nil {
-		s.audioSub, s.audioCap = aSub, aCap
+	if mirror.AudioAttachable(serial) {
 		aTrack, err = webrtc.NewTrackLocalStaticSample(
 			webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, Channels: 2}, "audio", "adbreeze")
 		if err == nil {
 			_, err = pc.AddTrack(aTrack)
 		}
 		if err != nil {
-			aCap()
-			s.audioSub, s.audioCap, aTrack = nil, nil, nil
+			log.Printf("[webrtc:%s] 音频轨挂载失败，继续仅视频: %v", serial, err)
+			aTrack, err = nil, nil
 		}
 	}
 
@@ -136,11 +139,14 @@ func (m *Manager) Create(serial string, mirror *scrcpy.Manager, offer webrtc.Ses
 	m.alls[s.id] = s
 	m.mu.Unlock()
 
-	if s.audioSub != nil {
-		go s.pumpAudio(aTrack)
+	if aTrack != nil {
+		// 音频轨已挂上：后台等采集就绪再推流（不阻塞 answer，见上）
+		go s.pumpAudio(aTrack, mirror, serial)
 	}
-	go s.pumpVideo(vTrack, vCfg)
-	log.Printf("[webrtc:%s] 会话已建立（%dx%d，audio=%v）", serial, info.Width, info.Height, s.audioSub != nil)
+	// 视频推流等 SRTP 就绪再启动：协商窗口内 pion 静默丢弃写入，首关键帧
+	// 一旦落在窗口里就被吞掉，只能再等一个 GOP（i-frame-interval=2）
+	go s.pumpVideoWhenReady(vTrack, vCfg)
+	log.Printf("[webrtc:%s] 会话已建立（%dx%d，audio=%v）", serial, info.Width, info.Height, aTrack != nil)
 	return ans, nil
 }
 
@@ -161,20 +167,42 @@ func waitAudio(mirror *scrcpy.Manager, serial string, timeout time.Duration) (*s
 
 // Remove 关闭并移除会话（PC 断开或服务端清理时触发，幂等）。
 func (m *Manager) Remove(s *Session) {
-	s.closeOnce.Do(func() {
-		if s.videoCap != nil {
-			s.videoCap()
+	s.close()
+	m.mu.Lock()
+	delete(m.alls, s.id)
+	m.mu.Unlock()
+}
+
+// pumpVideoWhenReady 等连接就绪后再启动视频推流。
+//
+// pion 在 SRTP 会话建立前对 WriteSample 静默丢弃（返回 nil、不报错，见
+// srtpWriterFuture.WriteRTP → init(true) 的 default 分支）：协商窗口内写入的
+// 帧全部蒸发。首个关键帧若落在这个窗口里就被吞掉，浏览器没有参考帧，只能
+// 再等一个 GOP（i-frame-interval=2，2 秒）才能出画——这正是 WebRTC 首帧
+// 超时高概率的根因。PeerConnectionStateConnected 即 ICE 与 DTLS 均完成、
+// SRTP 会话已建立，从此刻起写入才真正上行。
+//
+// 轮询而非事件回调：连接终止时 ConnectionState 变为 failed/closed/
+// disconnected，本函数据此自行退出，不依赖会话生命周期信号、也不会拖住
+// Remove；deadline 兜底覆盖「offer 无候选、ICE 永远不连」的病态路径。
+func (s *Session) pumpVideoWhenReady(track *webrtc.TrackLocalStaticSample, cachedConfig []byte) {
+	const readyWait = 15 * time.Second // 超过前端 12s 看门狗：到点仍按旧行为推流（写入被丢弃），避免协程常驻
+	deadline := time.Now().Add(readyWait)
+	for {
+		switch s.pc.ConnectionState() {
+		case webrtc.PeerConnectionStateConnected:
+			log.Printf("[webrtc] SRTP 就绪，开始推流")
+			s.pumpVideo(track, cachedConfig)
+			return
+		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed, webrtc.PeerConnectionStateDisconnected:
+			return // 连接已终止：Remove 会取消订阅，无需推流
 		}
-		if s.audioCap != nil {
-			s.audioCap()
+		if time.Now().After(deadline) {
+			s.pumpVideo(track, cachedConfig)
+			return
 		}
-		if s.pc != nil {
-			_ = s.pc.Close()
-		}
-		m.mu.Lock()
-		delete(m.alls, s.id)
-		m.mu.Unlock()
-	})
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // pumpVideo 把 hub 视频帧写入 WebRTC 轨：从首个关键帧开始发（P 帧先到时丢弃），
@@ -218,8 +246,9 @@ func (s *Session) pumpVideo(track *webrtc.TrackLocalStaticSample, cachedConfig [
 		if havePTS && p.PTS > lastPTS {
 			dur = time.Duration(p.PTS-lastPTS) * time.Microsecond
 		}
-		// 轨道尚未完成协商绑定时写帧会报错：丢弃并回退关键帧状态——首个 IDR 若在
-		// 绑定前到达已被丢弃，后续 P 帧失去参考，必须等下一个关键帧再开始推流
+		// 写入失败（会话已关闭等）：丢弃并回退关键帧状态。注意 pion 在 SRTP
+		// 就绪前是静默丢弃（WriteSample 返回 nil、帧蒸发），那种帧不会走到
+		// 这里——推流起点由 pumpVideoWhenReady 保证在 SRTP 就绪之后
 		if err := track.WriteSample(media.Sample{Data: data, Duration: dur}); err != nil {
 			if keySeen {
 				keySeen = false
@@ -238,9 +267,26 @@ func (s *Session) pumpVideo(track *webrtc.TrackLocalStaticSample, cachedConfig [
 // 设备静默后恢复时还有亚毫秒增量），而 opus 包内容时长是固定的——OPPO 实测 TOC=0xFC
 // （config 31 = CELT 全频带 20ms 单帧）。用抖动的 PTS 增量推进时间戳会让浏览器 NetEQ
 // 抖动缓冲持续失配，表现为音频卡顿、断续、严重失真（WS/WebCodecs 路径不按 PTS 走播所以不受影响）。
-func (s *Session) pumpAudio(track *webrtc.TrackLocalStaticSample) {
+//
+// 订阅等待在本协程内完成：设备音频采集初始化通常 1~2 秒，answer 不能等它
+// （视频首帧优先），故音频轨按 socket 存在性先挂上，这里后台等订阅就绪。
+// 会话先于订阅结束（close 已执行）时丢弃迟到的订阅，避免向已关闭的 PC 空转。
+func (s *Session) pumpAudio(track *webrtc.TrackLocalStaticSample, mirror *scrcpy.Manager, serial string) {
+	const attachWait = 5 * time.Second // 采集初始化 1~2s，留 2 倍以上余量
+	sub, cancel := waitAudio(mirror, serial, attachWait)
+	if cancel == nil {
+		return // 设备不带音频或采集始终未就绪：本会话静音（answer 里的音轨不发流）
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		cancel()
+		return
+	}
+	s.audioSub, s.audioCap = sub, cancel
+	s.mu.Unlock()
 	const opusFrameDur = 20 * time.Millisecond // 与设备端编码器帧长一致（TOC config 31）
-	for p := range s.audioSub.Chan() {
+	for p := range sub.Chan() {
 		if p.Config {
 			continue
 		}
@@ -251,12 +297,23 @@ func (s *Session) pumpAudio(track *webrtc.TrackLocalStaticSample) {
 	}
 }
 
+// close 结束会话（幂等）：取消订阅、关闭 PeerConnection。
+// Create 失败路径与 Remove（连接终止）都会调用；audioCap 可能由 pumpAudio
+// 协程晚到赋值，故加锁读取。
 func (s *Session) close() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	audioCap := s.audioCap
+	s.mu.Unlock()
 	if s.videoCap != nil {
 		s.videoCap()
 	}
-	if s.audioCap != nil {
-		s.audioCap()
+	if audioCap != nil {
+		audioCap()
 	}
 	if s.pc != nil {
 		_ = s.pc.Close()

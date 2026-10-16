@@ -240,6 +240,16 @@ func (m *Manager) SubscribeAudio(serial string) (*Subscriber, func(), []byte, er
 	return s.SubscribeAudio()
 }
 
+// AudioAttachable 报告流的音频 socket 是否已建立（采集就绪前即可挂音频轨）。
+// 设备音频采集头通常还要 1~2 秒才到，但 WebRTC 的 answer 不能等它——视频
+// 首帧优先，推流协程后台等订阅就绪即可。
+func (m *Manager) AudioAttachable(serial string) bool {
+	m.mu.Lock()
+	s, ok := m.streams[serial]
+	m.mu.Unlock()
+	return ok && s.AudioAttachable()
+}
+
 // AudioDisabled 报告设备端是否已明确禁用音频（流不存在时返回 false）。
 func (m *Manager) AudioDisabled(serial string) bool {
 	m.mu.Lock()

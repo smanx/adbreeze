@@ -54,6 +54,11 @@ type Stream struct {
 	// 用于让音频订阅方立即失败而非无限重试
 	audioDisabled atomic.Bool
 
+	// 音频 socket 是否已建立（隧道建立时即确定；设备采集头可能还要 1~2 秒才到）。
+	// WebRTC 挂音频轨以此为据，无需等 setupAudioAsync 读完编码 ID——等它会把
+	// answer 拖到关键帧窗口之后，视频首帧被无谓推迟。
+	audioSocket atomic.Bool
+
 	// 剪贴板（设备端下行 DeviceMessage 更新）
 	clipboardMu  sync.Mutex
 	clipboard    string
@@ -197,6 +202,12 @@ func start(deps streamDeps, serial string, jarBytes []byte, serverVersion string
 		}
 		s.Stop()
 	}()
+
+	// 音频 socket 建立即可判定「本流带音频」：设备采集头可能还要 1~2 秒才到，
+	// 但 WebRTC 挂音频轨不需要等它（answer 不能堵在关键帧窗口之前）
+	if s.audioConn != nil {
+		s.audioSocket.Store(true)
+	}
 
 	// 5. 音频 setup 异步进行（音频采集初始化可能很慢，绝不阻塞视频出画）；
 	//    视频/控制读循环立即启动
@@ -561,6 +572,9 @@ func (s *Stream) SubscribeAudio() (*Subscriber, func(), []byte, error) {
 
 // AudioDisabled 报告设备端是否已明确禁用音频（区别于「尚未就绪」）。
 func (s *Stream) AudioDisabled() bool { return s.audioDisabled.Load() }
+
+// AudioAttachable 报告音频 socket 是否已建立（采集就绪前即可挂 WebRTC 音频轨）。
+func (s *Stream) AudioAttachable() bool { return s.audioSocket.Load() }
 
 // SendControl 向设备写入一条 ControlMessage（并发安全）。
 func (s *Stream) SendControl(msg []byte) error {
