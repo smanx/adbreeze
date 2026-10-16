@@ -1,7 +1,10 @@
 import { create } from 'zustand'
-import { api, ensureSession, type DeviceInfo, type Health } from './api'
+import { api, ensureSession, wsUrl, apiUrl, isCrossOrigin, saveBackendConfig, type BackendConfig, type DeviceInfo, type Health } from './api'
 
 const SELECTED_KEY = 'ADBreeze-selected'
+
+/** 后端问题类型：none = 正常；unreachable = 不可达；auth = 跨源凭证被拒 */
+export type BackendIssue = 'none' | 'unreachable' | 'auth'
 
 interface Store {
   devices: DeviceInfo[]
@@ -9,6 +12,12 @@ interface Store {
   serverConnected: boolean // 事件通道是否在线
   version: string
   panel: string // 激活的功能面板
+  /** 后端可达性：false = 最近一次连接尝试失败 */
+  backendReachable: boolean
+  /** 后端问题类型（驱动 Shell 的提示横幅） */
+  backendIssue: BackendIssue
+  /** 后端配置变更计数：自增即重建事件通道 */
+  backendRevision: number
   setPanel: (p: string) => void
   select: (serial: string | null) => void
   refresh: () => Promise<void>
@@ -16,6 +25,10 @@ interface Store {
   connectWireless: (addr: string) => Promise<void>
   disconnectDevice: (serial: string) => Promise<void>
   forgetDevice: (serial: string) => Promise<void>
+  /** 保存后端配置并触发重连 */
+  applyBackend: (c: BackendConfig) => void
+  /** 手动重试连接 */
+  retryBackend: () => void
 }
 
 let evtSocket: WebSocket | null = null
@@ -30,6 +43,9 @@ export const useStore = create<Store>((set, get) => ({
   serverConnected: false,
   version: '',
   panel: 'overview',
+  backendReachable: false,
+  backendIssue: 'none',
+  backendRevision: 0,
 
   setPanel: p => set({ panel: p }),
   select: serial => {
@@ -70,7 +86,22 @@ export const useStore = create<Store>((set, get) => ({
     await api('DELETE', `/api/devices/${encodeURIComponent(serial)}/remember`)
     await get().refresh()
   },
+
+  // 保存后端配置（含手动切换后端地址）并重建事件通道
+  applyBackend: c => {
+    saveBackendConfig(c)
+    set(s => ({ backendRevision: s.backendRevision + 1 }))
+  },
+
+  retryBackend: () => set(s => ({ backendRevision: s.backendRevision + 1 })),
 }))
+
+// 安排一次退避重连（事件通道断线 / 后端暂时不可达共用）
+function scheduleReconnect(set: (partial: Partial<Store>) => void, get: () => Store) {
+  if (stopped) return
+  reconnectTimer = setTimeout(() => void openEvents(set, get), reconnectDelay)
+  reconnectDelay = Math.min(reconnectDelay * 2, 15000)
+}
 
 async function openEvents(
   set: (partial: Partial<Store>) => void,
@@ -78,20 +109,34 @@ async function openEvents(
 ) {
   const seq = ++eventSeq
   if (evtSocket) evtSocket.close()
-  // WS 无法触发 Basic 弹窗，握手前先确保会话 cookie 有效
-  const ok = await ensureSession()
+  // WS 无法触发 Basic 弹窗，握手前先确保会话有效
+  const st = await ensureSession()
   if (seq !== eventSeq) return // 期间已有更新的连接尝试，放弃本次
-  if (!ok) {
-    // 凭证失效：重新加载页面会触发浏览器登录弹窗
+  if (st === 'unreachable') {
+    // 后端不可达：绝不刷新页面——那会把「后端连不上」误判成「凭证失效」，
+    // 造成无限刷新循环，用户永远进不了配置界面。改为置位问题类型并按退避
+    // 重试，由 Shell 提示检查网络或手动配置后端地址。
+    set({ serverConnected: false, backendReachable: false, backendIssue: 'unreachable' })
+    scheduleReconnect(set, get)
+    return
+  }
+  if (st === 'unauthorized') {
+    if (isCrossOrigin()) {
+      // 跨源时浏览器不会弹 Basic 对话框（401 静默失败）：引导用户到设置里
+      // 核对后端地址与账号密码。不再重试，等配置变更（revision）后重连。
+      set({ serverConnected: false, backendReachable: false, backendIssue: 'auth' })
+      return
+    }
+    // 同源凭证失效：重新加载页面会触发浏览器登录弹窗（同源唯一途径）
     location.reload()
     return
   }
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  const ws = new WebSocket(`${proto}://${location.host}/ws/events`)
+  set({ backendReachable: true, backendIssue: 'none' })
+  const ws = new WebSocket(wsUrl('/ws/events'))
   evtSocket = ws
   ws.onopen = () => {
     reconnectDelay = 1000
-    set({ serverConnected: true })
+    set({ serverConnected: true, backendReachable: true, backendIssue: 'none' })
     get().refresh().catch(() => {})
   }
   ws.onmessage = ev => {
@@ -104,16 +149,14 @@ async function openEvents(
     if (evtSocket !== ws) return // 已被新连接替换
     evtSocket = null
     set({ serverConnected: false })
-    if (stopped) return
-    reconnectTimer = setTimeout(() => void openEvents(set, get), reconnectDelay)
-    reconnectDelay = Math.min(reconnectDelay * 2, 15000)
+    scheduleReconnect(set, get)
   }
 }
 
 // 初始化时拉取版本信息（未鉴权失败则静默）
 export async function loadHealth(): Promise<Health | null> {
   try {
-    return await fetch('/api/health').then(r => r.json())
+    return await fetch(apiUrl('/api/health')).then(r => r.json())
   } catch {
     return null
   }

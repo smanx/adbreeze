@@ -6,6 +6,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"strings"
 
 	"adbreeze/internal/adb"
 	"adbreeze/internal/auth"
@@ -31,7 +32,8 @@ type Server struct {
 }
 
 // New 组装路由，返回可直接交给 http.Server 的 Handler。
-func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS fs.FS, st *settings.Store) http.Handler {
+// corsOrigins 为跨域放行来源（逗号分隔，空 = 不限制），见 cors。
+func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS fs.FS, st *settings.Store, corsOrigins string) http.Handler {
 	s := &Server{auth: a, version: version, mgr: mgr, mirror: mirror, webrtc: webrtc.NewManager(), settings: st}
 	mux := http.NewServeMux()
 
@@ -97,7 +99,57 @@ func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy
 	mux.Handle("GET /icons/", web)
 	mux.Handle("/", a.Middleware(web))
 
-	return logRequest(mux)
+	return logRequest(cors(mux, parseOrigins(corsOrigins)))
+}
+
+// cors 为跨源前端放行 API：前端可托管在另一域名（静态 Pages、反代等），
+// 页面里手动配置后端地址后由浏览器直接访问本服务。
+//
+// 携带凭证的请求（Authorization 头 / cookie）有两条硬约束：
+//   - Access-Control-Allow-Origin 必须回显具体 Origin，不能是 *；
+//   - 必须同时带 Access-Control-Allow-Credentials: true。
+// 预检（OPTIONS）在鉴权之前应答：凭证头不属于简单请求，浏览器会先发预检。
+// allowed 为空表示不限制来源；非空时仅放行名单内的 Origin。
+func cors(next http.Handler, allowed map[string]struct{}) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			next.ServeHTTP(w, r) // 同源请求无 Origin 头，与既往行为一致
+			return
+		}
+		if len(allowed) > 0 {
+			if _, ok := allowed[origin]; !ok {
+				next.ServeHTTP(w, r) // 不在名单：不加 CORS 头，由浏览器拦截
+				return
+			}
+		}
+		h := w.Header()
+		h.Set("Access-Control-Allow-Origin", origin)
+		h.Set("Access-Control-Allow-Credentials", "true")
+		h.Set("Vary", "Origin")
+		h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		h.Set("Access-Control-Max-Age", "600")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// parseOrigins 把逗号分隔的来源清单解析成集合（去空白、忽略空项）。
+func parseOrigins(csv string) map[string]struct{} {
+	if strings.TrimSpace(csv) == "" {
+		return nil
+	}
+	set := make(map[string]struct{})
+	for _, o := range strings.Split(csv, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			set[o] = struct{}{}
+		}
+	}
+	return set
 }
 
 func logRequest(next http.Handler) http.Handler {

@@ -65,7 +65,7 @@ func main() {
 		log.Fatalf("内嵌前端资源缺失: %v", err)
 	}
 
-	handler := api.New(auth.New(cfg.Username, cfg.Password), version, mgr, mirror, webFS, st)
+	handler := api.New(auth.New(cfg.Username, cfg.Password), version, mgr, mirror, webFS, st, cfg.CORSOrigins)
 
 	// HTTP 始终开启：它是保底入口——自签名证书在浏览器信任之前只能靠它进界面，
 	// 且 HTTPS 配置出错时不会导致完全失联。

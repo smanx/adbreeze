@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api } from '../api'
+import { api, apiUrl, authHeaders, authHeaderValue, isCrossOrigin } from '../api'
 import { useStore } from '../store'
 
 interface FileEntry { name: string; size: number; mode: number; time: number; dir: boolean }
@@ -110,12 +110,26 @@ export default function FilesPanel() {
   const checkedEntries = useMemo(() => filtered.filter(e => checked.has(e.name)), [filtered, checked])
   const allChecked = filtered.length > 0 && checkedEntries.length === filtered.length
 
-  const download = (e: FileEntry) => {
+  const download = async (e: FileEntry) => {
     if (!selected) return
     const full = joinPath(path, e.name)
-    // 同源导航自动携带 Basic 凭证/会话 cookie，无需再拼 token
     const url = `/api/devices/${encodeURIComponent(selected)}/files/content?path=${encodeURIComponent(full)}` +
       (e.dir ? '&zip=1' : '')
+    if (isCrossOrigin()) {
+      // 跨源：导航下载带不上 Authorization 头，改用 fetch 取 blob 再触发下载
+      try {
+        const res = await fetch(apiUrl(url), { headers: authHeaders() })
+        if (!res.ok) throw new Error('HTTP ' + res.status)
+        const blob = await res.blob()
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(blob)
+        a.download = e.dir ? e.name + '.zip' : e.name
+        a.click()
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+      } catch (err) { setError('下载失败: ' + (err as Error).message) }
+      return
+    }
+    // 同源导航自动携带 Basic 凭证/会话 cookie，无需再拼 token
     const a = document.createElement('a')
     a.href = url
     a.download = e.dir ? e.name + '.zip' : e.name
@@ -152,7 +166,7 @@ export default function FilesPanel() {
   const batchDownload = () => {
     if (!checkedEntries.length) return
     // 逐个触发浏览器原生下载（文件夹走 zip）；间隔 300ms 避免浏览器拦截连续下载
-    checkedEntries.forEach((e, i) => setTimeout(() => download(e), i * 300))
+    checkedEntries.forEach((e, i) => setTimeout(() => void download(e), i * 300))
   }
 
   const mkdir = async () => {
@@ -183,7 +197,9 @@ export default function FilesPanel() {
     const x: Xfer = { id, name: displayName, size: file.size, loaded: 0, status: 'uploading' }
     setXfers(q => [x, ...q].slice(0, 30)) // 队列最多显示 30 条
     const xhr = new XMLHttpRequest()
-    xhr.open('PUT', `/api/devices/${encodeURIComponent(selected!)}/files?path=${encodeURIComponent(joinPath(destDir, file.name))}`)
+    xhr.open('PUT', apiUrl(`/api/devices/${encodeURIComponent(selected!)}/files?path=${encodeURIComponent(joinPath(destDir, file.name))}`))
+    const auth = authHeaderValue() // 跨源：XHR 不会自动带 Basic 凭证
+    if (auth) xhr.setRequestHeader('Authorization', auth)
     xhr.upload.onprogress = ev => {
       if (ev.lengthComputable) {
         setXfers(q => q.map(t => t.id === id ? { ...t, loaded: ev.loaded } : t))
@@ -398,7 +414,7 @@ export default function FilesPanel() {
               <td>{e.dir ? '-' : fmtSize(e.size)}</td>
               <td>{fmtTime(e.time)}</td>
               <td className="file-ops">
-                <button className="btn tiny ghost" onClick={() => download(e)}>{e.dir ? '下载zip' : '下载'}</button>
+                <button className="btn tiny ghost" onClick={() => void download(e)}>{e.dir ? '下载zip' : '下载'}</button>
                 <button className="btn tiny ghost" onClick={() => rename(e)}>重命名</button>
                 <button className="btn tiny danger" onClick={() => remove(e)}>删除</button>
               </td>

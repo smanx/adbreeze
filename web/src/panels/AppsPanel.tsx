@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api } from '../api'
+import { api, apiUrl, authHeaders } from '../api'
 import { useStore } from '../store'
 import { Th, useColWidths } from '../components/TableTh'
 
@@ -142,7 +142,7 @@ export default function AppsPanel() {
     setMenu(null)
     setBusyPkg(app.package); setHint('导出 APK…')
     try {
-      const blob = await fetch(`/api/devices/${encodeURIComponent(selected!)}/apps/apk?package=${encodeURIComponent(app.package)}`)
+      const blob = await fetch(apiUrl(`/api/devices/${encodeURIComponent(selected!)}/apps/apk?package=${encodeURIComponent(app.package)}`), { headers: authHeaders() })
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob() })
       const a = document.createElement('a')
       a.href = URL.createObjectURL(blob)

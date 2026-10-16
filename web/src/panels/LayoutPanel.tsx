@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api } from '../api'
+import { api, apiUrl, authHeaders } from '../api'
 import { useStore } from '../store'
 
 // 布局检查面板：截图 + 控件边框叠加 + 命中拾取 + 层级树 + 盒模型详情（对齐 AYA Layout）。
@@ -85,7 +85,7 @@ export default function LayoutPanel() {
     try {
       // 并发：截图 + dump
       const [shot, dump] = await Promise.all([
-        fetch(`/api/devices/${encodeURIComponent(selected)}/screenshot`)
+        fetch(apiUrl(`/api/devices/${encodeURIComponent(selected)}/screenshot`), { headers: authHeaders() })
           .then(r => { if (!r.ok) throw new Error('截图失败 HTTP ' + r.status); return r.blob() }),
         api<{ xml: string; rotation: string }>('GET', `/api/devices/${encodeURIComponent(selected)}/ui-dump`),
       ])

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api, type DeviceInfo } from '../api'
+import { api, apiUrl, authHeaders, type DeviceInfo } from '../api'
 import { useStore } from '../store'
 import { clipboardGet, clipboardSet } from '../mirror/controller'
 import { PreviewModal } from '../components/TableTh'
@@ -48,8 +48,8 @@ export default function ToolsPanel() {
     setBusy(true); setHint(`正在安装 ${file.name}…`)
     try {
       const body = await file.arrayBuffer()
-      const r = await fetch(`/api/devices/${encodeURIComponent(selected)}/install`, {
-        method: 'POST', body,
+      const r = await fetch(apiUrl(`/api/devices/${encodeURIComponent(selected)}/install`), {
+        method: 'POST', body, headers: authHeaders(),
       })
       const data = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(data.error || 'HTTP ' + r.status)
@@ -61,7 +61,7 @@ export default function ToolsPanel() {
     if (!selected) { setHint('请先选择设备'); return }
     setBusy(true); setHint('截图…')
     try {
-      const blob = await fetch(`/api/devices/${encodeURIComponent(selected)}/screenshot`)
+      const blob = await fetch(apiUrl(`/api/devices/${encodeURIComponent(selected)}/screenshot`), { headers: authHeaders() })
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob() })
       setShot({
         url: URL.createObjectURL(blob),

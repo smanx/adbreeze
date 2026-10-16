@@ -42,6 +42,12 @@ type Config struct {
 	// 用于探测不到的场景：Docker 桥接 / NAT 后的外部地址、自定义域名等。
 	TLSHosts string
 	TLSIPs   string
+
+	// CORS 放行的来源（逗号分隔），留空 = 不限制。
+	// 跨源部署时（前端托管在另一域名，页面里手动配置后端地址）由浏览器预检与
+	// 凭证请求携带 Origin 头；为空时回显任意 Origin——凭证模式下必须回显具体
+	// 来源（Access-Control-Allow-Origin: * 与携带凭证互斥），故不用通配符。
+	CORSOrigins string
 }
 
 // Parse 解析配置（命令行参数 + 环境变量 + 默认值）。
@@ -61,6 +67,7 @@ func Parse() *Config {
 	flag.StringVar(&cfg.TLSSubdir, "tls-dir", "tls", "自动生成证书的存放目录名（位于数据目录下）")
 	flag.StringVar(&cfg.TLSHosts, "tls-hosts", "", "追加到证书 SAN 的主机名（逗号分隔），自动探测之外补漏，如反向代理域名")
 	flag.StringVar(&cfg.TLSIPs, "tls-ips", "", "追加到证书 SAN 的 IP（逗号分隔），如 Docker 桥接 / NAT 后的外部地址")
+	flag.StringVar(&cfg.CORSOrigins, "cors-origins", "", "跨域放行的来源（逗号分隔），留空=不限制；前端托管在别的域名、手动配置后端地址时使用")
 	flag.Parse()
 
 	if cfg.ShowVersion {
@@ -145,6 +152,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := envStr("TLS_IPS"); v != "" && !set["tls-ips"] {
 		cfg.TLSIPs = v
+	}
+	if v := envStr("CORS_ORIGINS"); v != "" && !set["cors-origins"] {
+		cfg.CORSOrigins = v
 	}
 }
 

@@ -6,7 +6,7 @@
 //   * WebCodecs 封装带回放缓冲、解码器回收/硬解故障恢复与统计埋点（decoder.ts）
 //   * WebGL 上屏 + 着色器缩放 + rAF 帧门控 + ResizeObserver 重绘（render.ts）
 //   * h264bsd WASM 软解兜底，可在 HTTP 非安全上下文使用（soft-decoder.ts）
-import { api } from '../api'
+import { api, wsUrl } from '../api'
 import { FrameRenderer, type RenderKind } from './render'
 import { H264Decoder, spsProfileIdc } from './decoder'
 import { SoftH264Decoder, hasWebAssembly } from './soft-decoder'
@@ -474,8 +474,7 @@ function setTitleSize(w: number, h: number) {
 }
 
 function openVideoWS(serial: string) {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}`)
+  const ws = new WebSocket(wsUrl(`/ws/video/${encodeURIComponent(serial)}`))
   ws.binaryType = 'arraybuffer'
   mirrorWS = ws
 
@@ -529,8 +528,7 @@ function openAudioWS(serial: string) {
 
 function tryAudioConnect(serial: string, attempt: number) {
   if (mirrorSerial !== serial || attempt > 30) return
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  const ws = new WebSocket(`${proto}://${location.host}/ws/audio/${encodeURIComponent(serial)}`)
+  const ws = new WebSocket(wsUrl(`/ws/audio/${encodeURIComponent(serial)}`))
   ws.binaryType = 'arraybuffer'
   audioWS = ws
 
@@ -812,8 +810,7 @@ function closeAudio() {
 
 // ---------- WebRTC 方案 ----------
 function openCtrlWS(serial: string) {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  const ws = new WebSocket(`${proto}://${location.host}/ws/video/${encodeURIComponent(serial)}?mode=ctrl`)
+  const ws = new WebSocket(wsUrl(`/ws/video/${encodeURIComponent(serial)}?mode=ctrl`))
   mirrorWS = ws
   ws.onmessage = ev => {
     if (typeof ev.data !== 'string') return

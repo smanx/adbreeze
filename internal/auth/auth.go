@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -53,9 +54,12 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 
 // WSMiddleware 保护 WebSocket：握手只能凭会话 cookie 放行
 // （WS 无法触发 Basic 弹窗，缺失/过期时返回 401，由前端重走 session 换发）。
+// 另接受 ?session=<token> 查询参数：跨源前端拿不到也发不了这个 cookie
+// （SameSite=Lax 不随跨站请求发送、第三方 cookie 常被浏览器拦截），
+// 由 IssueSession 在响应体里回传同一 token 经 URL 传递。
 func (a *Authenticator) WSMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.validSession(r) {
+		if a.validSession(r) || a.validToken(r.URL.Query().Get("session")) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -64,22 +68,27 @@ func (a *Authenticator) WSMiddleware(next http.Handler) http.Handler {
 }
 
 // IssueSession 校验 Basic 凭证后签发会话 cookie，供前端建立 WebSocket 使用。
+// 同时把 token 写进响应体：跨源前端的 cookie 不可用（见 WSMiddleware），
+// 需要它经 URL 查询参数完成 WS 鉴权。同源前端忽略响应体即可。
 func (a *Authenticator) IssueSession(w http.ResponseWriter, r *http.Request) {
 	if !a.authenticated(r) {
 		a.challenge(w)
 		return
 	}
 	expiry := time.Now().Add(sessionTTL)
+	token := a.sign(expiry)
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
-		Value:    a.sign(expiry),
+		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  expiry,
 		MaxAge:   int(sessionTTL.Seconds()),
 	})
-	w.WriteHeader(http.StatusNoContent)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{"session": token})
 }
 
 // ClearSession 清除会话 cookie。浏览器缓存的 Basic 凭证无法由 JS 清除，
@@ -131,7 +140,13 @@ func (a *Authenticator) validSession(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	exp, sig, ok := strings.Cut(c.Value, ".")
+	return a.validToken(c.Value)
+}
+
+// validToken 校验裸 token（cookie 值或 ?session= 查询参数）。
+// 格式：<过期 unix 秒>.<base64url(HMAC-SHA256(key, unix 秒))>
+func (a *Authenticator) validToken(token string) bool {
+	exp, sig, ok := strings.Cut(token, ".")
 	if !ok {
 		return false
 	}

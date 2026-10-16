@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
+import { wsUrl } from '../api'
 
 // Logcat 面板：实时日志流（threadtime 格式）+ 客户端过滤（级别/关键字/Tag）+
 // 级别着色 + 暂停/恢复 + 清屏 + 导出。对齐 AYA Logcat 面板功能子集。
@@ -65,8 +66,7 @@ export default function LogcatPanel() {
     if (!selected) return
     setLines([])
     setStatus('连接中…')
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${proto}://${location.host}/ws/logcat/${encodeURIComponent(selected)}`)
+    const ws = new WebSocket(wsUrl(`/ws/logcat/${encodeURIComponent(selected)}`))
     wsRef.current = ws
     ws.onopen = () => { setConnected(true); setStatus('') }
     ws.onmessage = ev => { if (typeof ev.data === 'string') append(ev.data) }

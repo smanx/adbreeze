@@ -35,6 +35,14 @@ input, select {
 .hint { color: var(--muted); font-size: 12px; }
 .error-text { color: var(--danger); }
 
+/* 后端不可达 / 鉴权失败横幅：引导手动配置后端地址，绝不刷新页面 */
+.backend-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 14px; background: #fdecea; border-bottom: 1px solid var(--border);
+  color: var(--danger); font-size: 13px;
+}
+.backend-banner .spacer { flex: 1; }
+
 /* ---------- 鉴权页 ---------- */
 .auth-page {
   height: 100%; display: flex; align-items: center; justify-content: center;
