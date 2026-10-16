@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { api, installApk, uploadFileProgress } from '../api'
 import { useStore } from '../store'
 import { Icon, IconButton } from '../components/Icon'
 import { t, useLang, useT } from '../i18n'
@@ -10,6 +11,17 @@ import {
 
 const isAppleTouch = /iP(hone|ad|od)/i.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 0)
+
+/** 拖拽传输任务：APK = 安装，其他文件 = 上传到 /sdcard/Download */
+interface DropTask {
+  id: number
+  name: string
+  size: number
+  loaded: number
+  status: 'pending' | 'active' | 'done' | 'error'
+  kind: 'install' | 'upload'
+  error?: string
+}
 
 /** 生效方案 → 展示名。与设置面板下拉的选项文案保持一致，避免两处说法打架 */
 function planLabel(kind: string): string {
@@ -35,6 +47,14 @@ export default function MirrorPanel() {
   const activePointers = useRef(new Set<number>())
   const [fsOn, setFsOn] = useState(false)
   const [maxed, setMaxed] = useState(false)
+  // 拖拽安装 APK / 上传其他文件：dragOver = 悬停高亮；drops = 传输队列（进度条）；
+  // dropSummary = 全部传输完的汇总提示（上传到哪了 / 安装成败）
+  const [dragOver, setDragOver] = useState(false)
+  const [drops, setDrops] = useState<DropTask[]>([])
+  const [dropSummary, setDropSummary] = useState('')
+  const dropBusyRef = useRef(false)
+  const dropSeq = useRef(1)
+  const dropSummaryTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const [fsSupported] = useState(() =>
     typeof HTMLElement !== 'undefined' && typeof HTMLElement.prototype.requestFullscreen === 'function')
   const tr = useT()
@@ -262,6 +282,91 @@ export default function MirrorPanel() {
   const set = (k: keyof MirrorSettings, v: string) =>
     setSettings(s => ({ ...s, [k]: k === 'mode' || k === 'audioMode' ? v : +v }))
 
+  // ---------- 拖拽安装 APK / 上传其他文件 ----------
+  // APK → /install 接口（push 到 /data/local/tmp 后 pm install -r）；
+  // 其他文件 → 流式上传到 /sdcard/Download。文件串行处理（adb sync 单通道，
+  // 并行只会争抢）。dragleave 在移入子元素时也会触发，用 contains(relatedTarget)
+  // 过滤，避免高亮闪烁。
+  const onStageDragOver = (e: React.DragEvent) => {
+    if (![...e.dataTransfer.types].includes('Files')) return // 拖的是文本/元素，不拦
+    e.preventDefault()
+    setDragOver(true)
+  }
+  const onStageDragLeave = (e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return
+    setDragOver(false)
+  }
+  const onStageDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+    const files = [...e.dataTransfer.files]
+    if (!files.length) return
+    void runDrops(files)
+  }
+
+  const isApkFile = (f: File) => /\.apk$/i.test(f.name)
+  const fmtDropSize = (n: number) => {
+    const units = ['B', 'KB', 'MB', 'GB']
+    let i = 0, v = n
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++ }
+    return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`
+  }
+  const setDrop = (id: number, patch: Partial<DropTask>) =>
+    setDrops(q => q.map(x => x.id === id ? { ...x, ...patch } : x))
+
+  const runDrops = async (files: File[]) => {
+    if (!selected || dropBusyRef.current) return
+    const serial = selected
+    dropBusyRef.current = true
+    const tasks: DropTask[] = files.map(f => ({
+      id: dropSeq.current++, name: f.name, size: f.size, loaded: 0,
+      status: 'pending', kind: isApkFile(f) ? 'install' : 'upload',
+    }))
+    setDrops(tasks)
+    setDropSummary('') // 新一轮拖入时撤掉上一轮的汇总提示
+    // 上传目标目录兜底创建（已存在时报错忽略）
+    await api('POST', `/api/devices/${encodeURIComponent(serial)}/files/mkdir?path=${encodeURIComponent('/sdcard/Download')}`).catch(() => {})
+    // 每个文件的最终结果记录在本地数组（state 里的 tasks 会被 setDrop 换成新对象，
+    // 本地数组读不到最新 status，汇总必须靠这里）
+    const outcomes: ('ok' | 'fail')[] = []
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i]
+      setDrop(tasks[i].id, { status: 'active' })
+      try {
+        if (tasks[i].kind === 'install') {
+          await installApk(serial, f, loaded => setDrop(tasks[i].id, { loaded }))
+        } else {
+          await uploadFileProgress(serial, f, '/sdcard/Download/' + f.name, loaded => setDrop(tasks[i].id, { loaded }))
+        }
+        setDrop(tasks[i].id, { status: 'done', loaded: f.size })
+        outcomes[i] = 'ok'
+      } catch (e) {
+        setDrop(tasks[i].id, { status: 'error', error: (e as Error).message })
+        outcomes[i] = 'fail'
+      }
+    }
+    dropBusyRef.current = false
+    // 成功的行稍后自动消失，失败行保留供查看
+    setTimeout(() => setDrops(q => q.filter(x => x.status !== 'done')), 6000)
+
+    // 汇总提示：上传完成要说明文件去了哪（Download 目录），安装要说明成败
+    const okIn: string[] = [], badIn: string[] = [], okUp: string[] = [], badUp: string[] = []
+    outcomes.forEach((res, i) => {
+      const bucket = tasks[i].kind === 'install' ? (res === 'ok' ? okIn : badIn) : (res === 'ok' ? okUp : badUp)
+      bucket.push(files[i].name)
+    })
+    const nameSep = tr('mirror.dropNameSep'), sep = tr('mirror.dropSummarySep')
+    const parts: string[] = []
+    if (okIn.length) parts.push(tr('mirror.dropInstallOk', { names: okIn.join(nameSep) }))
+    if (badIn.length) parts.push(tr('mirror.dropInstallFail', { names: badIn.join(nameSep) }))
+    if (okUp.length) parts.push(tr('mirror.dropUploadDone', { names: okUp.join(nameSep) }))
+    if (badUp.length) parts.push(tr('mirror.dropUploadFail', { names: badUp.join(nameSep) }))
+    if (!parts.length) return
+    clearTimeout(dropSummaryTimer.current) // 上一次汇总的定时清除还挂着时，先撤掉再发新的
+    setDropSummary(parts.join(sep))
+    dropSummaryTimer.current = setTimeout(() => setDropSummary(''), 12000)
+  }
+
   return (
     <div className="mirror-panel">
       <div className="mirror-head">
@@ -384,8 +489,16 @@ export default function MirrorPanel() {
       )}
 
       <div className="mirror-body">
-        <div className="mirror-stage" ref={stageRef}>
+        <div className="mirror-stage" ref={stageRef}
+          onDragOver={onStageDragOver} onDragLeave={onStageDragLeave} onDrop={onStageDrop}>
           <canvas id="mirror-canvas" ref={canvasRef} width={720} height={1280} tabIndex={0} />
+          {/* 拖拽悬停高亮：pointer-events 关掉，事件继续落到 stage，dragleave 才不闪 */}
+          {dragOver && (
+            <div className="mirror-overlay drop-zone">
+              <span className="ov-icon">📦</span>
+              <span className="ov-text">{tr('mirror.dropInstallTip')}</span>
+            </div>
+          )}
           {/* 首帧前盖住画布（防旧帧错觉），失败时显示错误 */}
           {running && phase !== 'ready' && (
             <div className={'mirror-overlay' + (phase === 'failed' ? ' failed' : '')}>
@@ -413,6 +526,29 @@ export default function MirrorPanel() {
         </IconButton>
       )}
       {msg && <div className="mirror-msg">{msg}</div>}
+      {dropSummary && <div className="mirror-msg drop-summary">{dropSummary}</div>}
+      {/* 拖拽传输队列：APK 安装 / 文件上传进度（复用文件面板的传输条样式） */}
+      {drops.length > 0 && (
+        <div className="files-xfer mirror-drops">
+          {drops.map(x => (
+            <div key={x.id} className={'files-xfer-row' + (x.status === 'error' ? ' err' : '')}>
+              <span className="fx-name" title={x.name}>{x.kind === 'install' ? '📦 ' : '📄 '}{x.name}</span>
+              <div className="fx-bar">
+                <div className="fx-fill" style={{
+                  width: `${x.size ? Math.min(100, x.loaded / x.size * 100) : (x.status === 'done' ? 100 : 0)}%`,
+                  background: x.status === 'error' ? 'var(--danger)' : x.status === 'done' ? 'var(--primary)' : undefined,
+                }} />
+              </div>
+              <span className="fx-info">
+                {x.status === 'error' ? x.error
+                  : x.status === 'done' ? tr('mirror.dropDone')
+                  : x.status === 'active' && x.size ? `${fmtDropSize(x.loaded)} / ${fmtDropSize(x.size)}`
+                  : '…'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
       {!selected && <div className="hint" style={{ padding: '6px 2px' }}>{tr('panel.selectDevice.')}</div>}
     </div>
   )

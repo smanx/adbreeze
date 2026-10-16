@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, apiUrl, authHeaders, isCrossOrigin } from '../api'
+import { api, apiUrl, authHeaders, installApkFromPath, isCrossOrigin } from '../api'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 
@@ -195,6 +195,22 @@ export default function FilesPanel() {
     } catch (err) { setError((err as Error).message) }
   }
 
+  // 安装设备上的 APK：直接 pm install -r <path>，不经本机中转（后端校验 .apk 后缀）
+  const [installingName, setInstallingName] = useState('')
+  const [notice, setNotice] = useState('')
+  const installFromDevice = async (e: FileEntry) => {
+    if (!selected || installingName) return
+    setInstallingName(e.name); setNotice(''); setError('')
+    try {
+      await installApkFromPath(selected, joinPath(path, e.name))
+      setNotice(t('files.installApkDone', { name: e.name }))
+    } catch (err) {
+      setError(t('files.installApkFailed') + (err as Error).message)
+    } finally {
+      setInstallingName('')
+    }
+  }
+
   // 上传单个文件（XHR 带进度），返回 Promise
   const uploadOne = (file: File, displayName: string, destDir: string) => new Promise<void>((resolve, reject) => {
     const id = xferSeq++
@@ -345,6 +361,7 @@ export default function FilesPanel() {
         <span className="hint">{t('files.dragHint')}</span>
       </div>
       {error && <p className="hint error-text">{error}</p>}
+      {notice && <p className="hint ok-text">{notice}</p>}
 
       {/* 批量操作栏：勾选 ≥1 项时出现 */}
       {checkedEntries.length > 0 && (
@@ -417,6 +434,12 @@ export default function FilesPanel() {
               <td>{e.dir ? '-' : fmtSize(e.size)}</td>
               <td>{fmtTime(e.time)}</td>
               <td className="file-ops">
+                {!e.dir && /\.apk$/i.test(e.name) && (
+                  <button className="btn tiny" disabled={installingName === e.name}
+                    onClick={() => void installFromDevice(e)}>
+                    {installingName === e.name ? t('files.installing') : t('files.installApk')}
+                  </button>
+                )}
                 <button className="btn tiny ghost" onClick={() => void download(e)}>{e.dir ? t('files.downloadZip') : t('common.download')}</button>
                 <button className="btn tiny ghost" onClick={() => rename(e)}>{t('common.rename')}</button>
                 <button className="btn tiny danger" onClick={() => remove(e)}>{t('common.delete')}</button>

@@ -89,6 +89,44 @@ export async function api<T = unknown>(method: string, url: string, body?: unkno
   return data as T
 }
 
+/** XHR 通用：带鉴权头发请求，body 流式发送（File 直接传给 send，浏览器分块读、内存恒定）。
+ *  onProgress 汇报上传字节；不设 timeout——大文件传输不被掐断。 */
+function xhrSendBody(
+  method: string, url: string, body: File | ArrayBuffer,
+  onProgress?: (loaded: number) => void,
+): Promise<{ message?: string; output?: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open(method, apiUrl(url))
+    for (const [k, v] of Object.entries(authHeaders())) xhr.setRequestHeader(k, v)
+    xhr.upload.onprogress = ev => { if (ev.lengthComputable) onProgress?.(ev.loaded) }
+    xhr.onload = () => {
+      const data = (() => { try { return JSON.parse(xhr.responseText) } catch { return {} } })() as { error?: string; message?: string; output?: string }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data)
+      else reject(new Error(data.error || 'HTTP ' + xhr.status))
+    }
+    xhr.onerror = () => reject(new Error(t('common.networkError')))
+    xhr.send(body)
+  })
+}
+
+/** APK 安装：文件字节直接 POST（后端 push 到 /data/local/tmp 后 pm install -r）。
+ *  onProgress 汇报推送字节（push 阶段的进度，pm install 阶段无进度）。 */
+export function installApk(serial: string, file: File, onProgress?: (loaded: number) => void): Promise<{ message?: string }> {
+  return xhrSendBody('POST', `/api/devices/${encodeURIComponent(serial)}/install`, file, onProgress)
+}
+
+/** 安装设备上已有的 APK（文件管理器）：直接 pm install -r <path>，不经本机中转 */
+export function installApkFromPath(serial: string, devicePath: string): Promise<{ message?: string }> {
+  return api('POST', `/api/devices/${encodeURIComponent(serial)}/install/path`, { path: devicePath })
+}
+
+/** 带进度上传文件到设备指定路径（走 files PUT，后端流式直写 adb sync，不落盘） */
+export function uploadFileProgress(serial: string, file: File, destPath: string, onProgress?: (loaded: number) => void): Promise<void> {
+  return xhrSendBody('PUT', `/api/devices/${encodeURIComponent(serial)}/files?path=${encodeURIComponent(destPath)}`, file, onProgress)
+    .then(() => undefined)
+}
+
 /** 会话检查结果：ok = 可用；unauthorized = 未登录/已过期；unreachable = 后端不可达 */
 export type SessionState = 'ok' | 'unauthorized' | 'unreachable'
 

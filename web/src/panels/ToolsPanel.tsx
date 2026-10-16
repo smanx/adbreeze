@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api, apiUrl, authHeaders, type DeviceInfo } from '../api'
+import { api, apiUrl, authHeaders, installApk, type DeviceInfo } from '../api'
 import { useStore } from '../store'
 import { clipboardGet, clipboardSet } from '../mirror/controller'
 import { PreviewModal } from '../components/TableTh'
@@ -51,13 +51,8 @@ export default function ToolsPanel() {
     if (!selected) { setHint(t('panel.selectDeviceShort')); return }
     setBusy(true); setHint(t('tools.installing', { name: file.name }))
     try {
-      const body = await file.arrayBuffer()
-      const r = await fetch(apiUrl(`/api/devices/${encodeURIComponent(selected)}/install`), {
-        method: 'POST', body, headers: authHeaders(),
-      })
-      const data = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(data.error || 'HTTP ' + r.status)
-      setHint(t('tools.installDone') + (data.message || 'OK'))
+      const r = await installApk(selected, file)
+      setHint(t('tools.installDone') + (r.message || 'OK'))
     } catch (e) { setHint(t('tools.installFailed') + (e as Error).message) } finally { setBusy(false) }
   }
 

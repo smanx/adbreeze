@@ -68,6 +68,7 @@ func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy
 	authed.HandleFunc("POST /api/devices/{serial}/clipboard", s.setClipboard)
 	authed.HandleFunc("GET /api/devices/{serial}/screenshot", s.screenshot)
 	authed.HandleFunc("POST /api/devices/{serial}/install", s.installAPK)
+	authed.HandleFunc("POST /api/devices/{serial}/install/path", s.installAPKFromPath)
 	authed.HandleFunc("GET /api/devices/{serial}/overview", s.handleOverview)
 	authed.HandleFunc("GET /api/devices/{serial}/perf", s.handlePerf)
 	authed.HandleFunc("GET /api/devices/{serial}/ui-dump", s.handleUIDump)

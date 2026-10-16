@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"adbreeze/internal/scrcpy"
@@ -82,6 +83,39 @@ func (s *Server) installAPK(w http.ResponseWriter, r *http.Request) {
 	_, _ = s.mgr.Client().ShellTimeout(serial, "rm -f "+remote, 5*time.Second)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "安装失败: "+err.Error()+": "+out)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "安装完成", "output": out})
+}
+
+// installAPKFromPath POST /api/devices/{serial}/install/path {"path":"/sdcard/Download/x.apk"}
+// APK 已在设备文件系统上（文件管理器里的安装按钮），直接 pm install -r，不经本机中转。
+func (s *Server) installAPKFromPath(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if !readJSONBody(w, r, &req) {
+		return
+	}
+	p, ok := sanitizeDevicePath(req.Path)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "需要合法的 path 参数")
+		return
+	}
+	if !strings.HasSuffix(strings.ToLower(p), ".apk") {
+		writeErr(w, http.StatusBadRequest, "仅支持安装 APK 文件")
+		return
+	}
+	serial := r.PathValue("serial")
+	// 大 APK 安装可能超过一分钟，超时放宽到 300s
+	out, err := s.mgr.Client().ShellTimeout(serial, "pm install -r '"+shQuote(p)+"'", 300*time.Second)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "安装失败: "+err.Error()+": "+out)
+		return
+	}
+	// 个别设备 shell 退出码不可靠（pm 失败仍返回 0），以输出里的 Success 为准
+	if !strings.Contains(out, "Success") {
+		writeErr(w, http.StatusBadGateway, "安装失败: "+strings.TrimSpace(out))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "安装完成", "output": out})
