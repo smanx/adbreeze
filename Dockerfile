@@ -22,8 +22,15 @@ RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/a
 # 前端与 scrcpy-server 已 embed 进二进制；容器内自带 adb
 # （服务启动时自动 start-server），可通过 adb connect 管理网络设备。
 # USB 直连需 --privileged 并挂载 /dev/bus/usb。
+#
+# 数据目录 /config 存放自动生成的 TLS CA 与叶证书：CA 指纹必须跨容器重启保持稳定
+# （导入信任库只需一次），因此务必用 -v 挂载持久化，否则容器重建后 CA 重新生成、信任作废。
 FROM alpine:3.20
-RUN apk add --no-cache android-tools ca-certificates && adduser -D adbreeze
+RUN apk add --no-cache android-tools ca-certificates && adduser -D adbreeze \
+    && mkdir -p /config && chown adbreeze:adbreeze /config
 COPY --from=go-builder /out/adbreeze /usr/local/bin/adbreeze
 USER adbreeze
+VOLUME ["/config"]
+ENV ADBREEZE_DATA=/config
+EXPOSE 9080 9443
 ENTRYPOINT ["adbreeze"]

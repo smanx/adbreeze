@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -80,14 +81,15 @@ func main() {
 	var httpsSrv *http.Server
 	if cfg.HTTPS {
 		certPath, keyPath := cfg.TLSCert, cfg.TLSKey
+		var tlsDir string
 		if certPath == "" {
-			// 未指定证书：用/生成自签名证书（局域网 IP 申请不到受信任证书）
-			dir := filepath.Join(cfg.DataDir, cfg.TLSSubdir)
-			certPath, keyPath, err = tlsutil.Ensure(dir)
+			// 未指定证书：用本地 CA 签发叶证书（局域网 IP 申请不到受信任证书）。
+			// CA 长期不变，叶证书随当前网卡 IP / 主机名自动重签，故只需信任 CA 一次。
+			tlsDir = filepath.Join(cfg.DataDir, cfg.TLSSubdir)
+			certPath, keyPath, err = tlsutil.Ensure(tlsDir)
 			if err != nil {
-				log.Fatalf("准备自签名证书失败: %v", err)
+				log.Fatalf("准备证书失败: %v", err)
 			}
-			log.Printf("[tls] 自签名证书位于 %s（首次访问需在浏览器手动信任一次）", dir)
 		}
 		httpsSrv = &http.Server{Addr: cfg.HTTPSAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 		cp, kp, addr := certPath, keyPath, cfg.HTTPSAddr
@@ -100,6 +102,13 @@ func main() {
 		log.Printf("HTTPS 就绪（安全上下文，WebCodecs 可用）: https://localhost%s", addr)
 		for _, u := range tlsutil.LocalURLs(addr) {
 			log.Printf("       %s", u)
+		}
+		if tlsDir != "" {
+			dns, ips := tlsutil.CoveredNames()
+			log.Printf("       证书覆盖主机名: %s", strings.Join(dns, ", "))
+			log.Printf("       证书覆盖 IP: %s", strings.Join(ips, ", "))
+			log.Printf("       首次使用请把 CA 导入系统信任库（只需一次，之后 IP/主机名变化都免重导）:")
+			log.Printf("         %s", tlsutil.CACertPath(tlsDir))
 		}
 	}
 

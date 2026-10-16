@@ -10,6 +10,7 @@ import { api } from '../api'
 import { FrameRenderer, type RenderKind } from './render'
 import { H264Decoder, spsProfileIdc } from './decoder'
 import { SoftH264Decoder, hasWebAssembly } from './soft-decoder'
+import { createOpusWasmDecoder, type OpusWasmDecoder } from './opus-wasm'
 
 const MIRROR_DEFAULTS = {
   mode: 'auto', audioMode: 'both', bitrateMbps: 8, shortSize: 720, maxFps: 60,
@@ -116,12 +117,18 @@ let sessionSeq = 0
 
 let audioWS: WebSocket | null = null
 let audioDecoder: AudioDecoder | null = null
+/** libopus WASM 兜底解码器（非安全上下文下 AudioDecoder 不可用时启用） */
+let wasmOpus: OpusWasmDecoder | null = null
 let audioCtx: AudioContext | null = null
 let audioNode: AudioWorkletNode | null = null
 let audioGain: GainNode | null = null
 let audioRetryTimer: ReturnType<typeof setTimeout> | null = null
 let audioPackets = 0
 let audioOn = false
+/** 音频通道是否已初始化（WebCodecs 或 WASM 二选一），防止重复配置 */
+let audioReady = false
+/** 音频会话代际：WASM 异步加载完成后据此判断会话是否已失效 */
+let audioSeq = 0
 let pageMuted = false
 let mirrorRestarting = false
 
@@ -554,26 +561,54 @@ function tryAudioConnect(serial: string, attempt: number) {
       try {
         audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: pts, data: payload }))
       } catch (e) { console.warn('音频解码异常', e) }
+    } else if (wasmOpus) {
+      // WASM 兜底路径：同步解码单个 Opus 帧，输出 PCM 直接给工作器
+      try {
+        const { channelData, samplesDecoded } = wasmOpus.decodeFrame(payload)
+        if (samplesDecoded > 0) postPCM(channelData)
+      } catch { /* 单帧损坏：跳过，等后续帧 */ }
     }
   }
 }
 
 function setupAudio(opusHead: Uint8Array) {
-  if (audioDecoder) return
-  if (!('AudioDecoder' in window)) { showMsg('浏览器不支持 WebCodecs 音频解码'); return }
+  if (audioReady) return
   const channels = opusHead[9]
   const sampleRate = new DataView(opusHead.buffer, opusHead.byteOffset).getUint32(12, true)
   if (channels < 1 || channels > 8 || sampleRate < 8000) { showMsg('音频头解析失败'); return }
+  audioReady = true
 
-  audioDecoder = new AudioDecoder({
-    output: audioData => {
-      if (audioNode) pushAudio(audioData)
-      else audioData.close()
-    },
-    error: e => showMsg('音频解码错误: ' + e.message),
+  // 优先 WebCodecs：硬件/低延迟路径（仅在安全上下文可用）
+  if ('AudioDecoder' in window) {
+    audioDecoder = new AudioDecoder({
+      output: audioData => {
+        if (audioNode) pushAudioData(audioData)
+        else audioData.close()
+      },
+      error: e => showMsg('音频解码错误: ' + e.message),
+    })
+    audioDecoder.configure({ codec: 'opus', sampleRate, numberOfChannels: channels, description: opusHead.slice() })
+    setupAudioWorklet(channels, sampleRate)
+    return
+  }
+
+  // 兜底：非安全上下文（HTTP + IP）没有 AudioDecoder，改用 libopus WASM 解码。
+  // 输出同样是 Float32 PCM，喂进同一条 AudioWorklet 播放管线。
+  if (!hasWebAssembly()) { showMsg('浏览器不支持 WebAssembly，音频不可用'); return }
+  const seq = audioSeq
+  setupAudioWorklet(channels, sampleRate)
+  void createOpusWasmDecoder(opusHead).then(dec => {
+    // 等待期间会话可能已结束/切换：丢弃迟到的解码器
+    if (seq !== audioSeq || audioDecoder || wasmOpus) { dec?.free(); return }
+    if (!dec) { showMsg('音频软解模块加载失败（WASM），已按仅视频继续'); return }
+    wasmOpus = dec
+    // 排空加载期间缓存的帧：解码器就绪前收到的包无法解，等后续帧自然接上即可
+    audioPackets = 0
   })
-  audioDecoder.configure({ codec: 'opus', sampleRate, numberOfChannels: channels, description: opusHead.slice() })
+}
 
+/** 建立 AudioWorklet 播放管线（WebCodecs 与 WASM 两条解码路径共用） */
+function setupAudioWorklet(channels: number, sampleRate: number) {
   // AudioWorklet：ya-webadb（Tango）pcm-player 移植——预缓冲 0.1s 起播、
   // 积压 >0.25s WSOLA 0.9× 追帧至 0.15s、>0.35s 丢最旧，延迟稳定在 100~350ms
   const workletCode = `
@@ -720,7 +755,8 @@ function setupAudio(opusHead: Uint8Array) {
   }).catch(e => showMsg('音频播放初始化失败: ' + e.message))
 }
 
-function pushAudio(audioData: AudioData) {
+/** WebCodecs 路径：把 AudioData 转成按声道分离的 Float32，交给工作器播放 */
+function pushAudioData(audioData: AudioData) {
   const n = audioData.numberOfFrames, ch = audioData.numberOfChannels
   const planes: Float32Array[] = []
   if (audioData.copyTo) {
@@ -755,16 +791,23 @@ function pushAudio(audioData: AudioData) {
     return
   }
   audioData.close()
+  postPCM(planes)
+}
+
+/** 把按声道分离的 Float32 PCM 交给工作器播放（两条解码路径共用） */
+function postPCM(planes: Float32Array[]) {
   const buffers = planes.map(p => p.buffer)
   if (audioNode) audioNode.port.postMessage(buffers, buffers)
 }
 
 function closeAudio() {
+  audioSeq++ // 使迟到的 WASM 解码器加载结果失效
   if (audioRetryTimer) { clearTimeout(audioRetryTimer); audioRetryTimer = null }
   if (audioWS) { audioWS.onclose = null; audioWS.close(); audioWS = null }
   if (audioDecoder) { try { audioDecoder.close() } catch { /* 已关闭 */ } audioDecoder = null }
+  if (wasmOpus) { try { wasmOpus.free() } catch { /* 已释放 */ } wasmOpus = null }
   if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null }
-  audioNode = null; audioGain = null; audioPackets = 0; audioOn = false
+  audioNode = null; audioGain = null; audioPackets = 0; audioOn = false; audioReady = false
 }
 
 // ---------- WebRTC 方案 ----------

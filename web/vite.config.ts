@@ -8,8 +8,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': 'http://localhost:8000',
-      '/ws': { target: 'ws://localhost:8000', ws: true },
+      '/api': 'http://localhost:9080',
+      '/ws': { target: 'ws://localhost:9080', ws: true },
     },
   },
   build: { outDir: 'dist' },

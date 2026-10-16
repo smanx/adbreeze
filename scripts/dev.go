@@ -5,10 +5,10 @@ package main
 //
 // 用法（项目根目录）：
 //
-//	go run ./scripts                          # 默认 user=admin, password=admin, addr=:8000
-//	go run ./scripts -user xxx -password yyy -addr :9000
-//	go run ./scripts -skip-web                # 前端没改时跳过 pnpm build
-//	go run ./scripts -https                   # 额外开启 HTTPS（:8443），供 WebCodecs 安全上下文
+//	go run ./scripts                        # 默认 admin/admin，http://localhost:9080 + https://localhost:9443
+//	go run ./scripts -user xxx -password yyy
+//	go run ./scripts -skip-web              # 前端没改时跳过 pnpm build
+//	go run ./scripts -https=false           # 关闭 HTTPS（HTTP 始终可用）
 //
 // 脚本以裸 main 包存在，不参与 go build ./cmd/... 的产物构建。
 
@@ -26,9 +26,9 @@ import (
 func main() {
 	user := flag.String("user", "admin", "Basic Auth 用户名")
 	password := flag.String("password", "admin", "Basic Auth 密码")
-	addr := flag.String("addr", ":8000", "HTTP 监听地址（始终开启）")
-	https := flag.Bool("https", false, "额外开启 HTTPS（WebCodecs 需安全上下文）")
-	httpsAddr := flag.String("https-addr", ":8443", "HTTPS 监听地址（仅在 -https 时生效）")
+	addr := flag.String("addr", ":9080", "HTTP 监听地址（始终开启）")
+	https := flag.Bool("https", true, "额外开启 HTTPS（默认开启；-https=false 关闭）")
+	httpsAddr := flag.String("https-addr", ":9443", "HTTPS 监听地址")
 	skipWeb := flag.Bool("skip-web", false, "跳过前端构建（前端没有改动时）")
 	flag.Parse()
 
@@ -72,10 +72,11 @@ func main() {
 	fmt.Println("==> go build (embed web/dist)")
 	run(root, "go", "build", "-ldflags", "-s -w -X main.version=dev", "-o", exePath, "./cmd/adbreeze")
 
-	// 3. 启动（前台运行，Ctrl+C 退出）
-	args := []string{"-addr", *addr, "-user", *user, "-password", *password}
+	// 3. 启动（前台运行，Ctrl+C 退出）。-https 与 -https-addr 始终显式传递：
+	// 后端同为布尔 flag，不能靠省略表达关闭（省略 = 后端默认值 true）
+	args := []string{"-addr", *addr, "-user", *user, "-password", *password,
+		"-https=" + fmt.Sprintf("%v", *https), "-https-addr", *httpsAddr}
 	if *https {
-		args = append(args, "-https", "-https-addr", *httpsAddr)
 		fmt.Printf("==> 启动 http://localhost%s 与 https://localhost%s (账号: %s / 密码: %s)\n",
 			*addr, *httpsAddr, *user, *password)
 	} else {

@@ -48,37 +48,72 @@ cd ..
 # 2. 构建（Go 1.22+）
 go build -o bin/adbreeze.exe ./cmd/adbreeze
 
-# 3. 运行（密码随机生成并打印在控制台，用户名默认 admin）
+# 3. 运行：所有参数都可省略，默认 admin/admin，HTTP :9080 + HTTPS :9443
 .\bin\adbreeze.exe
 
-# 或指定端口与账号密码
-.\bin\adbreeze.exe -addr :8000 -user admin -password my-secret
-
-# 需要 HTTPS 时追加 -https（额外在 :8443 开启，与 HTTP 并存）
-.\bin\adbreeze.exe -https
+# 需要时用参数覆盖（优先级：命令行 > 环境变量 > 默认值）
+.\bin\adbreeze.exe -addr :8000 -https=false -user admin -password my-secret
 ```
 
-浏览器打开 `http://localhost:8000`，在弹出的 Basic Auth 登录框输入账号密码即可使用。
+浏览器打开 `http://localhost:9080`（HTTPS 在 `https://localhost:9443`），在弹出的 Basic Auth 登录框输入账号密码即可使用。
 
-### HTTPS（可选，默认关闭）
+### 配置（命令行 / 环境变量 / 默认值）
 
-WebCodecs（`VideoDecoder`）只在**安全上下文**暴露，即 HTTPS 或 `localhost`。用局域网 IP 以 `http://192.168.x.x:8000` 访问时，浏览器不提供该 API，投屏会自动退化到 WebRTC 或 WASM 软解。开启 HTTPS 后，这些访问也能走 WebCodecs 硬解。
+三项来源优先级从高到低：**命令行参数 > 环境变量 > 默认值**。全部可省略。
+
+| 配置 | 命令行 | 环境变量 | 默认值 | 说明 |
+|---|---|---|---|---|
+| 登录用户名 | `-user` | `ADBREEZE_USER` | `admin` | Basic Auth 用户名 |
+| 登录密码 | `-password` | `ADBREEZE_PASSWORD` | `admin` | Basic Auth 密码 |
+| HTTP 端口 | `-addr` | `ADBREEZE_ADDR` | `:9080` | HTTP 始终开启；只写端口号（如 `9080`）也可以 |
+| HTTPS 开关 | `-https` | `ADBREEZE_HTTPS` | `true` | `-https=false` 关闭（HTTP 始终可用）|
+| HTTPS 端口 | `-https-addr` | `ADBREEZE_HTTPS_ADDR` | `:9443` | 与 HTTP 必须不同端口 |
+| adb 路径 | `-adb` | `ADBREEZE_ADB` | 从 PATH 查找 | 也可在网页设置里随时切换 |
+| 数据目录 | `-data` | `ADBREEZE_DATA` | 用户配置目录下的 `ADBreeze` | 存放 TLS 证书，需持久保存 |
+| TLS 证书 | `-tls-cert` / `-tls-key` | `ADBREEZE_TLS_CERT` / `ADBREEZE_TLS_KEY` | 自动生成 | 指定正式证书时成对使用 |
+
+```bash
+# 环境变量示例（容器 / systemd 等场景）
+ADBREEZE_PASSWORD=my-secret ADBREEZE_ADDR=9080 ./adbreeze
+```
+
+### HTTPS（默认开启）
+
+WebCodecs（`VideoDecoder` / `AudioDecoder`）只在**安全上下文**暴露，即 HTTPS 或 `localhost`。用局域网 IP 以 `http://192.168.x.x:9080` 访问时，浏览器不提供该 API：视频会自动退化到 WebRTC 或 WASM 软解（音频同样会自动回退到 libopus WASM 解码，无需额外配置）。开启 HTTPS 后，这些访问也能走 WebCodecs 硬解。
 
 ```powershell
-# 默认：HTTP 始终开启，不占用额外端口
-.\bin\adbreeze.exe
-
-# 可选：HTTP + HTTPS 并存（HTTP 保底，HTTPS 供 WebCodecs 使用）
-.\bin\adbreeze.exe -https                      # HTTPS 默认 :8443
-.\bin\adbreeze.exe -https -https-addr :9443    # 自定义 HTTPS 端口
+.\bin\adbreeze.exe                                # HTTP :9080 + HTTPS :9443 同时开启（默认）
+.\bin\adbreeze.exe -https=false                   # 只开 HTTP :9080
+.\bin\adbreeze.exe -https-addr :9444              # 自定义 HTTPS 端口
 
 # 使用自己的正式证书
-.\bin\adbreeze.exe -https -tls-cert cert.pem -tls-key key.pem
+.\bin\adbreeze.exe -tls-cert cert.pem -tls-key key.pem
 ```
 
 **HTTP 与 HTTPS 是并存关系，不是二选一**：HTTP 始终监听，作为保底入口——自签名证书在浏览器信任之前只能靠它进界面，且 HTTPS 起不来时不会导致完全失联。两者共用同一路由与鉴权，故**必须使用不同端口**（同端口会被启动即拦下并提示）。
 
-未指定 `-tls-cert` / `-tls-key` 时自动生成自签名证书（覆盖 `localhost` 与全部本机 IP，有效期 10 年，已存在则复用不重生成），位置在数据目录的 `tls/` 下。自签名证书首次访问会触发浏览器告警，点「高级 → 继续前往」即可（只需一次）；不想每次告警可将 `cert.pem` 导入系统信任库后重启浏览器。
+#### 首次信任只需一次（IP / 主机名变化都免重导）
+
+未指定 `-tls-cert` / `-tls-key` 时自动生成**本地 CA + 叶证书**两层结构，位置在**数据目录**（默认用户配置目录下的 `ADBreeze`，可用 `-data` / `ADBREEZE_DATA` 改）的 `tls/` 下：
+
+| 文件 | 作用 | 是否变化 |
+|---|---|---|
+| `ca.pem` | 信任锚：**导入系统信任库的就是它** | 永不变化（指纹稳定）|
+| `ca.key` | CA 私钥，用于签发叶证书 | 永不变化 |
+| `cert.pem` / `key.pem` | 叶证书：SAN 覆盖当前主机名与全部网卡 IP | 名字集变化时**自动重签** |
+
+关键在于**信任锚在 CA 上**，所以运行环境的主机名或 IP 变了（换网络、换机器名）只会让叶证书重签一次，CA 指纹不变，**你之前导入的信任继续有效，不需要再导一次**。（若用单个自签证书，每次名字变化都要重新签发、指纹改变、信任作废，环境一变就得再导一遍。）
+
+数据目录必须**持久保存**：CA 文件一旦丢失（如被系统清理临时目录、容器重建），下次启动会生成全新 CA，已导入的信任作废。这也是默认数据目录放在用户配置目录、Docker 镜像默认写到 `/config` 卷的原因。从旧版本升级时，首次启动会自动把临时目录里的旧证书迁移到新位置（指纹不变，无需重新导入）。
+
+启动日志会打印证书覆盖的主机名与 IP、以及 `ca.pem` 的路径。首次使用：
+
+1. 把 `ca.pem` 导入系统信任库（Windows：`certmgr` → 受信任的根证书颁发机构 → 导入；需要管理员权限）
+2. 重启浏览器
+
+CA 与叶证书有效期均为 10 年，无需轮换。想彻底重置就删掉 `tls/` 目录后重启（会生成全新的 CA，此时需重新导入一次）。
+
+> Windows 上的 `curl`（schannel）会因 CA 无吊销信息而报 `revocation status unknown`，这不影响浏览器——Chrome / Edge / Firefox 用自身逻辑校验，导入 CA 后即视为受信任。
 
 ### 安装为应用（PWA）
 
@@ -90,23 +125,36 @@ WebCodecs（`VideoDecoder`）只在**安全上下文**暴露，即 HTTPS 或 `lo
 
 Service Worker 只缓存静态外壳（HTML/CSS/JS/图标），**绝不缓存 `/api` 与 `/ws`**——那些是设备实时数据与实时流，缓存会导致看到陈旧状态或连接到失效会话。因此离线只能打开界面，功能仍需服务在线。
 
-安装能力与安全上下文绑定：`http://localhost` 或 HTTPS 下可安装；用局域网 IP 以 `http://` 访问时浏览器不视为可安装站点（需 `-https`）。iOS 对 PWA 的 WebCodecs 支持有限，投屏建议走 WebRTC 或软解。
+安装能力与安全上下文绑定：`http://localhost` 或 HTTPS 下可安装；用局域网 IP 以 `http://` 访问时浏览器不视为可安装站点（需 HTTPS 并信任 CA）。注意浏览器判定「可信 origin」看的是**主机名**而非它解析到的 IP：`localhost` 天然可信；写主机名（如 `http://my-pc:9080`）则必须走 HTTPS 且证书 SAN 得覆盖该主机名——这也是上面把主机名写进证书的原因。
+
+### 非安全上下文（HTTP + 局域网 IP）下的能力
+
+用 `http://192.168.x.x:9080` 这类地址访问时没有安全上下文，网页端各项能力的实际表现：
+
+| 能力 | 表现 |
+|---|---|
+| 投屏画面 | 正常。自动降级：WebCodecs → WebRTC → WASM 软解（软解模式会自动让设备改用软件编码器，输出 Baseline 档）|
+| 投屏音频 | 正常。自动回退到 libopus WASM 解码，复用同一条 AudioWorklet 播放管线 |
+| 反向触控 / 终端 / 文件 / 应用 / 截图 | 正常（纯 HTTP 即可）|
+| PWA 安装 | 不可用（需 HTTPS + 信任 CA）|
+
+因此**换环境时不必依赖证书**：本机用 `http://localhost:9080`，其他设备用 `http://<IP>:9080` 即可完整使用；需要 PWA 安装或 WebCodecs 硬解时再走 HTTPS。
 
 ### 一键脚本
 
 项目内的跨平台开发脚本 `scripts/dev.go`（Go 编写，Windows / macOS / Linux 通用）串起「前端构建 → Go 编译 → 启动」全流程：
 
 ```bash
-go run ./scripts                              # 默认 user=admin, password=admin, addr=:8000
-go run ./scripts -user xxx -password yyy -addr :9000
+go run ./scripts                              # 默认 admin/admin，http://localhost:9080 + https://localhost:9443
+go run ./scripts -user xxx -password yyy      # 自定义账号密码
 go run ./scripts -skip-web                    # 前端没改时跳过 pnpm build
-go run ./scripts -https                       # 额外开启 HTTPS（:8443），供 WebCodecs 安全上下文
-go run ./scripts -https -https-addr :9443     # 自定义 HTTPS 端口
+go run ./scripts -https=false                 # 只开 HTTP（HTTP 始终可用）
+go run ./scripts -addr :8000 -https-addr :9444  # 自定义端口
 ```
 
 ### 开发调试（前端热更新）
 
-改前端代码时不必反复 `pnpm run build` + `go build`。Vite dev server 已配置代理（`/api` 与 `/ws` 转发到 `:8000` 的后端），两个终端分离运行即可：
+改前端代码时不必反复 `pnpm run build` + `go build`。Vite dev server 已配置代理（`/api` 与 `/ws` 转发到 `:9080` 的后端），两个终端分离运行即可：
 
 ```bash
 # 终端 1：起后端（或直接 go run ./scripts -skip-web）
@@ -132,15 +180,28 @@ adb connect 192.168.1.20:5555   # 网络设备（也可在网页上连接）
 
 ```bash
 docker pull ghcr.io/smanx/adbreeze:latest
-docker run -d --name adbreeze -p 8000:8000 ghcr.io/smanx/adbreeze:latest -user admin -password my-secret
+docker run -d --name adbreeze \
+  -p 9080:9080 -p 9443:9443 \
+  -v adbreeze-config:/config \
+  ghcr.io/smanx/adbreeze:latest
 ```
 
-浏览器打开 `http://localhost:8000` 登录使用。容器内自带 adb，可 `adb connect` 管理网络设备（进入容器执行，或在网页上连接）。需要 USB 直连设备时追加设备透传参数：
+容器默认 `admin/admin`，浏览器打开 `http://localhost:9080`（或 `https://localhost:9443`）登录使用。容器内自带 adb，可 `adb connect` 管理网络设备（进入容器执行，或在网页上连接）。需要 USB 直连设备时追加设备透传参数：
 
 ```bash
-docker run -d --name adbreeze -p 8000:8000 \
+docker run -d --name adbreeze -p 9080:9080 -p 9443:9443 \
+  -v adbreeze-config:/config \
   --privileged -v /dev/bus/usb:/dev/bus/usb \
-  ghcr.io/smanx/adbreeze:latest -user admin -password my-secret
+  ghcr.io/smanx/adbreeze:latest
+```
+
+**`-v adbreeze-config:/config` 是必须的**：容器内的数据目录 `/config` 存放自动生成的 TLS CA——不挂载的话，容器重建后 CA 重新生成、浏览器里导入的信任作废。挂载后 CA 跨容器存活，信任只需做一次。账号密码等配置可用环境变量传递（见上文配置表），无需改命令行：
+
+```bash
+docker run -d --name adbreeze -p 9080:9080 -p 9443:9443 \
+  -v adbreeze-config:/config \
+  -e ADBREEZE_PASSWORD=my-secret \
+  ghcr.io/smanx/adbreeze:latest
 ```
 
 版本标签与 Release 一致（如 `ghcr.io/smanx/adbreeze:v0.2.0`），`:latest` 始终指向最新发布。
@@ -149,7 +210,7 @@ docker run -d --name adbreeze -p 8000:8000 \
 
 ```bash
 docker build -t adbreeze .
-docker run -d --name adbreeze -p 8000:8000 adbreeze -user admin -password my-secret
+docker run -d --name adbreeze -p 9080:9080 -p 9443:9443 -v adbreeze-config:/config adbreeze
 ```
 
 ### 交叉编译（六平台单文件）
@@ -186,7 +247,7 @@ HTTP 接口通过 Basic Auth 认证（`Authorization: Basic ...`）。WebSocket 
 
 ## 安全提示
 
-ADB 意味着设备的**完全控制权**。密码务必妥善保管，服务默认面向内网使用。Basic Auth 凭证以 Base64 明文编码传输，**切勿裸走 HTTP 暴露到公网**——如需公网访问，用内置的 `-https` 直接启用 TLS（自签名证书仅供内网；公网请用 `-tls-cert` / `-tls-key` 指定正式证书），或置于反向代理之后。会话 cookie 签名密钥每次启动随机生成，重启服务后所有已登录 WebSocket 会话需重新认证。
+ADB 意味着设备的**完全控制权**。密码务必妥善保管（默认 `admin`，公网环境务必用 `-password` / `ADBREEZE_PASSWORD` 改掉），服务默认面向内网使用。Basic Auth 凭证以 Base64 明文编码传输，**切勿裸走 HTTP 暴露到公网**——HTTPS 默认已开启（自签名 CA 证书仅供内网；公网请用 `-tls-cert` / `-tls-key` 指定正式证书），或置于反向代理之后。会话 cookie 签名密钥每次启动随机生成，重启服务后所有已登录 WebSocket 会话需重新认证。
 
 ## 目录结构
 
