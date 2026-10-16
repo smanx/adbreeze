@@ -12,7 +12,7 @@ import android.widget.Toast
 
 /**
  * 服务控制台（与桌面版形态一致）：
- *   自定义配置（端口 / 账号密码）→ 点「启动」→ 只启动服务，
+ *   自定义配置（端口 / 管理员密码）→ 点「启动」→ 只启动服务，
  *   不承载任何界面；用户用浏览器打开服务地址操作设备。
  *
  * 本页职责 = 配置输入 + 日志展示 + 启停控制 + 一键唤起浏览器。
@@ -21,7 +21,6 @@ class MainActivity : Activity() {
 
     private lateinit var editPort: EditText
     private lateinit var editHttpsPort: EditText
-    private lateinit var editUser: EditText
     private lateinit var editPass: EditText
     private lateinit var btnStart: Button
     private lateinit var btnStop: Button
@@ -45,7 +44,6 @@ class MainActivity : Activity() {
         setContentView(R.layout.activity_main)
         editPort = findViewById(R.id.editPort)
         editHttpsPort = findViewById(R.id.editHttpsPort)
-        editUser = findViewById(R.id.editUser)
         editPass = findViewById(R.id.editPass)
         btnStart = findViewById(R.id.btnStart)
         btnStop = findViewById(R.id.btnStop)
@@ -109,7 +107,6 @@ class MainActivity : Activity() {
         val on = running()
         editPort.isEnabled = !on
         editHttpsPort.isEnabled = !on
-        editUser.isEnabled = !on
         editPass.isEnabled = !on
         btnStart.isEnabled = !on
         btnStop.isEnabled = ServerService.phase != "idle"
@@ -143,7 +140,6 @@ class MainActivity : Activity() {
         val p = getSharedPreferences(ServerService.PREFS, MODE_PRIVATE)
         editPort.setText(p.getString(ServerService.KEY_PORT, "9080"))
         editHttpsPort.setText(p.getString(ServerService.KEY_HTTPS_PORT, "9443"))
-        editUser.setText(p.getString(ServerService.KEY_USER, "admin"))
         editPass.setText(p.getString(ServerService.KEY_PASS, "admin"))
     }
 
@@ -151,7 +147,6 @@ class MainActivity : Activity() {
         getSharedPreferences(ServerService.PREFS, MODE_PRIVATE).edit()
             .putString(ServerService.KEY_PORT, editPort.text.toString().trim().ifEmpty { "9080" })
             .putString(ServerService.KEY_HTTPS_PORT, editHttpsPort.text.toString().trim().ifEmpty { "9443" })
-            .putString(ServerService.KEY_USER, editUser.text.toString().trim().ifEmpty { "admin" })
             .putString(ServerService.KEY_PASS, editPass.text.toString().ifEmpty { "admin" })
             .apply()
     }

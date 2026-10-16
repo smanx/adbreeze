@@ -59,18 +59,22 @@ const MESSAGES = {
   'topbar.github': ['GitHub repository', 'GitHub 仓库'],
   'topbar.langTip': ['Switch language', '切换语言'],
   'topbar.langBtn': ['中文', 'EN'],
-  'shell.logoutConfirm': ['Logging out ends the current session (credentials remembered by the browser stay valid until the tab is closed). Continue?',
-    '退出将结束当前会话（浏览器记住的登录凭证需关闭标签页后才会失效），确定？'],
+  'shell.logoutConfirm': ['Logging out invalidates the current session immediately. Continue?',
+    '退出将立即使当前会话失效，确定？'],
   'shell.signedOut': ['Signed out', '已退出'],
-  'shell.signedOutHint': ['The session has ended. Close this tab to fully clear the credentials saved by the browser.',
-    '会话已结束。关闭此标签页即可彻底清除浏览器保存的登录凭证。'],
-  'shell.loginAgain': ['Log in again', '重新登录'],
+
+  // ---------- 登录 ----------
+  'login.title': ['ADBreeze', 'ADBreeze'],
+  'login.password': ['Admin password', '管理员密码'],
+  'login.submit': ['Sign in', '登录'],
+  'login.submitting': ['Signing in…', '登录中…'],
+  'login.locked': ['Too many failed attempts. Retry in {s}s', '失败次数过多，请 {s} 秒后重试'],
+  'login.rejected': ['Incorrect password', '密码错误'],
+  'login.networkError': ['Login failed: backend unreachable', '登录失败：后端不可达'],
 
   // ---------- 后端横幅 ----------
   'banner.unreachable': ['Cannot reach backend ({host}): check the network, or configure the backend address manually in “Settings”',
     '无法连接后端（{host}）：请检查网络是否连通，或在「设置」中手动配置后端地址'],
-  'banner.auth': ['Backend rejected the current credentials: cross-origin access does not trigger the browser login prompt — verify the backend address, username and password in “Settings”',
-    '后端拒绝了当前账号密码：跨源访问时浏览器不会弹出登录框，请在「设置」中核对后端地址、账号与密码'],
   'banner.configure': ['Configure', '去配置'],
 
   // ---------- 面板通用 ----------
@@ -127,15 +131,14 @@ const MESSAGES = {
   'settings.noPersistence': ['(persistence disabled)', '（未启用持久化）'],
   'settings.defaultWith': ['Default ({x})', '默认（{x}）'],
   'settings.notInPath': ['adb not found in PATH', 'PATH 中未找到 adb'],
-  'settings.authHint': ['Login uses the browser built-in Basic Auth (username/password are set when the service starts and cached by the browser per site). Changing the password requires restarting the service with -password; switching accounts or logging out completely requires closing the tab / clearing the browser site data. Mirroring quality/audio settings are saved per device in the mirror panel.',
-    '登录使用浏览器自带的 Basic Auth（账号密码由服务启动时配置，浏览器按站点缓存）。修改密码需重启服务并指定 -password；切换账号或彻底退出需关闭标签页 / 清除浏览器站点数据。投屏画质/声音等设置在投屏面板内按设备单独保存。'],
+  'settings.authHint': ['Login uses an admin password (set at service startup via -password or the ADBREEZE_PASSWORD environment variable; default is “admin”). Changing the password requires restarting the service. A session stays valid for 12 hours or until you log out; the sign-in page appears again automatically when the session expires. Mirroring quality/audio settings are saved per device in the mirror panel.',
+    '登录使用管理员密码（服务启动时通过 -password 或环境变量 ADBREEZE_PASSWORD 设置，默认 admin）。修改密码需重启服务。会话有效期 12 小时，退出登录立即失效，过期后会自动回到登录页。投屏画质/声音等设置在投屏面板内按设备单独保存。'],
 
   // ---------- 设置：后端地址 ----------
   'settings.backend': ['Backend address', '后端地址'],
-  'settings.backendHint': ['By default the frontend talks to the same origin ({host}), with the browser attaching login credentials automatically. When the frontend is hosted elsewhere (static Pages, reverse proxy, etc.), enter the backend address (e.g. http://192.168.1.5:9080) and save — all requests and the mirror stream then go to that backend. Note: an HTTPS page cannot reach an HTTP backend (browser mixed-content blocking); in that case use the backend HTTPS address (this service also listens on :9443 by default — trust its certificate in the browser first). For cross-origin setups the username/password are stored only in this browser\'s localStorage and used to build the Authorization header.',
-    '默认与页面同源（当前 {host}），由浏览器自动携带登录凭证。前端托管在别的地址时（静态 Pages、反代等），填写后端地址（如 http://192.168.1.5:9080）并保存，之后所有请求与投屏流都打到该后端。注意：HTTPS 页面无法访问 HTTP 后端（浏览器混合内容拦截），此时应填后端的 HTTPS 地址（本服务默认同时监听 :9443，需先在浏览器信任其证书）。跨源时账号密码仅保存在本浏览器 localStorage，用于拼装 Authorization 头。'],
+  'settings.backendHint': ['By default the frontend talks to the same origin ({host}). When the frontend is hosted elsewhere (static Pages, reverse proxy, etc.), enter the backend address (e.g. http://192.168.1.5:9080) and save — all requests and the mirror stream then go to that backend. Note: an HTTPS page cannot reach an HTTP backend (browser mixed-content blocking); in that case use the backend HTTPS address (this service also listens on :9443 by default — trust its certificate in the browser first). After switching backends you will be asked to sign in again.',
+    '默认与页面同源（当前 {host}）。前端托管在别的地址时（静态 Pages、反代等），填写后端地址（如 http://192.168.1.5:9080）并保存，之后所有请求与投屏流都打到该后端。注意：HTTPS 页面无法访问 HTTP 后端（浏览器混合内容拦截），此时应填后端的 HTTPS 地址（本服务默认同时监听 :9443，需先在浏览器信任其证书）。切换后端后需重新登录。'],
   'settings.sameOriginEmpty': ['Empty = same origin as the page ({host})', '留空 = 与页面同源（{host}）'],
-  'settings.userPlaceholder': ['Username (required for cross-origin)', '账号（跨源必填）'],
   'settings.testConnection': ['Test connection', '测试连接'],
   'settings.saveReconnect': ['Save & reconnect', '保存并重连'],
   'settings.backSameOrigin': ['Back to same-origin', '恢复同源'],
@@ -145,7 +148,6 @@ const MESSAGES = {
   'settings.connectFailed': ['Connection failed: ', '连接失败：'],
   'settings.unknownError': ['unknown error', '未知错误'],
   'settings.badAddress': ['Invalid address: must start with http:// or https://', '地址格式不正确：需以 http:// 或 https:// 开头'],
-  'settings.crossOriginNeedUser': ['Cross-origin access requires a username and password (the browser will not show a login prompt)', '跨源访问需填写账号密码（浏览器不会弹出登录框）'],
   'settings.preSaveFailed': ['Pre-save connection test failed', '保存前连接测试失败'],
   'settings.savedReconnecting': ['Saved, reconnecting…', '已保存，正在重连…'],
   'settings.activeSameOrigin': ['same origin ({host})', '同源（{host}）'],

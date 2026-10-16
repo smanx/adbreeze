@@ -1,18 +1,21 @@
 // ---------- 后端地址（跨源部署时手动配置） ----------
-// 默认留空 = 与前端同源：浏览器自动附带 Basic 凭证与会话 cookie，行为与既往一致。
+// 默认留空 = 与前端同源：会话 cookie 由浏览器自动携带。
 // 填写后端地址（如 http://192.168.1.5:9080）后，所有 API / WS 均打往该后端，
-// 并以 Authorization 头发送下面配置的账号密码——跨源 fetch 不会自动带 Basic 凭证，
-// SameSite=Lax 的会话 cookie 也不会随跨站请求发送。
+// 会话改用 Authorization: Bearer 头携带（跨站请求不发送 SameSite cookie），
+// WS 走 ?session= 查询参数（WebSocket 发不了自定义头）。
+// 登录凭证只在前端保存会话 token（12h 过期），管理员密码仅在登录表单里提交一次。
 import { t } from './i18n'
 
 const BACKEND_KEY = 'ADBreeze-backend'
-export interface BackendConfig { base: string; user: string; pass: string }
-const DEFAULT_BACKEND: BackendConfig = { base: '', user: '', pass: '' }
+const TOKEN_KEY = 'ADBreeze-token'
+export interface BackendConfig { base: string }
+const DEFAULT_BACKEND: BackendConfig = { base: '' }
 
 export function loadBackendConfig(): BackendConfig {
   try {
     const saved = JSON.parse(localStorage.getItem(BACKEND_KEY) || '{}') as Partial<BackendConfig>
-    return { ...DEFAULT_BACKEND, ...saved }
+    // 只取 base：旧版存档里可能残留 user/pass（Basic 时代明文凭证），读入即弃
+    return { base: typeof saved.base === 'string' ? saved.base : '' }
   } catch {
     return { ...DEFAULT_BACKEND }
   }
@@ -38,21 +41,24 @@ export function backendBase(): string {
 /** 是否跨源（配置了独立后端地址） */
 export function isCrossOrigin(): boolean { return backendBase() !== '' }
 
-// 跨源会话 token：ensureSession 从 /api/session 响应体换取
-// （cookie 不随跨站请求发送，WS 改用 ?session= 查询参数，见后端 WSMiddleware）
-let sessionToken = ''
+// 会话 token：登录成功后由 /api/session 响应体下发，localStorage 持久保存
+// （跨源时 cookie 不可用，全靠它；同源时与 cookie 等效，存了也无妨）。
+let sessionToken = localStorage.getItem(TOKEN_KEY) || ''
 
-/** 跨源时的 Authorization 头值；同源返回 null（走浏览器自动凭证） */
-export function authHeaderValue(): string | null {
-  const c = loadBackendConfig()
-  if (!isCrossOrigin() || !c.user) return null
-  // btoa 只接受 Latin1：非 ASCII 账号密码先按 UTF-8 编码再 base64
-  return 'Basic ' + btoa(unescape(encodeURIComponent(c.user + ':' + c.pass)))
+function setSessionToken(v: string) {
+  sessionToken = v
+  try {
+    if (v) localStorage.setItem(TOKEN_KEY, v)
+    else localStorage.removeItem(TOKEN_KEY)
+  } catch { /* 忽略 */ }
 }
 
+/** 当前会话 token（调试/排查用） */
+export function hasSessionToken(): boolean { return sessionToken !== '' }
+
+/** 当前生效的鉴权头；无 token 返回空对象（同源 cookie 由浏览器自动携带） */
 export function authHeaders(): Record<string, string> {
-  const v = authHeaderValue()
-  return v ? { Authorization: v } : {}
+  return sessionToken ? { Authorization: 'Bearer ' + sessionToken } : {}
 }
 
 /** API 完整 URL：同源时保持相对路径 */
@@ -61,21 +67,17 @@ export function apiUrl(path: string): string {
   return base ? base + path : path
 }
 
-/** WS 完整 URL：跨源时追加 ?session=<token> */
+/** WS 完整 URL：携带会话 token（跨源时 cookie 不随 WS 握手发送） */
 export function wsUrl(path: string): string {
-  if (!isCrossOrigin()) {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    return `${proto}://${location.host}${path}`
-  }
-  const u = new URL(backendBase())
+  const base = isCrossOrigin() ? backendBase() : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`
+  const u = new URL(base.replace(/^ws/, 'http') + path)
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
-  const sep = path.includes('?') ? '&' : '?'
-  const q = sessionToken ? `${sep}session=${encodeURIComponent(sessionToken)}` : ''
-  return `${u.protocol}//${u.host}${path}${q}`
+  if (sessionToken) u.searchParams.set('session', sessionToken)
+  return u.toString()
 }
 
-// 统一 API 封装：同源 fetch 由浏览器自动附带 Basic 凭证 / 会话 cookie，
-// 无需再手写鉴权头；跨源时带 Authorization 头。错误统一抛 Error(data.error)。
+// 统一 API 封装：同源与跨源都带 Bearer 会话头（同源另有 cookie 兜底）。
+// 错误统一抛 Error(data.error)。
 export async function api<T = unknown>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(apiUrl(url), {
     method,
@@ -87,30 +89,55 @@ export async function api<T = unknown>(method: string, url: string, body?: unkno
   return data as T
 }
 
-/** 会话换取结果：ok = 可用；unauthorized = 凭证被拒；unreachable = 后端不可达 */
+/** 会话检查结果：ok = 可用；unauthorized = 未登录/已过期；unreachable = 后端不可达 */
 export type SessionState = 'ok' | 'unauthorized' | 'unreachable'
 
-// 用 Basic 凭证换取 WebSocket 会话（同源走 cookie，跨源经响应体拿 token）。
-// 三态返回值让调用方区分「凭证失效」与「后端根本连不上」——后者绝不能
-// 刷新页面（会被误解成凭证失效造成无限刷新，见 store.openEvents）。
+// 检查/续签会话：已持有效凭证（cookie 或 token）时 /api/session 直接续签新 token。
+// 三态返回值让调用方区分「未登录」与「后端根本连不上」——后者绝不能
+// 刷新页面或反复猛试（见 store.openEvents）。
 export async function ensureSession(): Promise<SessionState> {
   try {
     const res = await fetch(apiUrl('/api/session'), { method: 'POST', headers: authHeaders() })
     if (res.status === 401) return 'unauthorized'
     if (!res.ok) return 'unreachable'
-    if (isCrossOrigin()) {
-      const j = await res.json().catch(() => null) as { session?: string } | null
-      sessionToken = j?.session || ''
-    }
+    const j = await res.json().catch(() => null) as { session?: string } | null
+    if (j?.session) setSessionToken(j.session)
     return 'ok'
   } catch {
     return 'unreachable'
   }
 }
 
-// 清除后端会话 cookie。注意：浏览器缓存的 Basic 凭证无法由脚本清除，
-// 彻底退出需关闭标签页或在浏览器端清除站点凭据。
+export interface LoginResult { ok: boolean; lockedFor?: number; error?: string }
+
+// 管理员密码登录：POST /api/session {"password": "..."}。
+// 成功后保存会话 token；429 表示连续失败被锁定，lockedFor 为建议等待秒数。
+export async function login(password: string): Promise<LoginResult> {
+  try {
+    const res = await fetch(apiUrl('/api/session'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    })
+    const j = await res.json().catch(() => ({})) as { session?: string; error?: string }
+    if (res.ok && j.session) {
+      setSessionToken(j.session)
+      return { ok: true }
+    }
+    if (res.status === 429) {
+      const s = parseInt(res.headers.get('Retry-After') || '', 10)
+      return { ok: false, lockedFor: Number.isFinite(s) ? s : 30 }
+    }
+    return { ok: false, error: j.error }
+  } catch (e) {
+    return { ok: false, error: (e as Error).message }
+  }
+}
+
+// 退出登录：清除后端会话 cookie 并删除本地 token——
+// 服务端无浏览器凭证缓存一说，退出即真失效。
 export async function clearSession(): Promise<void> {
+  setSessionToken('')
   try {
     await fetch(apiUrl('/api/session'), { method: 'DELETE', headers: authHeaders() })
   } catch { /* 忽略 */ }

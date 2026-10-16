@@ -1,9 +1,9 @@
 import { create } from 'zustand'
-import { api, ensureSession, wsUrl, apiUrl, isCrossOrigin, saveBackendConfig, type BackendConfig, type DeviceInfo, type Health } from './api'
+import { api, ensureSession, wsUrl, apiUrl, saveBackendConfig, type BackendConfig, type DeviceInfo, type Health } from './api'
 
 const SELECTED_KEY = 'ADBreeze-selected'
 
-/** 后端问题类型：none = 正常；unreachable = 不可达；auth = 跨源凭证被拒 */
+/** 后端问题类型：none = 正常；unreachable = 不可达；auth = 未登录/会话失效 */
 export type BackendIssue = 'none' | 'unreachable' | 'auth'
 
 interface Store {
@@ -27,6 +27,8 @@ interface Store {
   forgetDevice: (serial: string) => Promise<void>
   /** 保存后端配置并触发重连 */
   applyBackend: (c: BackendConfig) => void
+  /** 登录成功：清除 auth 问题并重建事件通道 */
+  loginSucceeded: () => void
   /** 手动重试连接 */
   retryBackend: () => void
 }
@@ -93,6 +95,9 @@ export const useStore = create<Store>((set, get) => ({
     set(s => ({ backendRevision: s.backendRevision + 1 }))
   },
 
+  // 登录成功（或已退出后重新登录）：回到正常态并重建事件通道
+  loginSucceeded: () => set(s => ({ backendIssue: 'none', backendReachable: true, backendRevision: s.backendRevision + 1 })),
+
   retryBackend: () => set(s => ({ backendRevision: s.backendRevision + 1 })),
 }))
 
@@ -109,7 +114,7 @@ async function openEvents(
 ) {
   const seq = ++eventSeq
   if (evtSocket) evtSocket.close()
-  // WS 无法触发 Basic 弹窗，握手前先确保会话有效
+  // WS 握手发不了自定义头，先确保会话有效（token / cookie）
   const st = await ensureSession()
   if (seq !== eventSeq) return // 期间已有更新的连接尝试，放弃本次
   if (st === 'unreachable') {
@@ -121,14 +126,9 @@ async function openEvents(
     return
   }
   if (st === 'unauthorized') {
-    if (isCrossOrigin()) {
-      // 跨源时浏览器不会弹 Basic 对话框（401 静默失败）：引导用户到设置里
-      // 核对后端地址与账号密码。不再重试，等配置变更（revision）后重连。
-      set({ serverConnected: false, backendReachable: false, backendIssue: 'auth' })
-      return
-    }
-    // 同源凭证失效：重新加载页面会触发浏览器登录弹窗（同源唯一途径）
-    location.reload()
+    // 未登录 / 会话过期（同源跨源一律如此）：不再重试，等登录成功
+    // （revision 自增）后重连。Shell 据 backendIssue 切到登录界面。
+    set({ serverConnected: false, backendReachable: false, backendIssue: 'auth' })
     return
   }
   set({ backendReachable: true, backendIssue: 'none' })

@@ -42,8 +42,8 @@ func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy
 
 	// 健康检查（无需鉴权）
 	mux.HandleFunc("GET /api/health", s.health)
-	// WebSocket 会话 cookie 签发/清除（走 Basic 校验，浏览器自动带凭证）
-	mux.HandleFunc("POST /api/session", a.IssueSession)
+	// 登录（密码校验 + 会话 cookie 签发）与退出
+	mux.HandleFunc("POST /api/session", a.Login)
 	mux.HandleFunc("DELETE /api/session", a.ClearSession)
 
 	// REST API（需鉴权）
@@ -95,16 +95,11 @@ func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy
 	events.HandleFunc("GET /ws/logcat/{serial}", s.handleLogcat)
 	mux.Handle("/ws/", a.WSMiddleware(events))
 
-	// 静态前端（embed 进二进制）。
-	// PWA 外壳资源必须免鉴权：浏览器抓取 manifest 时默认不带 Basic 凭证
-	// （同源也不例外——需要凭证的 manifest 得显式声明 crossorigin="use-credentials"），
-	// 否则一律 401，Chrome 里表现为「manifest 加载失败 / 无法安装 PWA」；图标同理。
-	// 这些是品牌性静态资源，不含敏感信息，公开无妨；应用本体与全部 API / WS 仍受保护。
-	web := http.FileServerFS(webFS)
-	mux.Handle("GET /manifest.webmanifest", web)
-	mux.Handle("GET /sw.js", web)
-	mux.Handle("GET /icons/", web)
-	mux.Handle("/", a.Middleware(web))
+	// 静态前端（embed 进二进制）公开可访问：页面外壳只是品牌性静态资源，
+	// 不含敏感信息；真正的鉴权入口是页面内的登录表单（POST /api/session），
+	// 全部 REST API / WS 仍受会话保护。公开外壳是前端登录方案的必要条件——
+	// 未登录用户得先加载到页面，才看得到登录界面。
+	mux.Handle("/", http.FileServerFS(webFS))
 
 	return logRequest(cors(mux, parseOrigins(corsOrigins)))
 }

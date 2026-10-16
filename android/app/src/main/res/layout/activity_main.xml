@@ -40,17 +40,10 @@
             android:inputType="number" />
 
         <EditText
-            android:id="@+id/editUser"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Basic Auth 用户名（默认 admin）"
-            android:inputType="text" />
-
-        <EditText
             android:id="@+id/editPass"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="Basic Auth 密码（默认 admin）"
+            android:hint="管理员密码（默认 admin）"
             android:inputType="textPassword" />
 
         <LinearLayout

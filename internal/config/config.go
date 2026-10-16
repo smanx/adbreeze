@@ -27,11 +27,15 @@ import (
 // envPrefix 是环境变量名前缀，完整名为前缀 + 参数名大写（如 ADBREEZE_ADDR）。
 const envPrefix = "ADBREEZE_"
 
+// legacyUser 承接已废弃的 -user 参数：Basic Auth 时代「用户名+密码」成对出现，
+// 旧启动脚本（docker 命令行、systemd unit 等）可能仍带着 -user xxx。
+// 参数本身已无任何作用，保留注册只为不因「未知参数」拒绝启动。
+var legacyUser string
+
 // Config 为 ADBreeze 运行配置。
 type Config struct {
 	Addr        string // HTTP 监听地址（始终开启，作为保底入口）
-	Username    string // Basic Auth 用户名
-	Password    string // Basic Auth 密码
+	Password    string // 管理员密码（前端登录表单校验用）
 	AdbPath     string // adb 可执行文件路径，空则从 PATH 查找（附常见位置补漏）
 	DataDir     string // 数据目录：存放自动生成的 TLS 证书等（需持久保存，见 Parse）
 	ShowVersion bool   // 打印版本号并退出
@@ -77,8 +81,8 @@ func ParseArgs(args []string) (*Config, error) {
 	fs := flag.NewFlagSet("adbreeze", flag.ContinueOnError)
 	fs.BoolVar(&cfg.ShowVersion, "version", false, "打印版本号并退出")
 	fs.StringVar(&cfg.Addr, "addr", ":9080", "HTTP 监听地址（始终开启）")
-	fs.StringVar(&cfg.Username, "user", "admin", "Basic Auth 用户名")
-	fs.StringVar(&cfg.Password, "password", "admin", "Basic Auth 密码")
+	fs.StringVar(&cfg.Password, "password", "admin", "管理员密码（前端登录用）")
+	fs.StringVar(&legacyUser, "user", "", "（已废弃，仅为兼容旧启动脚本保留，无任何作用）")
 	fs.StringVar(&cfg.AdbPath, "adb", "", "adb 可执行文件路径，默认从 PATH 查找（附常见安装位置补漏）")
 	fs.StringVar(&cfg.DataDir, "data", "", "数据目录（存放 TLS 证书，需持久保存），默认用户配置目录下的 ADBreeze")
 	fs.BoolVar(&cfg.OpenBrowser, "open-browser", true, "启动成功后自动打开默认浏览器（无参数启动=双击场景默认开启；带参数启动/Linux 默认关闭）")
@@ -102,6 +106,9 @@ func ParseArgs(args []string) (*Config, error) {
 	// 供下面判断 open-browser 是否被显式指定。
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if set["user"] {
+		log.Printf("[config] -user 已废弃（登录只使用管理员密码），该参数被忽略")
+	}
 	applyEnv(cfg, set)
 
 	// 容忍只写端口号（如 ADBREEZE_ADDR=9080），统一成监听地址形态
@@ -154,7 +161,7 @@ func applyEnv(cfg *Config, set map[string]bool) {
 		cfg.Addr = v
 	}
 	if v := envStr("USER"); v != "" && !set["user"] {
-		cfg.Username = v
+		legacyUser = v // 已废弃的环境变量，仅避免误报
 	}
 	if v := envStr("PASSWORD"); v != "" && !set["password"] {
 		cfg.Password = v

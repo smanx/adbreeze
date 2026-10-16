@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicReference
  *      → 轮询 HTTP 端口 → phase = ready
  *   ④ 看护协程：任一进程/端口掉线自动重拉
  *
- * 配置来自 SharedPreferences（MainActivity 表单写入）：端口 / 账号 / 密码。
+ * 配置来自 SharedPreferences（MainActivity 表单写入）：端口 / 管理员密码。
  * 用户用浏览器打开 http://127.0.0.1:<port> 操作设备。
  */
 class ServerService : Service() {
@@ -44,7 +44,6 @@ class ServerService : Service() {
         const val PREFS = "adbreeze"
         const val KEY_PORT = "port"
         const val KEY_HTTPS_PORT = "https_port"
-        const val KEY_USER = "user"
         const val KEY_PASS = "pass"
 
         @Volatile private var phase0 = "idle" // idle|extract|adb|go|ready|error
@@ -92,7 +91,6 @@ class ServerService : Service() {
     private lateinit var goBin: File
     private lateinit var libDir: File
 
-    private var cfgUser = "admin"
     private var cfgPass = "admin"
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -130,7 +128,6 @@ class ServerService : Service() {
         val p = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         httpPort = p.getString(KEY_PORT, "9080")?.trim().takeUnless { it.isNullOrEmpty() } ?: "9080"
         httpsPort = p.getString(KEY_HTTPS_PORT, "9443")?.trim().takeUnless { it.isNullOrEmpty() } ?: "9443"
-        cfgUser = p.getString(KEY_USER, "admin")?.trim().takeUnless { it.isNullOrEmpty() } ?: "admin"
         cfgPass = p.getString(KEY_PASS, "admin")?.takeUnless { it.isNullOrEmpty() } ?: "admin"
     }
 
@@ -139,7 +136,7 @@ class ServerService : Service() {
     private fun bootstrap() {
         try {
             loadConfig()
-            log("配置：HTTP 端口 $httpPort，账号 $cfgUser")
+            log("配置：HTTP 端口 $httpPort，HTTPS 端口 $httpsPort")
 
             phase = "extract"
             extractAssets()
@@ -238,7 +235,6 @@ class ServerService : Service() {
             "ADBREEZE_DATA" to baseDir.path,
             "HOME" to baseDir.path, // os.UserConfigDir() 依赖 HOME，保住 settings 持久化
             "ADBREEZE_ADB" to adbBin.path,
-            "ADBREEZE_USER" to cfgUser,
             "ADBREEZE_PASSWORD" to cfgPass,
             "TMPDIR" to cacheDir.path,
         )

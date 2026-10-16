@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -46,7 +47,12 @@ func main() {
 		return
 	}
 	log.Printf("ADBreeze %s 启动，监听 %s", version, cfg.Addr)
-	log.Printf("登录账号: %s / 密码: %s", cfg.Username, cfg.Password)
+	log.Printf("管理员密码: %s", cfg.Password)
+	// 默认弱口令 + 对外监听 = 局域网里任何人都能用 admin/admin 登进设备控制台。
+	// 只提示不强拒：内网隔离、防火墙等场景用户可能有意为之，拦截会破坏「双击即用」契约。
+	if cfg.Password == "admin" && listensBeyondLocalhost(cfg.Addr) {
+		log.Printf("[安全警告] 当前使用默认密码 admin 且监听地址 %s 对外开放，局域网内任何人可登录；请用 -password 或环境变量 ADBREEZE_PASSWORD 设置强密码", cfg.Addr)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -106,7 +112,7 @@ func main() {
 	// HTTPS 未开启时 Enabled=false，界面引导用户先开 HTTPS。
 	tlsInfo := tlsutil.Describe(cfg.HTTPS, tlsDir, cfg.TLSCert != "", extra, cfg.HTTPSAddr)
 
-	handler := api.New(auth.New(cfg.Username, cfg.Password), version, mgr, mirror, webFS, st, cfg.CORSOrigins, tlsInfo)
+	handler := api.New(auth.New(cfg.Password), version, mgr, mirror, webFS, st, cfg.CORSOrigins, tlsInfo)
 
 	// HTTP 始终开启：它是保底入口——自签名证书在浏览器信任之前只能靠它进界面，
 	// 且 HTTPS 配置出错时不会导致完全失联。
@@ -161,4 +167,19 @@ func main() {
 	if httpsSrv != nil {
 		_ = httpsSrv.Shutdown(shutdownCtx)
 	}
+}
+
+// listensBeyondLocalhost 判断监听地址是否对本机以外的网络接口开放。
+// ":9080"（未限定 host，Go 默认绑定全部接口）、"0.0.0.0"、"::" 均视为对外开放；
+// 显式绑定 127.0.0.1 / [::1] / localhost 的不算。
+func listensBeyondLocalhost(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return true // 解析不了按保守处理，宁可多警告
+	}
+	switch strings.ToLower(host) {
+	case "127.0.0.1", "::1", "localhost":
+		return false
+	}
+	return true
 }

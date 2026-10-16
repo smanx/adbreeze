@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, apiUrl, authHeaders, authHeaderValue, isCrossOrigin } from '../api'
+import { api, apiUrl, authHeaders, isCrossOrigin } from '../api'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 
@@ -131,7 +131,7 @@ export default function FilesPanel() {
       } catch (err) { setError(t('files.downloadFailed') + (err as Error).message) }
       return
     }
-    // 同源导航自动携带 Basic 凭证/会话 cookie，无需再拼 token
+    // 同源导航自动携带会话 cookie，无需再拼 token
     const a = document.createElement('a')
     a.href = url
     a.download = e.dir ? e.name + '.zip' : e.name
@@ -202,8 +202,7 @@ export default function FilesPanel() {
     setXfers(q => [x, ...q].slice(0, 30)) // 队列最多显示 30 条
     const xhr = new XMLHttpRequest()
     xhr.open('PUT', apiUrl(`/api/devices/${encodeURIComponent(selected!)}/files?path=${encodeURIComponent(joinPath(destDir, file.name))}`))
-    const auth = authHeaderValue() // 跨源：XHR 不会自动带 Basic 凭证
-    if (auth) xhr.setRequestHeader('Authorization', auth)
+    for (const [k, v] of Object.entries(authHeaders())) xhr.setRequestHeader(k, v) // 跨源：XHR 不会自动带会话凭证
     xhr.upload.onprogress = ev => {
       if (ev.lengthComputable) {
         setXfers(q => q.map(tt => tt.id === id ? { ...tt, loaded: ev.loaded } : tt))

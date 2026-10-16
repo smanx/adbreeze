@@ -34,7 +34,7 @@ ADBreeze 服务进程（Go 单二进制）
 
 - **ADB 层**：不依赖 `adb` 子进程（除启动 server 外），原生实现 smart socket（`host:transport` / `host:track-devices` / forward / reverse）与 sync 协议（SEND/DATA/DONE、LIST/RECV）
 - **投屏**：嵌入 `scrcpy-server` v2.4，reverse 隧道优先（无连接竞态）、forward 自动回退；视频流经 Hub 扇出给多个 WebSocket 订阅者，新订阅者自动补发 SPS/PPS 并对齐关键帧
-- **鉴权**：HTTP Basic Auth（浏览器自带登录弹窗），WebSocket 凭登录后签发的短期会话 cookie
+- **鉴权**：管理员密码登录（页面内登录表单），登录后凭 12 小时会话（cookie / Bearer token）访问，支持登出、防爆破锁定
 
 ## 快速开始
 
@@ -50,18 +50,18 @@ cd ..
 # 2. 构建（Go 1.22+）
 go build -o bin/adbreeze.exe ./cmd/adbreeze
 
-# 3. 运行：所有参数都可省略，默认 admin/admin，HTTP :9080 + HTTPS :9443
+# 3. 运行：所有参数都可省略，默认密码 admin，HTTP :9080 + HTTPS :9443
 .\bin\adbreeze.exe
 
 # 需要时用参数覆盖（优先级：命令行 > 环境变量 > 默认值）
-.\bin\adbreeze.exe -addr :8000 -https=false -user admin -password my-secret
+.\bin\adbreeze.exe -addr :8000 -https=false -password my-secret
 ```
 
 **Windows 直接双击 `adbreeze-windows-amd64.exe` 即可运行**：无参数启动 = 默认配置，启动成功后自动打开默认浏览器进入管理界面，控制台窗口保留运行日志（关掉窗口即停止服务）。控制台里运行、带参数运行同样支持——带参数启动属于「控制台 / 服务场景」，此时不会自动开浏览器（需要时显式加 `-open-browser`）。
 
 > 首次运行如遇 SmartScreen 拦截（「Windows 保护了你的电脑」），点「更多信息 → 仍要运行」即可；未做代码签名的开源软件都会走这个提示。启动失败时窗口会停住并提示原因、按回车退出，不会一闪而过。
 
-浏览器打开 `http://localhost:9080`（HTTPS 在 `https://localhost:9443`），在弹出的 Basic Auth 登录框输入账号密码即可使用。
+浏览器打开 `http://localhost:9080`（HTTPS 在 `https://localhost:9443`），在页面登录框输入管理员密码即可使用。
 
 ### 配置（命令行 / 环境变量 / 默认值）
 
@@ -69,8 +69,7 @@ go build -o bin/adbreeze.exe ./cmd/adbreeze
 
 | 配置 | 命令行 | 环境变量 | 默认值 | 说明 |
 |---|---|---|---|---|
-| 登录用户名 | `-user` | `ADBREEZE_USER` | `admin` | Basic Auth 用户名 |
-| 登录密码 | `-password` | `ADBREEZE_PASSWORD` | `admin` | Basic Auth 密码 |
+| 管理员密码 | `-password` | `ADBREEZE_PASSWORD` | `admin` | 页面登录用；`-user` 已废弃（仅为兼容旧脚本保留，无作用） |
 | HTTP 端口 | `-addr` | `ADBREEZE_ADDR` | `:9080` | HTTP 始终开启；只写端口号（如 `9080`）也可以 |
 | HTTPS 开关 | `-https` | `ADBREEZE_HTTPS` | `true` | `-https=false` 关闭（HTTP 始终可用）|
 | HTTPS 端口 | `-https-addr` | `ADBREEZE_HTTPS_ADDR` | `:9443` | 与 HTTP 必须不同端口 |
@@ -193,8 +192,8 @@ Service Worker 只缓存静态外壳（HTML/CSS/JS/图标），**绝不缓存 `/
 项目内的跨平台开发脚本 `scripts/dev.go`（Go 编写，Windows / macOS / Linux 通用）串起「前端构建 → Go 编译 → 启动」全流程：
 
 ```bash
-go run ./scripts                              # 默认 admin/admin，http://localhost:9080 + https://localhost:9443
-go run ./scripts -user xxx -password yyy      # 自定义账号密码
+go run ./scripts                              # 默认密码 admin，http://localhost:9080 + https://localhost:9443
+go run ./scripts -password yyy                # 自定义管理员密码
 go run ./scripts -skip-web                    # 前端没改时跳过 pnpm build
 go run ./scripts -https=false                 # 只开 HTTP（HTTP 始终可用）
 go run ./scripts -addr :8000 -https-addr :9444  # 自定义端口
@@ -206,14 +205,14 @@ go run ./scripts -addr :8000 -https-addr :9444  # 自定义端口
 
 ```bash
 # 终端 1：起后端（或直接 go run ./scripts -skip-web）
-./bin/adbreeze -user admin -password admin        # Windows 为 .\bin\adbreeze.exe
+./bin/adbreeze -password admin                 # Windows 为 .\bin\adbreeze.exe
 
 # 终端 2：起前端开发服务器
 cd web
 pnpm run dev
 ```
 
-浏览器打开 `http://localhost:5173`，在 Basic Auth 弹窗输入 `admin` / `admin`。此后修改 `web/src` 下的代码保存即生效（HMR 热更新，投屏会话不中断）；只有改动 Go 代码时才需要重启终端 1 的后端。注意 `pnpm run dev` 与一键脚本的前端构建不要同时进行（都会写 `web/dist`）。
+浏览器打开 `http://localhost:5173`，在页面登录框输入管理员密码 `admin`。此后修改 `web/src` 下的代码保存即生效（HMR 热更新，投屏会话不中断）；只有改动 Go 代码时才需要重启终端 1 的后端。注意 `pnpm run dev` 与一键脚本的前端构建不要同时进行（都会写 `web/dist`）。
 
 设备接入：
 
@@ -234,7 +233,7 @@ docker run -d --name adbreeze \
   ghcr.io/smanx/adbreeze:latest
 ```
 
-容器默认 `admin/admin`，浏览器打开 `http://localhost:9080`（或 `https://localhost:9443`）登录使用。容器内自带 adb，可 `adb connect` 管理网络设备（进入容器执行，或在网页上连接）。需要 USB 直连设备时追加设备透传参数：
+容器默认密码 `admin`，浏览器打开 `http://localhost:9080`（或 `https://localhost:9443`）登录使用。容器内自带 adb，可 `adb connect` 管理网络设备（进入容器执行，或在网页上连接）。需要 USB 直连设备时追加设备透传参数：
 
 ```bash
 docker run -d --name adbreeze -p 9080:9080 -p 9443:9443 \
@@ -243,7 +242,7 @@ docker run -d --name adbreeze -p 9080:9080 -p 9443:9443 \
   ghcr.io/smanx/adbreeze:latest
 ```
 
-**`-v adbreeze-config:/config` 是必须的**：容器内的数据目录 `/config` 存放自动生成的 TLS CA——不挂载的话，容器重建后 CA 重新生成、浏览器里导入的信任作废。挂载后 CA 跨容器存活，信任只需做一次。账号密码等配置可用环境变量传递（见上文配置表），无需改命令行：
+**`-v adbreeze-config:/config` 是必须的**：容器内的数据目录 `/config` 存放自动生成的 TLS CA——不挂载的话，容器重建后 CA 重新生成、浏览器里导入的信任作废。挂载后 CA 跨容器存活，信任只需做一次。密码等配置可用环境变量传递（见上文配置表），无需改命令行：
 
 ```bash
 docker run -d --name adbreeze -p 9080:9080 -p 9443:9443 \
@@ -277,10 +276,10 @@ adb connect 127.0.0.1:5555      # 无线调试自连
 
 ### Android（APK）
 
-与桌面版形态一致：**App 只是一个服务控制台**——填端口 / 账号密码，点「启动」，日志就地显示；界面不内置，用浏览器打开服务地址（App 里有一键「打开页面」）操作设备。
+与桌面版形态一致：**App 只是一个服务控制台**——填端口 / 管理员密码，点「启动」，日志就地显示；界面不内置，用浏览器打开服务地址（App 里有一键「打开页面」）操作设备。
 
 - **获取**：GitHub Release 直接下载 `adbreeze-android-<版本>.apk`（打 tag 后 CI 自动随桌面平台一起打进 release，所有产物文件名均带版本号）；或本地 `make android-apk` 自行打包
-- 打开 App → 填配置（默认 9080 / admin / admin）→ 点「启动」→ 浏览器访问 `http://127.0.0.1:<端口>`（局域网设备可访问 `http://<手机IP>:<端口>`，日志里会列出）
+- 打开 App → 填配置（默认 9080 / admin）→ 点「启动」→ 浏览器访问 `http://127.0.0.1:<端口>`（局域网设备可访问 `http://<手机IP>:<端口>`，日志里会列出）
 - **默认参数与 PC 端一致**：HTTP + HTTPS 双端口（HTTPS :9443），启动后状态栏绿点标记；局域网设备要硬解投屏需在网页设置页下载 CA 并导入信任（不导入则用 HTTP 访问，投屏走 WebRTC/软解）
 - 连接方式为**无线**：目标设备开「开发者选项 → 无线调试」，在网页里 `adb connect <ip>:<端口>`；也可 `adb connect 127.0.0.1:5555` 投本机自己
 - 常驻通知显示服务地址、可「停止服务」；进程/端口掉线自动重拉
@@ -288,7 +287,7 @@ adb connect 127.0.0.1:5555      # 无线调试自连
 
 ## API 概览
 
-HTTP 接口通过 Basic Auth 认证（`Authorization: Basic ...`）。WebSocket 不支持 Basic 弹窗，需先 `POST /api/session` 换取短期会话 cookie，握手时由浏览器自动携带。`/api/health` 与 `/api/session` 之外的接口均受保护。
+HTTP 接口通过会话认证：先 `POST /api/session`（body `{"password": "..."}`）用管理员密码换取会话，之后凭 `HttpOnly` 会话 cookie（同源自动携带）或 `Authorization: Bearer <token>`（跨源）访问；WebSocket 握手凭 cookie 或 `?session=<token>` 查询参数。`/api/health` 与 `/api/session` 之外的接口均受保护。会话 12 小时有效，`DELETE /api/session` 登出。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -306,7 +305,7 @@ HTTP 接口通过 Basic Auth 认证（`Authorization: Basic ...`）。WebSocket 
 
 ## 安全提示
 
-ADB 意味着设备的**完全控制权**。密码务必妥善保管（默认 `admin`，公网环境务必用 `-password` / `ADBREEZE_PASSWORD` 改掉），服务默认面向内网使用。Basic Auth 凭证以 Base64 明文编码传输，**切勿裸走 HTTP 暴露到公网**——HTTPS 默认已开启（自签名 CA 证书仅供内网；公网请用 `-tls-cert` / `-tls-key` 指定正式证书），或置于反向代理之后。会话 cookie 签名密钥每次启动随机生成，重启服务后所有已登录 WebSocket 会话需重新认证。
+ADB 意味着设备的**完全控制权**。密码务必妥善保管（默认 `admin`，公网环境务必用 `-password` / `ADBREEZE_PASSWORD` 改掉；默认密码 + 对外监听时启动日志会给出安全警告），服务默认面向内网使用。**切勿裸走 HTTP 暴露到公网**——HTTPS 默认已开启（自签名 CA 证书仅供内网；公网请用 `-tls-cert` / `-tls-key` 指定正式证书），或置于反向代理之后。管理员密码只在登录时提交一次，之后传输的是 12 小时过期的会话 token；会话签名密钥每次启动随机生成，重启服务后所有已登录会话需重新认证。登录接口内置防爆破（连续失败 5 次锁定 30 秒）。
 
 ## 目录结构
 
@@ -317,7 +316,7 @@ adbreeze/
 │   ├── adb/               # adb server 协议（smart socket + sync）
 │   ├── scrcpy/            # 投屏（server 生命周期 / 协议解析 / ControlMessage / SPS）
 │   ├── api/               # REST + WebSocket + 静态前端
-│   ├── auth/              # Basic Auth + 会话 cookie
+│   ├── auth/              # 管理员密码登录 + 会话 cookie/token
 │   ├── browser/           # 调起系统默认浏览器（双击运行的收尾体验）
 │   ├── settings/          # 用户偏好持久化（adb 路径等）
 │   ├── tlsutil/           # 自签名证书生成 / 复用（HTTPS）

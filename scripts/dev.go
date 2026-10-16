@@ -5,8 +5,8 @@ package main
 //
 // 用法（项目根目录）：
 //
-//	go run ./scripts                        # 默认 admin/admin，http://localhost:9080 + https://localhost:9443
-//	go run ./scripts -user xxx -password yyy
+//	go run ./scripts                        # 默认密码 admin，http://localhost:9080 + https://localhost:9443
+//	go run ./scripts -password yyy
 //	go run ./scripts -skip-web              # 前端没改时跳过 pnpm build
 //	go run ./scripts -https=false           # 关闭 HTTPS（HTTP 始终可用）
 //
@@ -24,8 +24,7 @@ import (
 )
 
 func main() {
-	user := flag.String("user", "admin", "Basic Auth 用户名")
-	password := flag.String("password", "admin", "Basic Auth 密码")
+	password := flag.String("password", "admin", "管理员密码（前端登录用）")
 	addr := flag.String("addr", ":9080", "HTTP 监听地址（始终开启）")
 	https := flag.Bool("https", true, "额外开启 HTTPS（默认开启；-https=false 关闭）")
 	httpsAddr := flag.String("https-addr", ":9443", "HTTPS 监听地址")
@@ -74,13 +73,13 @@ func main() {
 
 	// 3. 启动（前台运行，Ctrl+C 退出）。-https 与 -https-addr 始终显式传递：
 	// 后端同为布尔 flag，不能靠省略表达关闭（省略 = 后端默认值 true）
-	args := []string{"-addr", *addr, "-user", *user, "-password", *password,
+	args := []string{"-addr", *addr, "-password", *password,
 		"-https=" + fmt.Sprintf("%v", *https), "-https-addr", *httpsAddr}
 	if *https {
-		fmt.Printf("==> 启动 http://localhost%s 与 https://localhost%s (账号: %s / 密码: %s)\n",
-			*addr, *httpsAddr, *user, *password)
+		fmt.Printf("==> 启动 http://localhost%s 与 https://localhost%s (管理员密码: %s)\n",
+			*addr, *httpsAddr, *password)
 	} else {
-		fmt.Printf("==> 启动 http://localhost%s (账号: %s / 密码: %s)\n", *addr, *user, *password)
+		fmt.Printf("==> 启动 http://localhost%s (管理员密码: %s)\n", *addr, *password)
 	}
 	run(root, exePath, args...)
 }

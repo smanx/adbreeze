@@ -15,8 +15,8 @@ func TestParseArgsDefaults(t *testing.T) {
 	if cfg.Addr != ":9080" {
 		t.Errorf("Addr = %q，期望 :9080", cfg.Addr)
 	}
-	if cfg.Username != "admin" || cfg.Password != "admin" {
-		t.Errorf("账号密码 = %q/%q，期望 admin/admin", cfg.Username, cfg.Password)
+	if cfg.Password != "admin" {
+		t.Errorf("Password = %q，期望 admin", cfg.Password)
 	}
 	if !cfg.HTTPS || cfg.HTTPSAddr != ":9443" {
 		t.Errorf("HTTPS = %v %q，期望 true :9443", cfg.HTTPS, cfg.HTTPSAddr)
@@ -33,7 +33,7 @@ func TestParseArgsWithArgsDisablesBrowser(t *testing.T) {
 	for _, args := range [][]string{
 		{"-addr", ":9090"},
 		{"-https=false"},
-		{"-user", "x", "-password", "y"},
+		{"-user", "x", "-password", "y"}, // -user 已废弃：仍应被接受（不报未知参数）
 	} {
 		cfg, err := ParseArgs(args)
 		if err != nil {

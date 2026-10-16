@@ -107,12 +107,12 @@ Go 的 `EnsureServer()` 内部是 `exec.Command(adb, "start-server")`；Go 子�
 | `ADBREEZE_DATA` | `<filesDir>` | settings.json 等落地（持久目录） |
 | `HOME` | `<filesDir>` | Go 的 `os.UserConfigDir()` 在 Android 依赖 `$HOME`，不设则 settings 退化为内存态（不致命，但设了能持久化界面里改的 adb 路径） |
 | `ADBREEZE_ADB` | `<assets 解压出的 adb 路径>` | 让设置页直接可见/可改的默认 adb 路径 |
-| `ADBREEZE_USER` / `ADBREEZE_PASSWORD` | `admin` / `admin`（后可改设置页） | Basic Auth，WebView 自动填入 |
+| `ADBREEZE_PASSWORD` | `admin`（后可改设置页） | 页面登录用的管理员密码 |
 
 ### 3.5 WebView 承载现有前端（UI 零改动）
 
 - 加载 `http://127.0.0.1:9080`；`javaScriptEnabled`、`domStorageEnabled`、`databaseEnabled` 全开。
-- **Basic Auth**：`WebViewClient.onReceivedHttpAuthRequest` 里 `handler.proceed(user, pass)`。前端同源模式的 `authHeaders()` 返回空、完全靠浏览器自动凭证——WebView 自动 proceed 后 fetch/WS 握手都会带上凭证，登录无感。
+- **登录**：页面内置登录表单（管理员密码 → `POST /api/session` 换会话），WebView 无需额外处理；同源会话 cookie 由浏览器自动携带，fetch / WS 握手都带上凭证。
 - 能力体检（Android System WebView / Chrome 94+ 均支持）：WebSocket、WebCodecs VideoDecoder/AudioDecoder、WebRTC（RTCPeerConnection）、AudioWorklet、h264bsd WASM 软解兜底。
 - 已知小差异：`requestFullscreen` 对非 `<video>` 元素在 WebView 里无动画（前端有兜底探测）；必要时壳补 `onShowCustomView/onHideCustomView`，实测后决定。
 - 备选路线：壳只起服务、然后 `Intent.ACTION_VIEW` 调系统浏览器打开——更省事但脱离「APK 内」体验，作为 Plan B。

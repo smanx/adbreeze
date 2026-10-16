@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { clearReconnectTimer, useStore } from '../store'
-import { api, apiUrl, authHeaders, clearSession, isCrossOrigin, loadBackendConfig, normalizeBackendBase, probeBackend, backendBase, type AdbSettings, type AdbSettingsSaveResult } from '../api'
+import { api, apiUrl, authHeaders, clearSession, isCrossOrigin, loadBackendConfig, login, normalizeBackendBase, probeBackend, backendBase, type AdbSettings, type AdbSettingsSaveResult } from '../api'
 import { Placeholder, TABS } from '../panels'
 import DeviceList from './DeviceList'
 import MirrorPanel from '../panels/MirrorPanel'
@@ -19,6 +19,7 @@ import { toggleLang, useT } from '../i18n'
 // 应用外壳：
 //   PC（≥880px）：顶栏 + 左侧设备栏 + 主内容（标签页面板）
 //   手机（<880px）：顶栏 + 设备抽屉 + 主内容 + 底部 TabBar
+// 未登录 / 会话过期 / 主动退出时整屏切换到登录卡片（LoginCard）。
 export default function Shell() {
   const panel = useStore(s => s.panel)
   const setPanel = useStore(s => s.setPanel)
@@ -29,19 +30,21 @@ export default function Shell() {
   const backendIssue = useStore(s => s.backendIssue)
   const backendRevision = useStore(s => s.backendRevision)
   const retryBackend = useStore(s => s.retryBackend)
+  const loginSucceeded = useStore(s => s.loginSucceeded)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [loggedOut, setLoggedOut] = useState(false)
   const t = useT()
 
-  // 后端配置变更（backendRevision 自增）时重建事件通道，切到新后端立即生效
+  // 后端配置变更（backendRevision 自增）或重新登录时重建事件通道，
+  // 切到新后端 / 新会话立即生效
   useEffect(() => {
     if (loggedOut) return
     watchEvents()
     return () => { clearReconnectTimer() }
   }, [loggedOut, backendRevision])
 
-  // 退出：清除后端会话 cookie 并断开事件通道。
-  // Basic 凭证由浏览器按源缓存、无法由脚本清除，故此处仅做降级退出提示。
+  // 退出：清除后端会话 cookie 与本地 token 并断开事件通道。
+  // 会话凭证只有这一处，退出即真失效——这是相对 Basic Auth 的核心改进。
   const logout = async () => {
     if (!confirm(t('shell.logoutConfirm'))) return
     clearReconnectTimer()
@@ -49,27 +52,20 @@ export default function Shell() {
     setLoggedOut(true)
   }
 
-  if (loggedOut) {
+  if (loggedOut || backendIssue === 'auth') {
     return (
-      <div className="auth-page">
-        <div className="auth-card">
-          <h1>{t('shell.signedOut')}</h1>
-          <p className="auth-sub">{t('shell.signedOutHint')}</p>
-          <button className="btn primary" onClick={() => location.reload()}>{t('shell.loginAgain')}</button>
-        </div>
-      </div>
+      <LoginCard
+        notice={loggedOut ? t('shell.signedOut') : ''}
+        onSuccess={() => { setLoggedOut(false); loginSucceeded() }}
+      />
     )
   }
 
   return (
     <div className="app-shell">
-      {backendIssue !== 'none' && (
+      {backendIssue === 'unreachable' && (
         <div className="backend-banner" role="alert">
-          <span>
-            {backendIssue === 'unreachable'
-              ? t('banner.unreachable', { host: backendBase() || location.host })
-              : t('banner.auth')}
-          </span>
+          <span>{t('banner.unreachable', { host: backendBase() || location.host })}</span>
           <span className="spacer" />
           <button className="btn tiny" onClick={() => setPanel('settings')}>{t('banner.configure')}</button>
           <button className="btn tiny ghost" onClick={retryBackend}>{t('common.retry')}</button>
@@ -237,8 +233,67 @@ function SettingsPanel() {
   )
 }
 
+// 登录卡片：管理员密码登录（POST /api/session）。
+// 三种场景共用：未加载到有效会话（首次进入 / 12h 过期）、会话被拒（跨源 token
+// 失效等）、主动退出后重新登录（notice 显示「已退出」）。
+// 连续失败 5 次后端锁定 30 秒（429 + Retry-After），界面同步倒计时。
+function LoginCard({ notice, onSuccess }: { notice?: string; onSuccess: () => void }) {
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [locked, setLocked] = useState(0)
+  const t = useT()
+
+  // 锁定倒计时
+  useEffect(() => {
+    if (locked <= 0) return
+    const timer = setTimeout(() => setLocked(s => s - 1), 1000)
+    return () => clearTimeout(timer)
+  }, [locked])
+
+  const submit = async () => {
+    if (busy || locked > 0 || !password) return
+    setBusy(true); setErr('')
+    const r = await login(password)
+    setBusy(false)
+    if (r.ok) { onSuccess(); return }
+    setPassword('')
+    if (r.lockedFor) setLocked(r.lockedFor)
+    else setErr(r.error ? t('login.rejected') : t('login.networkError'))
+  }
+
+  return (
+    <div className="auth-page">
+      <div className="auth-card">
+        <h1>{t('login.title')}</h1>
+        {notice && <p className="auth-sub">{notice}</p>}
+        <input
+          type="password"
+          className="auth-input"
+          autoFocus
+          placeholder={t('login.password')}
+          value={password}
+          onChange={e => { setPassword(e.target.value); setErr('') }}
+          onKeyDown={e => e.key === 'Enter' && void submit()}
+          disabled={busy || locked > 0}
+        />
+        {locked > 0 ? (
+          <p className="auth-error">{t('login.locked', { s: locked })}</p>
+        ) : err ? (
+          <p className="auth-error">{err}</p>
+        ) : null}
+        <button className="btn primary" disabled={busy || locked > 0 || !password} onClick={() => void submit()}>
+          {busy ? t('login.submitting') : t('login.submit')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // 后端地址配置：默认与页面同源；跨源部署（前端托管在别的域名）时手动填写
-// 后端地址与账号密码，保存后经 applyBackend 重建事件通道立即生效。
+// 后端地址，保存后经 applyBackend 重建事件通道立即生效。
+// 登录在页面内完成（管理员密码），这里不再收集账号密码——切换后端后
+// 旧 token 对新后端无效，会自动回到登录界面。
 function BackendSettings() {
   const applyBackend = useStore(s => s.applyBackend)
   const [draft, setDraft] = useState(() => loadBackendConfig())
@@ -260,17 +315,16 @@ function BackendSettings() {
   const save = async () => {
     const norm = normalizeBackendBase(draft.base)
     if (norm === null) { setErr(t('settings.badAddress')); return }
-    if (norm && !draft.user.trim()) { setErr(t('settings.crossOriginNeedUser')); return }
     setBusy(true); setErr(''); setMsg('')
     const r = await probeBackend(norm)
     if (!r.ok) { setErr(t('settings.preSaveFailed')); setBusy(false); return }
-    applyBackend({ base: norm, user: draft.user.trim(), pass: draft.pass })
+    applyBackend({ base: norm })
     setMsg(t('settings.savedReconnecting'))
     setBusy(false)
   }
 
   const reset = () => {
-    const c = { base: '', user: '', pass: '' }
+    const c = { base: '' }
     setDraft(c)
     applyBackend(c)
     setErr(''); setMsg(t('settings.backSameOrigin'))
@@ -288,19 +342,6 @@ function BackendSettings() {
           value={draft.base}
           placeholder={t('settings.sameOriginEmpty', { host: location.host })}
           onChange={e => { setDraft({ ...draft, base: e.target.value }); setErr(''); setMsg('') }}
-          disabled={busy}
-        />
-        <input
-          type="text"
-          value={draft.user}
-          placeholder={t('settings.userPlaceholder')}
-          onChange={e => { setDraft({ ...draft, user: e.target.value }); setErr(''); setMsg('') }}
-          disabled={busy}
-        />
-        <input
-          type="password"
-          value={draft.pass}
-          onChange={e => { setDraft({ ...draft, pass: e.target.value }); setErr(''); setMsg('') }}
           onKeyDown={e => e.key === 'Enter' && void save()}
           disabled={busy}
         />
