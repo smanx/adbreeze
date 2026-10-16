@@ -6,14 +6,20 @@
 //
 // 环境变量的意义在于容器 / 反向代理等不便改命令行的场景：
 // docker run -e ADBREEZE_PASSWORD=... 即可，无需改动 ENTRYPOINT。
+//
+// 所有参数都有默认值：不带任何参数直接运行（Windows 双击 / macOS Finder）
+// 即以默认配置启动，这也是「打包出来给普通用户直接用」的契约。
 package config
 
 import (
+	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -26,9 +32,16 @@ type Config struct {
 	Addr        string // HTTP 监听地址（始终开启，作为保底入口）
 	Username    string // Basic Auth 用户名
 	Password    string // Basic Auth 密码
-	AdbPath     string // adb 可执行文件路径，空则从 PATH 查找
+	AdbPath     string // adb 可执行文件路径，空则从 PATH 查找（附常见位置补漏）
 	DataDir     string // 数据目录：存放自动生成的 TLS 证书等（需持久保存，见 Parse）
 	ShowVersion bool   // 打印版本号并退出
+
+	// OpenBrowser：启动成功后调起系统默认浏览器打开管理界面。
+	// 默认开启，但仅对「无参数启动」（Windows 双击 / macOS Finder）自动生效——
+	// 那是交互场景，用户就在电脑前；带参数启动或 Linux 上一律不自动开
+	// （服务器 / Docker / Termux 场景开浏览器没有意义，xdg-open 不存在还会报错）。
+	// 显式传 -open-browser 或设置 ADBREEZE_OPEN_BROWSER 不受该默认语义约束。
+	OpenBrowser bool
 
 	// HTTPS：WebCodecs 只在安全上下文（HTTPS / localhost）暴露。
 	// 默认开启，与 HTTP 并存而非替代——HTTP 始终可用作保底入口；
@@ -51,29 +64,45 @@ type Config struct {
 }
 
 // Parse 解析配置（命令行参数 + 环境变量 + 默认值）。
-// 所有 flag 统一在此注册（flag.Parse 只能执行一次）。
-func Parse() *Config {
+// 命令行参数取 os.Args；用法错误（未知参数、缺值等）以 error 返回而非直接退出，
+// 交由调用方处理——双击启动时要把错误展示完再关闭窗口，否则用户什么都看不见。
+func Parse() (*Config, error) {
+	return ParseArgs(os.Args[1:])
+}
+
+// ParseArgs 用给定参数解析配置。flag 包全局注册只能执行一次，故自建 FlagSet，
+// 测试与 main 共用这一条路径。
+func ParseArgs(args []string) (*Config, error) {
 	cfg := &Config{}
-	flag.BoolVar(&cfg.ShowVersion, "version", false, "打印版本号并退出")
-	flag.StringVar(&cfg.Addr, "addr", ":9080", "HTTP 监听地址（始终开启）")
-	flag.StringVar(&cfg.Username, "user", "admin", "Basic Auth 用户名")
-	flag.StringVar(&cfg.Password, "password", "admin", "Basic Auth 密码")
-	flag.StringVar(&cfg.AdbPath, "adb", "", "adb 可执行文件路径，默认从 PATH 查找")
-	flag.StringVar(&cfg.DataDir, "data", "", "数据目录（存放 TLS 证书，需持久保存），默认用户配置目录下的 ADBreeze")
-	flag.BoolVar(&cfg.HTTPS, "https", true, "额外开启 HTTPS（默认开启；HTTP 始终可用，-https=false 关闭）")
-	flag.StringVar(&cfg.HTTPSAddr, "https-addr", ":9443", "HTTPS 监听地址")
-	flag.StringVar(&cfg.TLSCert, "tls-cert", "", "TLS 证书路径，留空则自动生成本地 CA + 叶证书")
-	flag.StringVar(&cfg.TLSKey, "tls-key", "", "TLS 私钥路径，与 -tls-cert 成对使用")
-	flag.StringVar(&cfg.TLSSubdir, "tls-dir", "tls", "自动生成证书的存放目录名（位于数据目录下）")
-	flag.StringVar(&cfg.TLSHosts, "tls-hosts", "", "追加到证书 SAN 的主机名（逗号分隔），自动探测之外补漏，如反向代理域名")
-	flag.StringVar(&cfg.TLSIPs, "tls-ips", "", "追加到证书 SAN 的 IP（逗号分隔），如 Docker 桥接 / NAT 后的外部地址")
-	flag.StringVar(&cfg.CORSOrigins, "cors-origins", "", "跨域放行的来源（逗号分隔），留空=不限制；前端托管在别的域名、手动配置后端地址时使用")
-	flag.Parse()
+	fs := flag.NewFlagSet("adbreeze", flag.ContinueOnError)
+	fs.BoolVar(&cfg.ShowVersion, "version", false, "打印版本号并退出")
+	fs.StringVar(&cfg.Addr, "addr", ":9080", "HTTP 监听地址（始终开启）")
+	fs.StringVar(&cfg.Username, "user", "admin", "Basic Auth 用户名")
+	fs.StringVar(&cfg.Password, "password", "admin", "Basic Auth 密码")
+	fs.StringVar(&cfg.AdbPath, "adb", "", "adb 可执行文件路径，默认从 PATH 查找（附常见安装位置补漏）")
+	fs.StringVar(&cfg.DataDir, "data", "", "数据目录（存放 TLS 证书，需持久保存），默认用户配置目录下的 ADBreeze")
+	fs.BoolVar(&cfg.OpenBrowser, "open-browser", true, "启动成功后自动打开默认浏览器（无参数启动=双击场景默认开启；带参数启动/Linux 默认关闭）")
+	fs.BoolVar(&cfg.HTTPS, "https", true, "额外开启 HTTPS（默认开启；HTTP 始终可用，-https=false 关闭）")
+	fs.StringVar(&cfg.HTTPSAddr, "https-addr", ":9443", "HTTPS 监听地址")
+	fs.StringVar(&cfg.TLSCert, "tls-cert", "", "TLS 证书路径，留空则自动生成本地 CA + 叶证书")
+	fs.StringVar(&cfg.TLSKey, "tls-key", "", "TLS 私钥路径，与 -tls-cert 成对使用")
+	fs.StringVar(&cfg.TLSSubdir, "tls-dir", "tls", "自动生成证书的存放目录名（位于数据目录下）")
+	fs.StringVar(&cfg.TLSHosts, "tls-hosts", "", "追加到证书 SAN 的主机名（逗号分隔），自动探测之外补漏，如反向代理域名")
+	fs.StringVar(&cfg.TLSIPs, "tls-ips", "", "追加到证书 SAN 的 IP（逗号分隔），如 Docker 桥接 / NAT 后的外部地址")
+	fs.StringVar(&cfg.CORSOrigins, "cors-origins", "", "跨域放行的来源（逗号分隔），留空=不限制；前端托管在别的域名、手动配置后端地址时使用")
+	if err := fs.Parse(args); err != nil {
+		return nil, err // 用法信息已由 flag 包打印（含 -h 的 ErrHelp）
+	}
 
 	if cfg.ShowVersion {
-		return cfg
+		return cfg, nil
 	}
-	applyEnv(cfg)
+
+	// set 记录「命令行显式设置过」的项；环境变量成功应用后再记 env: 前缀的同名键，
+	// 供下面判断 open-browser 是否被显式指定。
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	applyEnv(cfg, set)
 
 	// 容忍只写端口号（如 ADBREEZE_ADDR=9080），统一成监听地址形态
 	cfg.Addr = normalizeAddr(cfg.Addr)
@@ -93,25 +122,34 @@ func Parse() *Config {
 	}
 	migrateLegacyDataDir(defaultDataDir, cfg.DataDir)
 
+	// open-browser 的默认语义（均未被显式指定时才生效）：
+	//   - 无参数启动 = 双击 / Finder：用户就在电脑前，自动开浏览器，流程闭环；
+	//   - 带参数启动 = 控制台 / 服务场景：不自动开，需要时显式 -open-browser；
+	//   - Linux 一律不自动开：服务器 / Docker / Termux 上没有桌面浏览器可用。
+	// 显式 -open-browser 或合法的 ADBREEZE_OPEN_BROWSER 优先，不受上面约束。
+	if !set["open-browser"] && !set["env:open-browser"] {
+		if runtime.GOOS == "linux" || len(args) > 0 {
+			cfg.OpenBrowser = false
+		}
+	}
+
 	// 指定证书时要求成对出现：只有其一无意义，且容易让人以为「已启用证书」
 	if (cfg.TLSCert == "") != (cfg.TLSKey == "") {
-		log.Fatalf("-tls-cert 与 -tls-key 必须同时指定")
+		return nil, errors.New("-tls-cert 与 -tls-key 必须同时指定")
 	}
 	// 两个监听器同端口会互相挤占：后启动的那个失败并终止进程，连 HTTP 保底也一起没了。
 	// 这是纯配置错误，启动即报比运行中莫名失败更好排查。
 	if cfg.HTTPS && samePort(cfg.Addr, cfg.HTTPSAddr) {
-		log.Fatalf("HTTP 与 HTTPS 不能共用同一端口（%s）；请用 -https-addr 指定不同端口，如 :9443", cfg.Addr)
+		return nil, fmt.Errorf("HTTP 与 HTTPS 不能共用同一端口（%s）；请用 -https-addr 指定不同端口，如 :9443", cfg.Addr)
 	}
-	return cfg
+	return cfg, nil
 }
 
 // applyEnv 把环境变量应用到「命令行未显式设置」的配置项上。
-// 判断是否显式设置用 flag.Visit：只有命令行里出现过的 flag 才会被访问到，
+// 判断是否显式设置用 FlagSet.Visit：只有命令行里出现过的 flag 才会被访问到，
 // 于是天然实现「命令行 > 环境变量 > 默认值」——flag 默认值不会被误判为用户输入。
-func applyEnv(cfg *Config) {
-	set := map[string]bool{}
-	flag.Visit(func(f *flag.Flag) { set[f.Name] = true })
-
+// 成功应用的环境变量会以 "env:"+参数名 记入 set，便于调用方判断显式指定。
+func applyEnv(cfg *Config, set map[string]bool) {
 	if v := envStr("ADDR"); v != "" && !set["addr"] {
 		cfg.Addr = v
 	}
@@ -126,6 +164,15 @@ func applyEnv(cfg *Config) {
 	}
 	if v := envStr("DATA"); v != "" && !set["data"] {
 		cfg.DataDir = v
+	}
+	if v := envStr("OPEN_BROWSER"); v != "" && !set["open-browser"] {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			log.Printf("[config] 环境变量 ADBREEZE_OPEN_BROWSER=%q 不是合法布尔值（true/false/1/0），已忽略", v)
+		} else {
+			cfg.OpenBrowser = b
+			set["env:open-browser"] = true
+		}
 	}
 	if v := envStr("HTTPS"); v != "" && !set["https"] {
 		b, err := strconv.ParseBool(v)

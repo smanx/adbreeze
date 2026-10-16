@@ -57,6 +57,10 @@ go build -o bin/adbreeze.exe ./cmd/adbreeze
 .\bin\adbreeze.exe -addr :8000 -https=false -user admin -password my-secret
 ```
 
+**Windows 直接双击 `adbreeze-windows-amd64.exe` 即可运行**：无参数启动 = 默认配置，启动成功后自动打开默认浏览器进入管理界面，控制台窗口保留运行日志（关掉窗口即停止服务）。控制台里运行、带参数运行同样支持——带参数启动属于「控制台 / 服务场景」，此时不会自动开浏览器（需要时显式加 `-open-browser`）。
+
+> 首次运行如遇 SmartScreen 拦截（「Windows 保护了你的电脑」），点「更多信息 → 仍要运行」即可；未做代码签名的开源软件都会走这个提示。启动失败时窗口会停住并提示原因、按回车退出，不会一闪而过。
+
 浏览器打开 `http://localhost:9080`（HTTPS 在 `https://localhost:9443`），在弹出的 Basic Auth 登录框输入账号密码即可使用。
 
 ### 配置（命令行 / 环境变量 / 默认值）
@@ -70,7 +74,8 @@ go build -o bin/adbreeze.exe ./cmd/adbreeze
 | HTTP 端口 | `-addr` | `ADBREEZE_ADDR` | `:9080` | HTTP 始终开启；只写端口号（如 `9080`）也可以 |
 | HTTPS 开关 | `-https` | `ADBREEZE_HTTPS` | `true` | `-https=false` 关闭（HTTP 始终可用）|
 | HTTPS 端口 | `-https-addr` | `ADBREEZE_HTTPS_ADDR` | `:9443` | 与 HTTP 必须不同端口 |
-| adb 路径 | `-adb` | `ADBREEZE_ADB` | 从 PATH 查找 | 也可在网页设置里随时切换 |
+| adb 路径 | `-adb` | `ADBREEZE_ADB` | PATH 查找 | PATH 找不到时自动补探常见安装位置（见下）；也可在网页设置里随时切换 |
+| 自动打开浏览器 | `-open-browser` | `ADBREEZE_OPEN_BROWSER` | 见说明 | 无参数启动（双击 / Finder）默认开启；带参数启动 / Linux 默认关闭 |
 | 数据目录 | `-data` | `ADBREEZE_DATA` | 用户配置目录下的 `ADBreeze` | 存放 TLS 证书，需持久保存 |
 | TLS 证书 | `-tls-cert` / `-tls-key` | `ADBREEZE_TLS_CERT` / `ADBREEZE_TLS_KEY` | 自动生成 | 指定正式证书时成对使用 |
 | 追加证书主机名 | `-tls-hosts` | `ADBREEZE_TLS_HOSTS` | 空 | 逗号分隔；追加进自动证书 SAN 的域名等 |
@@ -80,6 +85,23 @@ go build -o bin/adbreeze.exe ./cmd/adbreeze
 # 环境变量示例（容器 / systemd 等场景）
 ADBREEZE_PASSWORD=my-secret ADBREEZE_ADDR=9080 ./adbreeze
 ```
+
+### 自动打开浏览器（双击运行）
+
+`-open-browser` 默认开启，但**只在「无参数启动」时自动生效**——这正是 Windows 双击 / macOS Finder 启动的场景：用户就在电脑前，服务就绪后直接把管理界面带到默认浏览器面前，不用对着控制台猜地址。判据与规则：
+
+| 启动方式 | 是否自动开浏览器 |
+|---|---|
+| 双击 exe / Finder 启动（无参数） | 开 |
+| 控制台 / 服务器带参数启动（`-addr` 等） | 不开（需要时显式加 `-open-browser`） |
+| Linux（含 Docker / Termux） | 不开（无桌面浏览器；显式指定才尝试 `xdg-open`） |
+| 显式 `-open-browser=false` 或 `ADBREEZE_OPEN_BROWSER=false` | 一律不开 |
+
+自动开浏览器只是便利性兜底：失败只记日志，不影响服务本身，手动访问启动日志里打印的地址即可。Windows 上启动时还会把控制台代码页切到 UTF-8（中文日志不变乱码），退出时自动还原，不影响你在同一个 cmd 窗口里的后续操作。
+
+### adb 自动探测
+
+`-adb` 留空时按以下顺序找 adb：**PATH → 常见安装位置**。常见位置覆盖 `ANDROID_HOME` / `ANDROID_SDK_ROOT`、可执行文件同级的 `platform-tools`、以及各平台标准 SDK 目录（Windows：`%LOCALAPPDATA%\Android\Sdk\platform-tools` 等；macOS：`~/Library/Android/sdk/platform-tools`；Linux：`~/Android/Sdk/platform-tools`）。PATH 能找到时行为与以前完全一致，探测只在 PATH 失败时补漏——Windows 上 adb 极少加进 PATH，没这一步双击运行会看不到任何设备。找到后日志会打印实际使用的路径；要指定其他位置，用 `-adb` 或在网页「设置」里切换（立即生效，无需重启）。
 
 ### HTTPS（默认开启）
 
@@ -285,9 +307,11 @@ adbreeze/
 │   ├── scrcpy/            # 投屏（server 生命周期 / 协议解析 / ControlMessage / SPS）
 │   ├── api/               # REST + WebSocket + 静态前端
 │   ├── auth/              # Basic Auth + 会话 cookie
+│   ├── browser/           # 调起系统默认浏览器（双击运行的收尾体验）
 │   ├── settings/          # 用户偏好持久化（adb 路径等）
 │   ├── tlsutil/           # 自签名证书生成 / 复用（HTTPS）
 │   └── config/            # 命令行配置
+├── cmd/adbreeze/          # 入口（launch.go 双击体验 / console_*.go 控制台代码页）
 ├── web/dist/              # 前端（embed 进二进制）
 │   └── (manifest.webmanifest / sw.js / icons/ 随构建产出，支撑 PWA 安装)
 ├── scripts/               # 跨平台开发脚本（go run ./scripts）

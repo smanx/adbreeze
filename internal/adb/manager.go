@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -52,15 +53,18 @@ func adbBinaryName() string {
 // ResolveAdbPath 把用户填写的 adb 路径解析为可直接执行的二进制路径。
 //
 // 用户可能填的是目录（如 D:\platform-tools）而不是可执行文件本身，
-// 这里做一次归一化：目录则拼上平台对应的文件名。空值走 PATH 查找。
+// 这里做一次归一化：目录则拼上平台对应的文件名。空值走 PATH 查找，
+// PATH 找不到再补探常见安装位置（见 discoverAdb）。
 func ResolveAdbPath(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		p, err := exec.LookPath("adb")
-		if err != nil {
-			return "", fmt.Errorf("adb server 不可达且未找到 adb 可执行文件: %w", err)
+		if p, err := exec.LookPath("adb"); err == nil {
+			return p, nil
 		}
-		return p, nil
+		if p := discoverAdb(); p != "" {
+			return p, nil
+		}
+		return "", errors.New("adb server 不可达且未找到 adb 可执行文件（PATH 与常见安装位置均无）")
 	}
 	if fi, err := os.Stat(raw); err == nil && fi.IsDir() {
 		raw = filepath.Join(raw, adbBinaryName())
@@ -69,6 +73,64 @@ func ResolveAdbPath(raw string) (string, error) {
 		return "", fmt.Errorf("adb 可执行文件不存在: %s", raw)
 	}
 	return raw, nil
+}
+
+// commonAdbDirs 返回 PATH 之外 adb 的常见安装位置（目录，不含可执行文件名）。
+//
+// Windows 上 adb 极少被加进 PATH，但装了 Android Studio / scrcpy 之后位置基本固定；
+// macOS / Linux 各有标准 SDK 目录。仅在 PATH 查找失败时补漏，
+// PATH 能找到时行为与以前完全一致。
+func commonAdbDirs() []string {
+	var dirs []string
+	add := func(dir string) {
+		if dir != "" && !slices.Contains(dirs, dir) {
+			dirs = append(dirs, dir)
+		}
+	}
+	// 用户显式配置过的 SDK 根目录优先（ANDROID_HOME 是老写法，ANDROID_SDK_ROOT 是新写法）
+	for _, env := range []string{"ANDROID_HOME", "ANDROID_SDK_ROOT"} {
+		if root := strings.TrimSpace(os.Getenv(env)); root != "" {
+			add(filepath.Join(root, "platform-tools"))
+		}
+	}
+	// 与可执行文件同级的 platform-tools：用户把 adb 解压到旁边即可用
+	if exe, err := os.Executable(); err == nil {
+		add(filepath.Join(filepath.Dir(exe), "platform-tools"))
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		switch runtime.GOOS {
+		case "windows":
+			add(filepath.Join(home, "AppData", "Local", "Android", "Sdk", "platform-tools"))
+			add(filepath.Join(home, "platform-tools"))
+		case "darwin":
+			add(filepath.Join(home, "Library", "Android", "sdk", "platform-tools"))
+		case "linux":
+			add(filepath.Join(home, "Android", "Sdk", "platform-tools"))
+		}
+	}
+	if runtime.GOOS == "windows" {
+		// Windows 上 LOCALAPPDATA 可能被重定向，与 home 推导的不是同一个路径
+		if la := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); la != "" {
+			add(filepath.Join(la, "Android", "Sdk", "platform-tools"))
+		}
+	}
+	return dirs
+}
+
+// discoverAdb 在常见安装位置里找 adb，返回第一个存在的可执行文件路径，找不到返回空串。
+// 找到时打一次日志告知用户（PATH 之外找到的，来源不显然）。
+// 只在 server 不可达时才会走到这里（EnsureServer 的 Ping 会先挡掉正常路径），
+// 调用频率低，直接每次实探，不缓存——用户装完 SDK 不用重启也能接着用。
+func discoverAdb() string {
+	name := adbBinaryName()
+	for _, dir := range commonAdbDirs() {
+		cand := filepath.Join(dir, name)
+		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+			log.Printf("[adb] PATH 中未找到 adb，使用常见安装位置: %s", cand)
+			return cand
+		}
+	}
+	return ""
 }
 
 // ProbeAdb 校验一个 adb 路径是否真的可用：解析成功且能执行 `version`。

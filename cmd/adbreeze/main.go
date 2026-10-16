@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"io/fs"
 	"log"
@@ -27,7 +29,18 @@ import (
 var version = "dev"
 
 func main() {
-	cfg := config.Parse()
+	// 中文 Windows 控制台默认 GBK(936)，Go 写出的 UTF-8 日志会变乱码；
+	// 双击启动场景尤其明显。仅影响本进程的控制台，退出时恢复（见 console_*.go）。
+	enableUTF8Console()
+	defer restoreConsoleCP()
+
+	cfg, err := config.Parse()
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0) // 用法信息已由 flag 包打印
+		}
+		fatal("%v", err)
+	}
 	if cfg.ShowVersion {
 		fmt.Println("ADBreeze", version)
 		return
@@ -62,7 +75,7 @@ func main() {
 
 	webFS, err := fs.Sub(adbreeze.WebFS, "web/dist")
 	if err != nil {
-		log.Fatalf("内嵌前端资源缺失: %v", err)
+		fatal("内嵌前端资源缺失: %v", err)
 	}
 
 	// 证书覆盖名（-tls-hosts / -tls-ips，环境变量 ADBREEZE_TLS_HOSTS / ADBREEZE_TLS_IPS）：
@@ -84,7 +97,7 @@ func main() {
 		if certPath == "" {
 			certPath, keyPath, err = tlsutil.Ensure(tlsDir, extra)
 			if err != nil {
-				log.Fatalf("准备证书失败: %v", err)
+				fatal("准备证书失败: %v", err)
 			}
 		}
 	}
@@ -100,7 +113,10 @@ func main() {
 	httpSrv := &http.Server{Addr: cfg.Addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("HTTP 服务失败: %v", err)
+			// 最常见原因：端口被占用（比如已经有一个 ADBreeze 在跑）。
+			// 用 fatal 而非 log.Fatalf：双击启动时控制台随进程退出秒关，
+			// 先让用户看清原因（见 launch.go）。
+			fatal("HTTP 服务失败（端口 %s 可能被占用，或已有一个 ADBreeze 在运行；可用 -addr 换端口）: %v", cfg.Addr, err)
 		}
 	}()
 
@@ -134,6 +150,8 @@ func main() {
 	if !cfg.HTTPS {
 		log.Printf("      （WebCodecs 需安全上下文；局域网 IP 访问请加 -https 开启 HTTPS）")
 	}
+	// 双击 / Finder 启动的收尾：自动把管理界面带到默认浏览器前
+	maybeOpenBrowser(cfg)
 
 	<-ctx.Done()
 	log.Println("正在退出...")
