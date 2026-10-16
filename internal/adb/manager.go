@@ -98,14 +98,8 @@ func commonAdbDirs() []string {
 		add(filepath.Join(filepath.Dir(exe), "platform-tools"))
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		switch runtime.GOOS {
-		case "windows":
-			add(filepath.Join(home, "AppData", "Local", "Android", "Sdk", "platform-tools"))
-			add(filepath.Join(home, "platform-tools"))
-		case "darwin":
-			add(filepath.Join(home, "Library", "Android", "sdk", "platform-tools"))
-		case "linux":
-			add(filepath.Join(home, "Android", "Sdk", "platform-tools"))
+		for _, dir := range homeAdbDirs(runtime.GOOS, home) {
+			add(dir)
 		}
 	}
 	if runtime.GOOS == "windows" {
@@ -115,6 +109,22 @@ func commonAdbDirs() []string {
 		}
 	}
 	return dirs
+}
+
+// homeAdbDirs 返回某平台下用户目录里的标准 SDK 位置（纯函数，便于跨平台测试——
+// CI 在 Linux 上跑，Windows/macOS 分支靠它覆盖）。
+func homeAdbDirs(goos, home string) []string {
+	switch goos {
+	case "windows":
+		return []string{
+			filepath.Join(home, "AppData", "Local", "Android", "Sdk", "platform-tools"),
+			filepath.Join(home, "platform-tools"),
+		}
+	case "darwin":
+		return []string{filepath.Join(home, "Library", "Android", "sdk", "platform-tools")}
+	default:
+		return []string{filepath.Join(home, "Android", "Sdk", "platform-tools")}
+	}
 }
 
 // discoverAdb 在常见安装位置里找 adb，返回第一个存在的可执行文件路径，找不到返回空串。

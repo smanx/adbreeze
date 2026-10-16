@@ -3,6 +3,7 @@ package adb
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -98,27 +99,51 @@ func TestResolveAdbPathExplicitMissing(t *testing.T) {
 	}
 }
 
+func TestHomeAdbDirs(t *testing.T) {
+	// 纯函数：三个平台的标准 SDK 目录都能在本机验证（CI 在 Linux 上跑，
+	// Windows/macOS 分支以前只能靠 CI 报错才发现问题）。
+	cases := []struct {
+		goos string
+		want []string
+	}{
+		{"windows", []string{"AppData/Local/Android/Sdk/platform-tools", "platform-tools"}},
+		{"darwin", []string{"Library/Android/sdk/platform-tools"}},
+		{"linux", []string{"Android/Sdk/platform-tools"}},
+	}
+	for _, c := range cases {
+		got := homeAdbDirs(c.goos, "/home/tester")
+		if len(got) != len(c.want) {
+			t.Errorf("%s: 得到 %v，期望 %v", c.goos, got, c.want)
+			continue
+		}
+		for i, w := range c.want {
+			if g := filepath.ToSlash(got[i]); g != "/home/tester/"+w {
+				t.Errorf("%s: 第 %d 项 = %q，期望 /home/tester/%s", c.goos, i, g, w)
+			}
+		}
+	}
+}
+
 func TestCommonAdbDirs(t *testing.T) {
 	home := isolateEnv(t)
 	t.Setenv("ANDROID_HOME", `C:\sdk`)
 
 	dirs := commonAdbDirs()
-	want := map[string]bool{
-		filepath.Join(`C:\sdk`, "platform-tools"): false,
-	}
-	if home != "" {
-		// 至少应包含与 home 相关的平台标准目录之一
-		want[filepath.Join(home, "platform-tools")] = false
-	}
-	for d := range want {
-		found := false
+	contains := func(d string) bool {
 		for _, got := range dirs {
 			if got == d {
-				found = true
-				break
+				return true
 			}
 		}
-		if !found {
+		return false
+	}
+	// ANDROID_HOME 派生的位置各平台一致
+	if !contains(filepath.Join(`C:\sdk`, "platform-tools")) {
+		t.Errorf("常见位置里应包含 ANDROID_HOME 派生目录，实际: %v", dirs)
+	}
+	// 当前平台的 home 标准目录必须都在列（与纯函数交叉验证）
+	for _, d := range homeAdbDirs(runtime.GOOS, home) {
+		if !contains(d) {
 			t.Errorf("常见位置里应包含 %q，实际: %v", d, dirs)
 		}
 	}
