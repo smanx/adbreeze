@@ -85,7 +85,7 @@ jobs:
         run: ./gradlew assembleRelease --console=plain --no-daemon -PappVersion="${APP_VERSION#v}"
 
       - name: Collect APK
-        run: cp android/app/build/outputs/apk/release/app-release.apk bin/adbreeze-android.apk
+        run: cp android/app/build/outputs/apk/release/app-release.apk bin/adbreeze-android-${{ steps.tag.outputs.value }}.apk
 
       - name: Checksums
         run: |

@@ -30,7 +30,7 @@ $(WEB_STAMP): $(WEB_INPUTS)
 build: $(WEB_STAMP)
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY)$(shell go env GOEXE) ./cmd/adbreeze
 
-## build-all: 交叉编译全部目标平台（前端已 embed，产物为单文件）
+## build-all: 交叉编译全部目标平台（前端已 embed，产物为单文件，文件名带版本号）
 build-all: $(WEB_STAMP)
 	@mkdir -p bin
 	@set -e; for t in $(TARGETS); do \
@@ -39,7 +39,7 @@ build-all: $(WEB_STAMP)
 		echo "==> $$os/$$arch"; \
 		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 \
 			go build -ldflags "$(LDFLAGS)" \
-			-o bin/$(BINARY)-$$os-$$arch$$ext ./cmd/adbreeze; \
+			-o bin/$(BINARY)-$$os-$$arch-$(VERSION)$$ext ./cmd/adbreeze; \
 	done
 
 ## android-go: 交叉编译 android/arm64 服务端，产物进 APK assets

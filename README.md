@@ -271,18 +271,19 @@ make build-all   # windows/amd64 arm64 · darwin/amd64 arm64 · linux/amd64 arm6
 
 ```bash
 pkg install android-tools
-./adbreeze-linux-arm64          # 运行服务
+./adbreeze-linux-arm64-*        # 运行服务（产物名带版本号）
 adb connect 127.0.0.1:5555      # 无线调试自连
 ```
 
 ### Android（APK）
 
-点击图标即启动服务并用内置 WebView 界面操作设备（Go 服务端 + adb 全部打进 APK，零额外依赖）。
+与桌面版形态一致：**App 只是一个服务控制台**——填端口 / 账号密码，点「启动」，日志就地显示；界面不内置，用浏览器打开服务地址（App 里有一键「打开页面」）操作设备。
 
-- **获取**：GitHub Release 直接下载 `adbreeze-android.apk`（打 tag 后 CI 自动随桌面平台一起打进 release）；或本地 `make android-apk` 自行打包
-- 点图标 → 前台服务拉起 adb server + Go 服务 → WebView 打开 `http://127.0.0.1:9080`（admin/admin）
-- 连接方式为**无线**：目标设备开「开发者选项 → 无线调试」，在界面里 `adb connect <ip>:<端口>`；也可 `adb connect 127.0.0.1:5555` 投本机自己
-- 常驻通知可「停止服务」；服务掉线自动重拉
+- **获取**：GitHub Release 直接下载 `adbreeze-android-<版本>.apk`（打 tag 后 CI 自动随桌面平台一起打进 release，所有产物文件名均带版本号）；或本地 `make android-apk` 自行打包
+- 打开 App → 填配置（默认 9080 / admin / admin）→ 点「启动」→ 浏览器访问 `http://127.0.0.1:<端口>`（局域网设备可访问 `http://<手机IP>:<端口>`，日志里会列出）
+- **默认参数与 PC 端一致**：HTTP + HTTPS 双端口（HTTPS :9443），启动后状态栏绿点标记；局域网设备要硬解投屏需在网页设置页下载 CA 并导入信任（不导入则用 HTTP 访问，投屏走 WebRTC/软解）
+- 连接方式为**无线**：目标设备开「开发者选项 → 无线调试」，在网页里 `adb connect <ip>:<端口>`；也可 `adb connect 127.0.0.1:5555` 投本机自己
+- 常驻通知显示服务地址、可「停止服务」；进程/端口掉线自动重拉
 - 架构与实现细节见 [ANDROID.md](ANDROID.md)；CI 见 `.github/workflows/release.yml`（release 统一出包）与 `.github/workflows/android.yml`（push 构建检查）
 
 ## API 概览

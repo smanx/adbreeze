@@ -11,25 +11,28 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import java.io.File
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.util.Collections
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * 前台服务：负责 adb server 与 Go 服务子进程的完整生命周期。
+ * 前台服务：与桌面版形态一致，只负责启动并保活一个服务进程
+ * （adb server + Go 服务），不承载任何界面。
  *
- * 启动时序（详见根目录 ANDROID.md）：
- *   ① 解压 assets（adbreeze / adb / 依赖 so / libtermux-exec）到 filesDir
- *   ② linker64 执行 adb start-server（LD_PRELOAD 钩子让 adb 内部的
- *      fork-server execv 也走 linker）→ 轮询 127.0.0.1:5037
- *   ③ linker64 执行 adbreeze（Go 服务，环境变量注入全部配置）
- *      → 轮询 127.0.0.1:9080 → phase = ready
- *   ④ 看护协程：5037 / 9080 掉了自动重拉
+ * 启动时序：
+ *   ① 解压 assets（adbreeze / adb / 依赖 so）到 filesDir
+ *   ② linker 执行 `adb server nodaemon`（前台常驻，无内部 exec，
+ *      绕开 Android 10+ 的 W^X exec 限制）→ 轮询 127.0.0.1:5037
+ *   ③ linker 执行 adbreeze（Go 服务，配置经环境变量注入，零改动）
+ *      → 轮询 HTTP 端口 → phase = ready
+ *   ④ 看护协程：任一进程/端口掉线自动重拉
  *
- * 关键点：Go 的 os/exec 走裸 execve syscall，LD_PRELOAD 钩不到它，所以
- * adb server 必须由壳层前置拉起——Go 的 Client.Ping() 直接成功，永远
- * 走不到它内部被 SELinux 拦掉的 exec 分支。
+ * 配置来自 SharedPreferences（MainActivity 表单写入）：端口 / 账号 / 密码。
+ * 用户用浏览器打开 http://127.0.0.1:<port> 操作设备。
  */
 class ServerService : Service() {
 
@@ -37,16 +40,38 @@ class ServerService : Service() {
         const val CHANNEL_ID = "adbreeze_server"
         const val NOTIFICATION_ID = 1
         const val ACTION_STOP = "com.smanx.adbreeze.STOP"
-
-        const val HTTP_PORT = 9080
         const val ADB_PORT = 5037
+        const val PREFS = "adbreeze"
+        const val KEY_PORT = "port"
+        const val KEY_HTTPS_PORT = "https_port"
+        const val KEY_USER = "user"
+        const val KEY_PASS = "pass"
 
-        /** 供 MainActivity 轮询的全局状态。 */
-        @Volatile var phase: String = "idle" // idle|extract|adb|go|ready|error
+        @Volatile private var phase0 = "idle" // idle|extract|adb|go|ready|error
+
+        /**
+         * 服务阶段。赋值即广播给已注册的监听者（MainActivity 据此刷新
+         * 状态栏/圆点），避免 UI 轮询或「点了按钮才刷新一次」的滞后。
+         */
+        var phase: String
+            get() = phase0
+            set(value) {
+                phase0 = value
+                phaseListeners.forEach { runCatching { it(value) } }
+            }
+
         @Volatile var errorMsg: String? = null
+        @Volatile var httpPort: String = "9080"
+        @Volatile var httpsPort: String = "9443"
 
-        /** 最近的服务端输出（环形缓冲，错误页展示用）。 */
+        /** 最近的服务端日志（环形缓冲，界面回放用）。 */
         val logLines = Collections.synchronizedList(ArrayDeque<String>())
+
+        /** 活动界面的日志订阅者（MainActivity 前台时注册）。 */
+        val logListeners = CopyOnWriteArrayList<(String) -> Unit>()
+
+        /** 阶段变化订阅者（MainActivity 前台时注册）。 */
+        val phaseListeners = CopyOnWriteArrayList<(String) -> Unit>()
 
         fun log(line: String) {
             val ts = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.ROOT)
@@ -55,26 +80,30 @@ class ServerService : Service() {
             logLines.add(l)
             while (logLines.size > 300) logLines.removeAt(0)
             android.util.Log.i("ADBreeze", line)
+            logListeners.forEach { runCatching { it(l) } }
         }
     }
 
     private var adbProc: Process? = null
     private var goProc: Process? = null
     private val watcher = AtomicReference<java.util.concurrent.ScheduledExecutorService?>()
-    private lateinit var filesDir_: File
+    private lateinit var baseDir: File
     private lateinit var adbBin: File
     private lateinit var goBin: File
     private lateinit var libDir: File
+
+    private var cfgUser = "admin"
+    private var cfgPass = "admin"
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-        filesDir_ = filesDir
-        adbBin = File(filesDir_, "adb/adb")
-        libDir = File(filesDir_, "adb")
-        goBin = File(filesDir_, "adbreeze/adbreeze")
-        startForegroundWithNotification()
+        baseDir = filesDir
+        adbBin = File(baseDir, "adb/adb")
+        libDir = File(baseDir, "adb")
+        goBin = File(baseDir, "adbreeze/adbreeze")
+        startForegroundWithNotification("服务启动中…")
         Thread { bootstrap() }.start()
     }
 
@@ -89,14 +118,29 @@ class ServerService : Service() {
     override fun onDestroy() {
         watcher.get()?.shutdownNow()
         killAll()
-        if (phase != "error") phase = "idle"
+        phase = "idle"
+        errorMsg = null
+        log("服务已停止")
         super.onDestroy()
+    }
+
+    // ---------- 配置 ----------
+
+    private fun loadConfig() {
+        val p = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        httpPort = p.getString(KEY_PORT, "9080")?.trim().takeUnless { it.isNullOrEmpty() } ?: "9080"
+        httpsPort = p.getString(KEY_HTTPS_PORT, "9443")?.trim().takeUnless { it.isNullOrEmpty() } ?: "9443"
+        cfgUser = p.getString(KEY_USER, "admin")?.trim().takeUnless { it.isNullOrEmpty() } ?: "admin"
+        cfgPass = p.getString(KEY_PASS, "admin")?.takeUnless { it.isNullOrEmpty() } ?: "admin"
     }
 
     // ---------- 启动流程 ----------
 
     private fun bootstrap() {
         try {
+            loadConfig()
+            log("配置：HTTP 端口 $httpPort，账号 $cfgUser")
+
             phase = "extract"
             extractAssets()
 
@@ -107,23 +151,27 @@ class ServerService : Service() {
 
             phase = "go"
             startGoServer()
-            check(ExecUtil.waitPort(HTTP_PORT, 20_000)) { "Go 服务启动失败（$HTTP_PORT 未就绪）" }
-            log("Go 服务就绪 (http://127.0.0.1:$HTTP_PORT)")
-
+            check(ExecUtil.waitPort(httpPort.toInt(), 20_000)) {
+                "Go 服务启动失败（端口 $httpPort 未就绪）"
+            }
             phase = "ready"
+            log("服务就绪：http://127.0.0.1:$httpPort（用浏览器打开操作设备）")
+            log("HTTPS 已按 PC 端默认开启：https://127.0.0.1:$httpsPort（局域网设备硬解投屏需导入 CA，见网页设置页）")
+            for (ip in lanIps()) log("局域网访问：http://$ip:$httpPort · https://$ip:$httpsPort")
             startWatcher()
+            startForegroundWithNotification("运行中：http://127.0.0.1:$httpPort")
         } catch (e: Throwable) {
-            phase = "error"
             errorMsg = e.message ?: e.toString()
+            phase = "error" // 先设 errorMsg 再置 error：监听者刷新 UI 时要能读到
             log("启动失败: $errorMsg")
-            updateNotification("启动失败：$errorMsg")
+            startForegroundWithNotification("启动失败：$errorMsg")
         }
     }
 
     /** 资产解压：带版本戳，内容没变就不重复解。 */
     private fun extractAssets() {
         val am = assets
-        val abi = ExecUtil.pickAbi() ?: throw IllegalStateException("设备 ABI 不受支持（需要 arm64-v8a 或 x86_64）")
+        val abi = ExecUtil.pickAbi() ?: throw IllegalStateException("设备 ABI 不受支持（需要 arm64-v8a）")
 
         val manifest = StringBuilder()
         for (top in listOf("adb/$abi", "adbreeze/$abi")) {
@@ -132,19 +180,17 @@ class ServerService : Service() {
                 manifest.append(top).append('/').append(name).append(':').append(len).append('\n')
             }
         }
-        val stamp = File(filesDir_, ".assets.stamp")
+        val stamp = File(baseDir, ".assets.stamp")
         if (stamp.exists() && stamp.readText() == manifest.toString()) {
             log("资产已就位，跳过解压")
             return
         }
 
-        // adb：adb 二进制 + 全部依赖 so 平铺在同一目录（LD_LIBRARY_PATH 指向它）
-        val adbDir = File(filesDir_, "adb").apply { deleteRecursively(); mkdirs() }
+        val adbDir = File(baseDir, "adb").apply { deleteRecursively(); mkdirs() }
         for (name in am.list("adb/$abi") ?: emptyArray()) {
             copyAsset("adb/$abi/$name", File(adbDir, name))
         }
-        // Go 服务端
-        val goDir = File(filesDir_, "adbreeze").apply { deleteRecursively(); mkdirs() }
+        val goDir = File(baseDir, "adbreeze").apply { deleteRecursively(); mkdirs() }
         copyAsset("adbreeze/$abi/adbreeze", File(goDir, "adbreeze"))
 
         for (f in listOf(adbBin, goBin)) check(f.setExecutable(true)) { "chmod +x 失败: $f" }
@@ -161,17 +207,13 @@ class ServerService : Service() {
     /**
      * 拉起 adb server：`adb server nodaemon` 前台常驻（is_server + no_daemon、
      * 非 fork-server 模式 → 不需要 ack reply fd，进程由本服务持有）。
-     *
-     * 不能用 `adb start-server`：其内部 fork+execv 拉起 fork-server 子进程——
-     * Android 10+ 下被 SELinux 拦（LD_PRELOAD 钩子也救不了 Go 侧裸 syscall exec，
-     * 且 x86 主机上看门钩子重定向的 /system/bin/linker64 是 x86 版，跑不了
-     * arm64 ELF）。server nodaemon 全程无内部 exec，两个平台通吃。
+     * 不能用 `adb start-server`：其内部 fork+execv 在 Android 10+ 被 SELinux 拦。
      */
     private fun startAdbServer() {
         log("启动 adb server: ${adbBin.path}")
         adbProc?.destroyForcibly()
         val env = mapOf(
-            "HOME" to filesDir_.path, // adbkey 落在 $HOME/.android
+            "HOME" to baseDir.path, // adbkey 落在 $HOME/.android
             "LD_LIBRARY_PATH" to libDir.path,
             "TMPDIR" to cacheDir.path,
         )
@@ -179,35 +221,43 @@ class ServerService : Service() {
             adbBin.path,
             listOf("server", "nodaemon"),
             env,
-            File(filesDir_, "adb.log"),
+            File(baseDir, "adb.log"),
         )
     }
 
-    /** 拉起 Go 服务（环境变量注入 = 零改动的配置通道）。 */
+    /** 拉起 Go 服务（配置经环境变量注入，Go 侧零改动）。 */
     private fun startGoServer() {
         log("启动 Go 服务: ${goBin.path}")
         goProc?.destroyForcibly()
         val env = mapOf(
-            "ADBREEZE_ADDR" to ":$HTTP_PORT",
-            "ADBREEZE_HTTPS" to "false", // 127.0.0.1 本身是安全上下文，WebCodecs 可用
-            "ADBREEZE_DATA" to filesDir_.path,
-            "HOME" to filesDir_.path, // os.UserConfigDir() 依赖 HOME，保住 settings 持久化
+            "ADBREEZE_ADDR" to ":$httpPort",
+            // HTTPS：与 PC 端一致默认开启，端口可配（默认 9443）。
+            // 本机回环访问本就是安全上下文，HTTPS 服务于局域网其他设备的浏览器
+            // 硬解投屏（需在其系统里信任自签 CA，入口见网页设置页）。
+            "ADBREEZE_HTTPS_ADDR" to ":$httpsPort",
+            "ADBREEZE_DATA" to baseDir.path,
+            "HOME" to baseDir.path, // os.UserConfigDir() 依赖 HOME，保住 settings 持久化
             "ADBREEZE_ADB" to adbBin.path,
-            "ADBREEZE_USER" to "admin",
-            "ADBREEZE_PASSWORD" to "admin",
+            "ADBREEZE_USER" to cfgUser,
+            "ADBREEZE_PASSWORD" to cfgPass,
             "TMPDIR" to cacheDir.path,
         )
         goProc = ExecUtil.exec(goBin.path, emptyList(), env)
-        // 输出泵：写日志文件 + 环形缓冲（错误页展示）
-        val logFile = File(filesDir_, "server.log")
+        val logFile = File(baseDir, "server.log")
         Thread {
-            goProc?.inputStream?.bufferedReader()?.useLines { lines ->
-                logFile.bufferedWriter().use { w ->
-                    lines.forEach { line ->
-                        log("go: $line")
-                        try { w.appendLine(line); w.flush() } catch (_: Exception) {}
+            try {
+                goProc?.inputStream?.bufferedReader()?.useLines { lines ->
+                    logFile.bufferedWriter().use { w ->
+                        lines.forEach { line ->
+                            log("go: $line")
+                            try { w.appendLine(line); w.flush() } catch (_: Exception) {}
+                        }
                     }
                 }
+            } catch (_: Exception) {
+                // 服务停止时 destroyForcibly 会中断阻塞中的 readLine（InterruptedIOException /
+                // InterruptedException）。这里是正常退出路径：绝不能让异常逃出线程，
+                // 否则未捕获异常处理器会按 Android 默认策略杀死整个应用进程。
             }
         }.start()
     }
@@ -226,10 +276,10 @@ class ServerService : Service() {
                     if (!ExecUtil.waitPort(ADB_PORT, 10_000)) log("[watchdog] adb server 重拉失败")
                 }
                 val goAlive = runCatching { goProc?.isAlive == true }.getOrDefault(false)
-                if (!goAlive || !ExecUtil.waitPort(HTTP_PORT, 1500)) {
+                if (!goAlive || !ExecUtil.waitPort(httpPort.toInt(), 1500)) {
                     log("[watchdog] Go 服务掉线，重新拉起")
                     startGoServer()
-                    if (!ExecUtil.waitPort(HTTP_PORT, 20_000)) log("[watchdog] Go 服务重拉失败")
+                    if (!ExecUtil.waitPort(httpPort.toInt(), 20_000)) log("[watchdog] Go 服务重拉失败")
                 }
             } catch (e: Throwable) {
                 log("[watchdog] 异常: ${e.message}")
@@ -242,26 +292,37 @@ class ServerService : Service() {
         runCatching { goProc?.destroyForcibly() }
     }
 
+    /** 局域网 site-local IPv4（提示用户从其他设备访问）。 */
+    private fun lanIps(): List<String> {
+        val out = mutableListOf<String>()
+        runCatching {
+            val en = NetworkInterface.getNetworkInterfaces() ?: return out
+            while (en.hasMoreElements()) {
+                for (addr in en.nextElement().inetAddresses) {
+                    if (addr is Inet4Address && !addr.isLoopbackAddress && addr.isSiteLocalAddress) {
+                        out.add(addr.hostAddress ?: "")
+                    }
+                }
+            }
+        }
+        return out.filter { it.isNotEmpty() }.distinct()
+    }
+
     // ---------- 通知 ----------
 
-    private fun startForegroundWithNotification() {
+    private fun startForegroundWithNotification(text: String) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
                 NotificationChannel(CHANNEL_ID, "ADBreeze 服务", NotificationManager.IMPORTANCE_LOW)
             )
         }
-        val n = buildNotification("服务启动中…")
+        val n = buildNotification(text)
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(NOTIFICATION_ID, n)
         }
-    }
-
-    private fun updateNotification(text: String) {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID, buildNotification(text))
     }
 
     private fun buildNotification(text: String): Notification {

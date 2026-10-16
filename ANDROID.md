@@ -226,6 +226,14 @@ GOOS=android GOARCH=arm64 CGO_ENABLED=0 \
 
 > 实现见 `android/`（Kotlin 壳）、`scripts/fetch-adb-android.py`（adb 资产拉取）、
 > `Makefile`（android-go / android-apk）、`.github/workflows/android.yml`（CI 自动出包）。
+>
+> **App 形态（v2 调整）**：不做内置 WebView 界面——App 是纯「服务控制台」：
+> 配置表单（端口 / 账号 / 密码，存 SharedPreferences）+ 启动/停止按钮 +
+> 实时日志（服务端输出经 logListeners 回调到界面）+「打开页面」唤起系统浏览器 +
+> 启动状态标记（● 绿=运行中 / 橙=启动中 / 红=未启动）。
+> 启动参数与 PC 端一致：不设 `ADBREEZE_HTTPS`（默认 true），HTTP + HTTPS :9443
+> 双端口——HTTPS 服务于局域网其他设备浏览器的 WebCodecs 硬解（本机回环本就是
+> 安全上下文，无需 HTTPS）。配置经环境变量注入 Go 进程；服务就绪后通知栏显示地址。
 
 1. **adb 资产自动化**：不把 25MB 二进制提交进 git，由
    `python scripts/fetch-adb-android.py [aarch64|x86_64]` 从 Termux 仓库拉取
@@ -262,6 +270,7 @@ GOOS=android GOARCH=arm64 CGO_ENABLED=0 \
    内部符号，Go 1.23+ 默认拒绝）→ gradlew assembleDebug。CI 见
    `.github/workflows/android.yml`（push 构建检查，ubuntu-latest 自带 Android
    SDK）与 `.github/workflows/release.yml`（**release 统一出包**：tag 触发时
-   在 build job 里拉 adb 资产 → assembleRelease → 以 `adbreeze-android.apk`
+   在 build job 里拉 adb 资产 → assembleRelease → 以
+   `adbreeze-android-<版本>.apk`
    随桌面平台一起挂 release 并计入 checksums；版本号经 `-PappVersion` 注入，
    versionCode = x*10000+y*100+z 自动推导）。
