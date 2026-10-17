@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -119,8 +120,12 @@ func newTestInstaller(t *testing.T, srv *httptest.Server) *Installer {
 
 func TestInstallerFullFlow(t *testing.T) {
 	payload := []byte("FAKE-CLOUDFLARED-BINARY-CONTENT-0123456789")
+	asset, _, ok := assetFor(runtime.GOOS, runtime.GOARCH)
+	if !ok {
+		t.Skipf("当前平台 %s/%s 无官方资产，跳过", runtime.GOOS, runtime.GOARCH)
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/cloudflared-windows-amd64.exe" {
+		if r.URL.Path != "/"+asset {
 			w.WriteHeader(404)
 			return
 		}

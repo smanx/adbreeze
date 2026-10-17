@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -91,8 +92,15 @@ func TestResumeEnabled(t *testing.T) {
 // TestLegacyAutoStartMigration 覆盖一次性迁移：旧 autoStart 存档经 Open 后
 // resume 生效，且保存后 autoStart 键消失（固化迁移）。
 func TestLegacyAutoStartMigration(t *testing.T) {
-	t.Setenv("APPDATA", t.TempDir()) // 隔离：不碰真实用户配置目录
+	// 隔离：不碰真实用户配置目录。os.UserConfigDir 在 Windows 读 APPDATA，
+	// Linux/macOS 读 XDG_CONFIG_HOME（缺省回退 HOME/.config），故各平台都覆盖到。
+	t.Setenv("APPDATA", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	dir := filepath.Join(os.Getenv("APPDATA"), "ADBreeze")
+	if runtime.GOOS != "windows" {
+		dir = filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "ADBreeze")
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
