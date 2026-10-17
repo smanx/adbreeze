@@ -144,3 +144,94 @@ func TestNormalizeAddr(t *testing.T) {
 		}
 	}
 }
+
+func TestParseArgsTunnelDefaults(t *testing.T) {
+	cfg, err := ParseArgs(nil)
+	if err != nil {
+		t.Fatalf("默认参数解析失败: %v", err)
+	}
+	if cfg.Tunnel {
+		t.Error("Tunnel 默认应为 false（安装包 +0，功能默认关闭）")
+	}
+	if cfg.TunnelToken != "" {
+		t.Errorf("TunnelToken 默认应为空，得到 %q", cfg.TunnelToken)
+	}
+}
+
+func TestParseArgsTunnelFlags(t *testing.T) {
+	cfg, err := ParseArgs([]string{"-tunnel", "-tunnel-token", "eyJhIjoiSXYifQ=="})
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if !cfg.Tunnel {
+		t.Error("-tunnel 应开启")
+	}
+	if cfg.TunnelToken != "eyJhIjoiSXYifQ==" {
+		t.Errorf("TunnelToken = %q，期望传入的 token", cfg.TunnelToken)
+	}
+}
+
+func TestParseArgsWebRTCSTUN(t *testing.T) {
+	// 默认：两个公共 STUN（不配则跨 NAT 建连必失败）
+	cfg, err := ParseArgs(nil)
+	if err != nil {
+		t.Fatalf("默认参数解析失败: %v", err)
+	}
+	if cfg.WebRTCSTUN != "stun.cloudflare.com:3478,stun.l.google.com:19302" {
+		t.Errorf("WebRTCSTUN 默认值 = %q", cfg.WebRTCSTUN)
+	}
+	// 命令行覆盖
+	cfg, err = ParseArgs([]string{"-webrtc-stun", "turn:my.coturn:3478"})
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if cfg.WebRTCSTUN != "turn:my.coturn:3478" {
+		t.Errorf("WebRTCSTUN = %q，期望命令行值", cfg.WebRTCSTUN)
+	}
+	// 环境变量覆盖（命令行未指定时）
+	t.Setenv("ADBREEZE_WEBRTC_STUN", "off")
+	cfg, err = ParseArgs(nil)
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if cfg.WebRTCSTUN != "off" {
+		t.Errorf("WebRTCSTUN = %q，期望环境变量值 off", cfg.WebRTCSTUN)
+	}
+	// 命令行优先于环境变量
+	cfg, err = ParseArgs([]string{"-webrtc-stun", "stun:a.com:3478"})
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if cfg.WebRTCSTUN != "stun:a.com:3478" {
+		t.Errorf("命令行应覆盖环境变量，得到 %q", cfg.WebRTCSTUN)
+	}
+}
+
+func TestParseArgsTunnelEnv(t *testing.T) {
+	t.Setenv("ADBREEZE_TUNNEL", "true")
+	t.Setenv("ADBREEZE_TUNNEL_TOKEN", "env-token")
+	cfg, err := ParseArgs(nil)
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if !cfg.Tunnel || cfg.TunnelToken != "env-token" {
+		t.Errorf("环境变量未生效: Tunnel=%v Token=%q", cfg.Tunnel, cfg.TunnelToken)
+	}
+	// 命令行优先于环境变量
+	cfg, err = ParseArgs([]string{"-tunnel=false", "-tunnel-token", "flag-token"})
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if cfg.Tunnel || cfg.TunnelToken != "flag-token" {
+		t.Errorf("命令行应覆盖环境变量: Tunnel=%v Token=%q", cfg.Tunnel, cfg.TunnelToken)
+	}
+	// 非法布尔值：忽略该环境变量，不阻断启动
+	t.Setenv("ADBREEZE_TUNNEL", "yes")
+	cfg, err = ParseArgs(nil)
+	if err != nil {
+		t.Fatalf("非法布尔值不应阻断启动: %v", err)
+	}
+	if cfg.Tunnel {
+		t.Error("ADBREEZE_TUNNEL=yes 不是合法布尔值，应被忽略")
+	}
+}

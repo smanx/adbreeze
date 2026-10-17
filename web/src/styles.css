@@ -75,6 +75,10 @@ input, select {
   width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex: 0 0 auto;
 }
 .conn-dot.ok { background: var(--primary); }
+.conn-dot.err { background: var(--danger); }
+/* 顶栏「外网访问中」徽章：公网暴露期间常驻可见（防遗忘），点击跳设置页 */
+.tunnel-badge { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; color: var(--primary); }
+.tunnel-badge .ico { display: block; }
 .current-device {
   color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; max-width: 40vw;
@@ -215,6 +219,28 @@ input, select {
   background: #eef1f4; padding: 1px 5px; border-radius: 4px; word-break: break-all;
 }
 .hint.ok-text { color: var(--primary); }
+
+/* 外网访问（Cloudflare Tunnel）设置卡片 */
+.tunnel-url {
+  font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+  background: #eef1f4; padding: 2px 6px; border-radius: 4px; word-break: break-all;
+}
+.tunnel-check { display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 6px 0; }
+.tunnel-logs {
+  margin: 8px 0 0; padding: 8px 10px; max-height: 200px; overflow: auto;
+  background: #eef1f4; border-radius: 6px;
+  font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-all;
+}
+/* 一键安装 cloudflared 的下载进度条 */
+.tunnel-progress {
+  height: 6px; background: #eef1f4; border-radius: 3px;
+  overflow: hidden; margin: 8px 0 4px;
+}
+.tunnel-progress-fill { height: 100%; background: var(--primary); transition: width .3s; }
+/* 外网地址二维码：白底黑码（不跟随主题，保证可扫） */
+.tunnel-qr-row { display: flex; align-items: center; gap: 12px; margin: 8px 0 4px; flex-wrap: wrap; }
+.qr-code { display: block; border: 1px solid var(--border); border-radius: 6px; }
 
 /* ---------- 投屏面板 ---------- */
 /* 面板占满内容区高度：头部/设置为固定高度，画面区 flex:1 吃掉剩余空白，
@@ -643,6 +669,9 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
   /* 顶栏退出按钮：只留图标不显示文字（名称走悬停气泡 / aria-label） */
   .logout-btn { padding: 6px 8px; }
   .logout-btn .logout-txt { display: none; }
+  /* 外网徽章同理：手机端只留地球图标 */
+  .tunnel-badge { padding: 3px 6px; }
+  .tunnel-badge .tunnel-badge-txt { display: none; }
   .tabbar {
     display: flex; position: fixed; left: 0; right: 0; bottom: 0; height: var(--tabbar-h);
     background: var(--panel); border-top: 1px solid var(--border); z-index: 80;

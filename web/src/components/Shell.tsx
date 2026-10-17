@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { clearReconnectTimer, useStore } from '../store'
-import { api, apiUrl, authHeaders, clearSession, isCrossOrigin, loadBackendConfig, login, normalizeBackendBase, probeBackend, backendBase, type AdbSettings, type AdbSettingsSaveResult } from '../api'
+import { api, apiUrl, authHeaders, clearSession, isCrossOrigin, loadBackendConfig, login, normalizeBackendBase, probeBackend, backendBase, getTunnelStatus, getTunnelSettings, saveTunnelSettings, startTunnel, stopTunnel, getTunnelInstall, startTunnelInstall, type AdbSettings, type AdbSettingsSaveResult, type TunnelSettings, type TunnelSettingsSave, type TunnelStatus, type TunnelInstallStatus } from '../api'
 import { Placeholder, TABS } from '../panels'
 import DeviceList from './DeviceList'
 import MirrorPanel from '../panels/MirrorPanel'
@@ -13,6 +13,7 @@ import AppsPanel from '../panels/AppsPanel'
 import ProcessPanel from '../panels/ProcessPanel'
 import PerfPanel from '../panels/PerfPanel'
 import LayoutPanel from '../panels/LayoutPanel'
+import QrCode from './QrCode'
 import { Icon } from './Icon'
 import { toggleLang, useT } from '../i18n'
 
@@ -33,6 +34,9 @@ export default function Shell() {
   const loginSucceeded = useStore(s => s.loginSucceeded)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [loggedOut, setLoggedOut] = useState(false)
+  // 外网访问（Cloudflare Tunnel）状态：顶栏常驻徽章的数据源。
+  // 10s 轻轮询（一个加锁快照，不碰 adb）；失败静默——徽章不值得打扰用户。
+  const [tunnelOn, setTunnelOn] = useState(false)
   const t = useT()
 
   // 后端配置变更（backendRevision 自增）或重新登录时重建事件通道，
@@ -42,6 +46,21 @@ export default function Shell() {
     watchEvents()
     return () => { clearReconnectTimer() }
   }, [loggedOut, backendRevision])
+
+  // 隧道徽章轮询：仅在登录态进行
+  useEffect(() => {
+    if (loggedOut) return
+    let alive = true
+    const poll = async () => {
+      try {
+        const st = await getTunnelStatus()
+        if (alive) setTunnelOn(st.running)
+      } catch { /* 静默：后端不可达时徽章不显示 */ }
+    }
+    void poll()
+    const timer = setInterval(poll, 10000)
+    return () => { alive = false; clearInterval(timer) }
+  }, [loggedOut])
 
   // 退出：清除后端会话 cookie 与本地 token 并断开事件通道。
   // 会话凭证只有这一处，退出即真失效——这是相对 Basic Auth 的核心改进。
@@ -75,6 +94,16 @@ export default function Shell() {
         <button className="icon-btn drawer-toggle" onClick={() => setDrawerOpen(true)}>☰</button>
         <span className="brand">ADBreeze</span>
         {version && <span className="version-badge">{version}</span>}
+        {tunnelOn && (
+          <button
+            className="btn tiny ghost tunnel-badge has-tip"
+            data-tip={t('tunnel.badgeTip')}
+            aria-label={t('tunnel.badge')}
+            onClick={() => setPanel('settings')}
+          >
+            <Icon name="globe" /><span className="tunnel-badge-txt">{t('tunnel.badge')}</span>
+          </button>
+        )}
         <span className={'conn-dot' + (serverConnected ? ' ok' : '')} title={serverConnected ? t('topbar.serviceOnline') : t('topbar.reconnecting')} />
         <span className="current-device">{selected || t('topbar.noDevice')}</span>
         <span className="spacer" />
@@ -201,6 +230,8 @@ function SettingsPanel() {
       <BackendSettings />
 
       <TlsSettings />
+
+      <TunnelSettings />
 
       <div className="settings-block">
         <h3>{t('settings.adbPath')}</h3>
@@ -495,6 +526,342 @@ function TlsSettings() {
         </ul>
       </details>
       {err && <p className="hint error-text">{err}</p>}
+    </div>
+  )
+}
+
+// 运行时长格式化：startedAt（RFC3339）→ "1h 05m" / "3m 20s" / "45s"
+function formatUptime(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime()
+  if (!Number.isFinite(ms) || ms < 0) return ''
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return s + 's'
+  const m = Math.floor(s / 60)
+  if (m < 60) return m + 'm ' + (s % 60) + 's'
+  return Math.floor(m / 60) + 'h ' + (m % 60) + 'm'
+}
+
+// 字节数 → "12.3 MB"
+function fmtMB(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 MB'
+  return (n / 1048576).toFixed(1) + ' MB'
+}
+
+type TunnelStateKey = 'tunnel.state.idle' | 'tunnel.state.starting' | 'tunnel.state.running' | 'tunnel.state.stopped' | 'tunnel.state.failed'
+
+const TUNNEL_STATE_KEYS: Record<string, TunnelStateKey> = {
+  idle: 'tunnel.state.idle',
+  starting: 'tunnel.state.starting',
+  running: 'tunnel.state.running',
+  stopped: 'tunnel.state.stopped',
+  failed: 'tunnel.state.failed',
+}
+
+// 外网访问（Cloudflare Tunnel）设置卡片：状态区 + 配置区 + 控制区。
+// cloudflared 不内置（安装包 +0）：未安装时给分平台安装指引，也可手动填路径。
+// 开启的唯一门槛是本机有 cloudflared；默认密码不拦截，仅展示提醒（后端记 WARN）。
+function TunnelSettings() {
+  const [info, setInfo] = useState<TunnelSettings | null>(null)
+  const [status, setStatus] = useState<TunnelStatus | null>(null)
+  const [inst, setInst] = useState<TunnelInstallStatus | null>(null)
+  const instStateRef = useRef('') // 记住上一次见到的安装状态：done 只提示一次
+  const [draft, setDraft] = useState({ binary: '', service: '', protocol: '', token: '', autoRestart: true })
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [msg, setMsg] = useState('')
+  const t = useT()
+
+  const load = async () => {
+    try {
+      const r = await getTunnelSettings()
+      setInfo(r)
+      // token 不回显全文：输入框留空，未重打则不传（保持原值）
+      setDraft({ binary: r.binary, service: r.service, protocol: r.protocol, token: '', autoRestart: r.autoRestart })
+      setErr('')
+    } catch (e) {
+      setErr(t('tunnel.readFailed') + (e as Error).message)
+    }
+  }
+
+  const loadStatus = async () => {
+    try { setStatus(await getTunnelStatus()) } catch { /* 轮询失败静默 */ }
+  }
+
+  // 一键安装状态：done 时刷新设置（新二进制立刻被探测到）并提示一次
+  const loadInstall = async () => {
+    try {
+      const st = await getTunnelInstall()
+      setInst(st)
+      if (st.state === 'done' && instStateRef.current !== 'done') {
+        setMsg(t('tunnel.installDone', { v: st.version || 'cloudflared', p: st.path }))
+        await load()
+      }
+      instStateRef.current = st.state
+    } catch { /* 轮询失败静默 */ }
+  }
+
+  useEffect(() => { void load(); void loadStatus(); void loadInstall() }, [])
+
+  // 启动中 / 已连接期间 3s 轮询状态；停止后停轮询
+  useEffect(() => {
+    if (status?.state !== 'running' && status?.state !== 'starting') return
+    const timer = setInterval(() => void loadStatus(), 3000)
+    return () => clearInterval(timer)
+  }, [status?.state])
+
+  // 安装期间 1s 轮询安装进度
+  const installing = inst?.state === 'downloading' || inst?.state === 'verifying'
+  useEffect(() => {
+    if (!installing) return
+    const timer = setInterval(() => void loadInstall(), 1000)
+    return () => clearInterval(timer)
+  }, [installing])
+
+  // 保存：只传表单字段；token 未重打则不传（保持原值），extra 用于「清除 token」
+  const save = async (extra?: TunnelSettingsSave) => {
+    setBusy(true); setErr(''); setMsg('')
+    try {
+      const body: TunnelSettingsSave = {
+        binary: draft.binary.trim(),
+        service: draft.service.trim(),
+        protocol: draft.protocol.trim(),
+        autoRestart: draft.autoRestart,
+        ...extra,
+      }
+      if (draft.token !== '') body.token = draft.token.trim()
+      const r = await saveTunnelSettings(body)
+      setInfo(r)
+      setDraft(d => ({ ...d, token: '' }))
+      setMsg(r.message || t('common.done'))
+      await loadStatus()
+    } catch (e) {
+      setErr(t('tunnel.saveFailed') + (e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const start = async () => {
+    if (!confirm(t('tunnel.confirmStart'))) return
+    setBusy(true); setErr(''); setMsg('')
+    try {
+      setStatus(await startTunnel())
+    } catch (e) {
+      setErr(t('tunnel.startFailed') + (e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const stop = async () => {
+    setBusy(true); setErr(''); setMsg('')
+    try {
+      setStatus(await stopTunnel())
+    } catch (e) {
+      setErr(t('tunnel.stopFailed') + (e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // 一键安装 cloudflared：后台下载，前端 1s 轮询进度（见 loadInstall）
+  const install = async () => {
+    setErr(''); setMsg('')
+    try {
+      setInst(await startTunnelInstall())
+    } catch (e) {
+      setErr(t('tunnel.installFailed') + (e as Error).message)
+    }
+  }
+
+  const copyUrl = async () => {
+    if (!status?.url) return
+    try {
+      await navigator.clipboard.writeText(status.url)
+      setMsg(t('tunnel.copied'))
+    } catch {
+      setErr(t('tunnel.copyFailed'))
+    }
+  }
+
+  if (!info) {
+    return (
+      <div className="settings-block">
+        <h3>{t('tunnel.title')}</h3>
+        <p className="hint">{err || t('common.loading')}</p>
+      </div>
+    )
+  }
+
+  const stateKey: TunnelStateKey = TUNNEL_STATE_KEYS[status?.state ?? 'idle'] ?? 'tunnel.state.idle'
+  const dotCls = 'conn-dot'
+    + (status?.running ? ' ok' : status?.state === 'failed' ? ' err' : '')
+  const uptime = status?.running && status.startedAt ? formatUptime(status.startedAt) : ''
+  const canStart = info.available
+
+  return (
+    <div className="settings-block">
+      <h3>{t('tunnel.title')}</h3>
+      <p className="hint">{t('tunnel.intro')}</p>
+
+      {/* 状态区 */}
+      <div className="adb-path-row">
+        <span className={dotCls} />
+        <b>{t(stateKey)}</b>
+        {status?.mode && <span className="hint">{status.mode === 'named' ? t('tunnel.mode.named') : t('tunnel.mode.quick')}</span>}
+        {!!status?.restarts && <span className="hint">{t('tunnel.restarts', { n: status.restarts })}</span>}
+        {uptime && <span className="hint">{t('tunnel.uptime', { s: uptime })}</span>}
+        <span className="spacer" />
+        {status?.running ? (
+          <button className="btn danger tiny" disabled={busy} onClick={() => void stop()}>
+            {busy ? t('tunnel.busyStop') : t('tunnel.stop')}
+          </button>
+        ) : (
+          <button className="btn primary tiny" disabled={busy || !canStart} onClick={() => void start()} title={canStart ? '' : t('tunnel.noBinary')}>
+            {busy ? t('tunnel.busyStart') : t('tunnel.start')}
+          </button>
+        )}
+      </div>
+
+      {/* 外网地址（quick 模式本地可感知；named 模式域名在 CF 侧） */}
+      {status?.running && status.url && (
+        <div className="adb-path-row">
+          <span className="hint">{t('tunnel.urlLabel')}</span>
+          <code className="tunnel-url">{status.url}</code>
+          <button className="btn tiny ghost" onClick={() => void copyUrl()}>{t('tunnel.copy')}</button>
+        </div>
+      )}
+      {status?.running && status.url && (
+        <div className="tunnel-qr-row">
+          <QrCode text={status.url} size={132} />
+          <p className="hint">{t('tunnel.qrHint')}</p>
+        </div>
+      )}
+      {status?.running && status.mode === 'named' && (
+        <p className="hint">{t('tunnel.namedDomainHint')}</p>
+      )}
+      {status?.error && <p className="hint error-text">{status.error}</p>}
+
+      {/* 门槛提示：只有 cloudflared 缺失才禁住开启按钮；默认密码仅提醒不拦截 */}
+      {!info.available && <p className="hint error-text">{t('tunnel.noBinary')}</p>}
+      {info.weakPassword && <p className="hint">{t('tunnel.defaultPassword')}</p>}
+      {info.available && (
+        <p className="hint">
+          {info.version ? t('tunnel.detected', { p: info.resolved, v: info.version }) : t('tunnel.detectedNoVersion', { p: info.resolved })}
+        </p>
+      )}
+
+      {/* 配置区 */}
+      <div className="adb-path-row">
+        <input
+          type="text"
+          value={draft.binary}
+          placeholder={t('tunnel.binaryPlaceholder')}
+          onChange={e => { setDraft({ ...draft, binary: e.target.value }); setErr(''); setMsg('') }}
+          disabled={busy}
+        />
+        <button
+          className="btn"
+          disabled={busy || installing}
+          onClick={() => void install()}
+          title={t('tunnel.installTip', { p: info.platform || 'this' })}
+        >
+          {installing ? t('tunnel.installing') : t('tunnel.install')}
+        </button>
+      </div>
+      {installing && (
+        <>
+          <div className="tunnel-progress">
+            <div className="tunnel-progress-fill" style={{ width: (inst?.progress || 0) + '%' }} />
+          </div>
+          <p className="hint">
+            {inst?.state === 'verifying'
+              ? t('tunnel.installVerifying')
+              : inst && inst.total > 0
+                ? t('tunnel.installProgressKnown', { n: inst.progress, d: fmtMB(inst.downloaded), t: fmtMB(inst.total) })
+                : t('tunnel.installProgressUnknown', { d: fmtMB(inst?.downloaded || 0) })}
+          </p>
+        </>
+      )}
+      {!installing && inst?.state === 'failed' && <p className="hint error-text">{t('tunnel.installFailed') + inst.error}</p>}
+      {!installing && inst?.state === 'done' && inst.path && (
+        <p className="hint">
+          {t('tunnel.installedTo')}<code>{inst.path}</code>
+          {inst.sha256 && <>　SHA256 <code>{inst.sha256.slice(0, 16)}…</code></>}
+        </p>
+      )}
+      <p className="hint">{t('tunnel.binaryHint')}</p>
+
+      <div className="adb-path-row">
+        <input
+          type="password"
+          value={draft.token}
+          placeholder={info.tokenSet ? t('tunnel.tokenConfigured', { mask: info.tokenMask }) : t('tunnel.token')}
+          onChange={e => { setDraft({ ...draft, token: e.target.value }); setErr(''); setMsg('') }}
+          disabled={busy}
+        />
+        {info.tokenSet && (
+          <button className="btn tiny ghost" disabled={busy} onClick={() => void save({ token: '' })}>
+            {t('tunnel.tokenClear')}
+          </button>
+        )}
+      </div>
+      <p className="hint">{t('tunnel.tokenHint')}</p>
+
+      <details className="cert-help">
+        <summary>{t('tunnel.advanced')}</summary>
+        <div className="adb-path-row">
+          <input
+            type="text"
+            value={draft.service}
+            placeholder="http://127.0.0.1:9080"
+            onChange={e => { setDraft({ ...draft, service: e.target.value }); setErr(''); setMsg('') }}
+            disabled={busy}
+          />
+        </div>
+        <p className="hint">{t('tunnel.serviceHint')}</p>
+        <div className="adb-path-row">
+          <select
+            value={draft.protocol}
+            onChange={e => { setDraft({ ...draft, protocol: e.target.value }); setErr(''); setMsg('') }}
+            disabled={busy}
+          >
+            <option value="">quic（{t('common.default')}）</option>
+            <option value="http2">http2</option>
+          </select>
+        </div>
+        <p className="hint">{t('tunnel.protocolHint')}</p>
+        <label className="tunnel-check">
+          <input
+            type="checkbox"
+            checked={draft.autoRestart}
+            onChange={e => { setDraft({ ...draft, autoRestart: e.target.checked }); setErr(''); setMsg('') }}
+            disabled={busy}
+          />
+          {t('tunnel.autoRestart')}
+        </label>
+      </details>
+
+      {/* 自启语义：记住上次状态（无开关，由开启/关闭动作维护） */}
+      <p className="hint">
+        {status?.running || status?.state === 'starting'
+          ? t('tunnel.resumeWillRestore')
+          : t('tunnel.resumeWillNotRestore')}
+      </p>
+
+      <div className="adb-path-row">
+        <button className="btn primary" disabled={busy} onClick={() => void save()}>
+          {busy ? t('tunnel.saving') : t('tunnel.save')}
+        </button>
+      </div>
+      {err && <p className="hint error-text">{err}</p>}
+      {msg && <p className="hint ok-text">{msg}</p>}
+
+      {/* 日志区 */}
+      <details className="cert-help">
+        <summary>{t('tunnel.logs')}</summary>
+        <pre className="tunnel-logs">{status?.logs.length ? status.logs.join('\n') : t('tunnel.noLogs')}</pre>
+      </details>
     </div>
   )
 }

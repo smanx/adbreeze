@@ -226,3 +226,105 @@ export interface AdbSettingsSaveResult {
   /** adb version 输出，用于确认切换到了哪个版本 */
   version: string
 }
+
+// ---------- 外网访问（Cloudflare Tunnel） ----------
+
+/** GET /api/settings/tunnel 与 PUT 成功后的响应 */
+export interface TunnelSettings {
+  binary: string
+  service: string
+  protocol: string
+  tokenSet: boolean
+  /** token 脱敏预览（前4后4），绝无全文 */
+  tokenMask: string
+  autoRestart: boolean
+  /** 记住上次状态：下次启动 ADBreeze 是否自动恢复隧道（由开启/关闭动作维护） */
+  resume: boolean
+  /** 探测到的 cloudflared 路径（空=没找到） */
+  resolved: string
+  available: boolean
+  version: string
+  /** 服务端平台（GOOS/GOARCH），一键安装据此下载对应资产 */
+  platform: string
+  /** 是否仍是出厂默认密码（仅供 UI 展示提醒，不拦截开启） */
+  weakPassword: boolean
+  /** 仅 PUT 响应携带 */
+  message?: string
+  restarted?: boolean
+}
+
+/** PUT /api/settings/tunnel 请求体：未提供的字段保持原值（合并语义） */
+export interface TunnelSettingsSave {
+  binary?: string
+  service?: string
+  protocol?: string
+  token?: string
+  autoRestart?: boolean
+}
+
+/** GET /api/tunnel 状态（纯运行时态） */
+export interface TunnelStatus {
+  /** idle / starting / running / stopped / failed */
+  state: string
+  running: boolean
+  /** quick / named */
+  mode: string
+  /** quick 模式外网地址；named 模式为空（域名在 CF 侧） */
+  url: string
+  error: string
+  restarts: number
+  /** RFC3339 */
+  startedAt: string
+  binaryPath: string
+  logs: string[]
+}
+
+export function getTunnelSettings(): Promise<TunnelSettings> {
+  return api('GET', '/api/settings/tunnel')
+}
+
+/** 保存配置：只传改动的字段；token 传空串 = 清除，不传 = 保持原值 */
+export function saveTunnelSettings(body: TunnelSettingsSave): Promise<TunnelSettings> {
+  return api('PUT', '/api/settings/tunnel', body)
+}
+
+export function getTunnelStatus(): Promise<TunnelStatus> {
+  return api('GET', '/api/tunnel')
+}
+
+export function startTunnel(): Promise<TunnelStatus> {
+  return api('POST', '/api/tunnel/start')
+}
+
+export function stopTunnel(): Promise<TunnelStatus> {
+  return api('POST', '/api/tunnel/stop')
+}
+
+// ---------- 一键安装 cloudflared ----------
+
+/** GET /api/settings/tunnel/install 状态 */
+export interface TunnelInstallStatus {
+  /** idle / downloading / verifying / done / failed */
+  state: string
+  /** 0-100；总长未知时为 0 */
+  progress: number
+  downloaded: number
+  /** 0 = 服务端未给出 Content-Length */
+  total: number
+  path: string
+  version: string
+  sha256: string
+  error: string
+  /** RFC3339 */
+  startedAt: string
+  finishedAt: string
+}
+
+/** 启动一键安装（后台下载，立即返回当前状态） */
+export function startTunnelInstall(): Promise<TunnelInstallStatus> {
+  return api('POST', '/api/settings/tunnel/install')
+}
+
+export function getTunnelInstall(): Promise<TunnelInstallStatus> {
+  return api('GET', '/api/settings/tunnel/install')
+}

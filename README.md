@@ -19,6 +19,7 @@
 - **设备热插拔**：`host:track-devices` 长连接监听，设备上下线实时推送
 - **单文件交付**：前端与 scrcpy-server 全部嵌入二进制，部署 = 拷贝一个文件（约 10MB）
 - **adb server 自愈**：检测到 adb server 消失时自动拉起
+- **外网访问（可选）**：设置页一键开启 Cloudflare Tunnel，服务即刻获得公网 HTTPS 地址——不需要公网 IP、不开路由器端口；cloudflared 不内置（设置里可一键安装），安装包零增长
 
 ## 架构
 
@@ -79,6 +80,9 @@ go build -o bin/adbreeze.exe ./cmd/adbreeze
 | TLS 证书 | `-tls-cert` / `-tls-key` | `ADBREEZE_TLS_CERT` / `ADBREEZE_TLS_KEY` | 自动生成 | 指定正式证书时成对使用 |
 | 追加证书主机名 | `-tls-hosts` | `ADBREEZE_TLS_HOSTS` | 空 | 逗号分隔；追加进自动证书 SAN 的域名等 |
 | 追加证书 IP | `-tls-ips` | `ADBREEZE_TLS_IPS` | 空 | 逗号分隔；追加进自动证书 SAN 的 IP |
+| 外网隧道开关 | `-tunnel` | `ADBREEZE_TUNNEL` | `false` | 启动即开启 Cloudflare Tunnel（无头场景用；完整配置在设置页）|
+| 外网隧道令牌 | `-tunnel-token` | `ADBREEZE_TUNNEL_TOKEN` | 空 | Named 模式令牌；空 = Quick Tunnel 随机地址 |
+| WebRTC STUN | `-webrtc-stun` | `ADBREEZE_WEBRTC_STUN` | 两个公共 STUN | 逗号分隔；`off` 关闭；自建 coturn / TURN 在此覆盖 |
 
 ```bash
 # 环境变量示例（容器 / systemd 等场景）
@@ -161,6 +165,61 @@ ADBREEZE_TLS_HOSTS=adb.example.com ADBREEZE_TLS_IPS=203.0.113.10 ./adbreeze
 - 追加的名字与自动探测的名字享受同一套机制——**信任一次 CA 永久有效**：名字集变化只重签叶证书，CA 指纹不变，无需重新导入信任
 - 非法 IP 只记日志并忽略，不影响启动；主机名写成 IP 形式（如 `ADBREEZE_TLS_HOSTS=192.168.1.5`）会自动按 IP 处理
 - 仅在**自动生成证书**时有效；指定了 `-tls-cert` 时以该证书自身的 SAN 为准
+
+### 外网访问（Cloudflare Tunnel）
+
+没有公网 IP、不想做端口映射时，可以用 Cloudflare Tunnel 把服务发布到公网：cloudflared 只**主动向外建立出站连接**，不监听任何入站端口，家用宽带 / 公司 NAT 后面都能用。完整设计与安全考量见 [`CF-TUNNEL-DESIGN.md`](CF-TUNNEL-DESIGN.md)。
+
+**cloudflared 不内置**（安装包 +0）。两种装法，任选其一：
+
+1. **一键安装（推荐）**：设置 → 外网访问 → 点「一键安装」——从 Cloudflare 官方 GitHub releases 下载当前平台（服务端 `GOOS/GOARCH`，未必等于你浏览器所在平台）的二进制到数据目录 `bin/`，装完自动探测到，无需重启；可随时重跑以更新。安装后界面会显示版本与 SHA256 供核对
+2. **手动安装**：
+
+| 平台 | 安装 |
+|---|---|
+| Windows | `winget install --id Cloudflare.cloudflared` |
+| macOS | `brew install cloudflared` |
+| Linux | 官方 release 页的 deb / rpm / 二进制 |
+
+然后在**设置 → 外网访问（Cloudflare Tunnel）**里确认 cloudflared 已就绪（显示路径与版本），点「开启」即可获得 `https://<随机词>.trycloudflare.com` 地址（Quick Tunnel，无需 Cloudflare 账号）。地址随机、不分享即不可枚举；Cloudflare 边缘提供受信任证书，浏览器侧就是安全上下文，且**不需要信任本地 CA**。一键安装与 winget / brew 同源（固定官方仓库 + HTTPS；Cloudflare 未随 release 发布校验和文件，故不做外部 checksum 比对，以安装后 `--version` 冒烟 + SHA256 展示替代）。
+
+两种模式：
+
+| | Quick Tunnel（默认） | Named Tunnel |
+|---|---|---|
+| 账号 | 不需要 | 需要（免费） |
+| 地址 | 随机，重启即变 | 固定域名（CF 后台绑定） |
+| 前置防护 | 无 | 可叠加 Cloudflare Access（邮箱 OTP / Google 登录） |
+
+Named 模式：设置页填入 CF 后台的 tunnel token 即可。**建议给固定域名叠加 Cloudflare Access**，给公网入口加第二道身份验证。完整步骤如下。
+
+#### 固定域名 + Cloudflare Access（Named Tunnel）
+
+前置条件：一个域名已接入 Cloudflare（DNS 由 CF 托管，免费套餐即可）。
+
+**1. 创建隧道拿 token**（二选一）：
+
+- 后台：Cloudflare Zero Trust 控制台 → Networks → Tunnels → Create tunnel → 选 cloudflared → 起个名字（如 `adbreeze`→ 创建后在安装页面复制 token（`eyJ...` 开头的一长串）
+- CLI：`cloudflared tunnel login` → `cloudflared tunnel create adbreeze` → `cloudflared tunnel token adbreeze`
+
+**2. 绑定公网主机名**：Tunnel → Public Hostname → Add：子域名（如 `adb.example.com`）→ 类型选 **HTTP** → 地址填 `127.0.0.1:9080`（ADBreeze 的 HTTP 端口；边缘侧由 CF 提供受信任证书，本地无需配证书）。也可用 CLI：`cloudflared tunnel route dns adbreeze adb.example.com`，入口规则写在 Cloudflare 后台或本机 `config.yml` 均可——**ADBreeze 只认 token**，入口配置以 CF 后台为准。
+
+**3. 填入 ADBreeze**：设置 → 外网访问 → 隧道令牌里粘贴 token → 保存 → 开启。界面显示「Named Tunnel（固定域名）」即生效，手机电脑访问 `https://adb.example.com` 直达登录页。
+
+**4. 叠加 Access（推荐）**：Zero Trust → Access → Applications → Add an application → Self-hosted：应用名随意，子域选 `adb.example.com`；Policy 选 Allow，加一条你的邮箱（一次性 PIN）或 Google 登录。之后任何人访问该域名，先过 Cloudflare 的身份验证，通过才到达 ADBreeze 登录页——**即使 ADBreeze 密码泄露也有第二道门**。Access 免费额度个人够用；策略随时可在后台改。
+
+注意：Access 只保护 Named Tunnel（需要域名 zone）；Quick Tunnel 的随机地址用不了，靠「不分享即不可枚举」+ 强密码兜底。
+
+安全约束（提示，不拦截——与局域网「默认密码只警告」策略一致）：
+
+- **默认密码 `admin` 也能开启**，但开启时服务端会记 WARN 日志、界面展示提醒：公网地址 + 可猜密码风险大，建议用 `-password` / `ADBREEZE_PASSWORD` 改强密码（重启生效）
+- 隧道默认打 `http://127.0.0.1:<HTTP端口>`：与「服务是否对外监听」解耦，把 `-addr` 收紧到仅本机也不影响外网访问
+- token 只经子进程环境变量传递（不进进程参数、不进日志、API 只回脱敏预览），明文存于本机 `settings.json`（权限 0600）
+- 隧道运行期间**顶栏常驻「外网访问中」徽章**，任何页面都看得见此刻正暴露在公网
+- **自启 = 记住上次状态**：开启过且没有手动「关闭」（含直接退出 / 崩溃）→ 下次启动 ADBreeze 自动恢复隧道；从未开启、或手动关闭过一次 → 不再自启，直到再次手动开启。想彻底关掉：开一次、关一次即可
+- 投屏经外网时：信令走隧道没问题；WebRTC 媒体是 P2P 不过隧道——默认已配公共 STUN（`stun.cloudflare.com:3478` + `stun.l.google.com:19302`，`-webrtc-stun` 可覆盖/`off` 关闭），两端可打洞时自动走 P2P；对称 NAT 等打不通的场景退化到 WS 视频通道（能用，延迟更高），要根治需自建 TURN
+
+无头场景（Docker / Termux，没有浏览器 UI）用启动参数：`-tunnel` 开启、`-tunnel-token <token>` 指定 Named 模式；其余配置（cloudflared 路径、协议、自动重启）仍走设置页存档，存档优先、token 缺省时回退到命令行值。`-tunnel` 开启同样会记住状态（下次无 flag 也恢复）。
 
 ### 安装为应用（PWA）
 
@@ -302,6 +361,10 @@ HTTP 接口通过会话认证：先 `POST /api/session`（body `{"password": "..
 | GET/POST | `/api/devices/{serial}/clipboard` | 剪贴板读取 / 写入 |
 | GET | `/api/devices/{serial}/screenshot` | 截图 PNG |
 | POST | `/api/devices/{serial}/install` | APK 安装 |
+| GET/PUT | `/api/settings/tunnel` | 外网访问（Cloudflare Tunnel）配置读写 |
+| POST / GET | `/api/settings/tunnel/install` | 一键安装 cloudflared（触发 / 查进度） |
+| GET | `/api/tunnel` | 隧道状态（连接态 / 外网 URL / 日志） |
+| POST | `/api/tunnel/start`、`/api/tunnel/stop` | 隧道开启 / 关闭 |
 
 ## 安全提示
 
@@ -318,8 +381,9 @@ adbreeze/
 │   ├── api/               # REST + WebSocket + 静态前端
 │   ├── auth/              # 管理员密码登录 + 会话 cookie/token
 │   ├── browser/           # 调起系统默认浏览器（双击运行的收尾体验）
-│   ├── settings/          # 用户偏好持久化（adb 路径等）
+│   ├── settings/          # 用户偏好持久化（adb 路径 / 隧道配置，0600 落盘）
 │   ├── tlsutil/           # 自签名证书生成 / 复用（HTTPS）
+│   ├── tunnel/            # 外网访问：托管 cloudflared 子进程（CF-TUNNEL-DESIGN.md）
 │   └── config/            # 命令行配置
 ├── cmd/adbreeze/          # 入口（launch.go 双击体验 / console_*.go 控制台代码页）
 ├── web/dist/              # 前端（embed 进二进制）

@@ -13,6 +13,7 @@ import (
 	"adbreeze/internal/scrcpy"
 	"adbreeze/internal/settings"
 	"adbreeze/internal/tlsutil"
+	"adbreeze/internal/tunnel"
 	"adbreeze/internal/webrtc"
 )
 
@@ -31,20 +32,38 @@ type Server struct {
 	webrtc   *webrtc.Manager
 	settings *settings.Store
 	tls      tlsutil.Info // HTTPS 证书元信息（设置页证书安装功能用）
+	tun      *tunnel.Manager
+}
+
+// Deps 是 New 的依赖集合。位置参数已多到容易传错位，收拢成结构体：
+// 新增依赖只加字段，调用方不受影响。
+type Deps struct {
+	Auth        *auth.Authenticator
+	Version     string
+	Adb         *adb.Manager
+	Mirror      *scrcpy.Manager
+	WebFS       fs.FS
+	Settings    *settings.Store
+	CORSOrigins string
+	TLS         tlsutil.Info // HTTPS 证书元信息（设置页证书安装功能用）
+	Tunnel      *tunnel.Manager
+	WebRTCSTUN  string // 投屏 WebRTC 的 STUN/TURN 服务器（逗号分隔），见 webrtc.ParseICEServers
 }
 
 // New 组装路由，返回可直接交给 http.Server 的 Handler。
-// corsOrigins 为跨域放行来源（逗号分隔，空 = 不限制），见 cors。
-// tlsInfo 为当前证书元信息（见 tlsutil.Describe），供证书下载端点使用。
-func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy.Manager, webFS fs.FS, st *settings.Store, corsOrigins string, tlsInfo tlsutil.Info) http.Handler {
-	s := &Server{auth: a, version: version, mgr: mgr, mirror: mirror, webrtc: webrtc.NewManager(), settings: st, tls: tlsInfo}
+func New(d Deps) http.Handler {
+	s := &Server{
+		auth: d.Auth, version: d.Version, mgr: d.Adb, mirror: d.Mirror,
+		webrtc: webrtc.NewManager(d.WebRTCSTUN), settings: d.Settings,
+		tls: d.TLS, tun: d.Tunnel,
+	}
 	mux := http.NewServeMux()
 
 	// 健康检查（无需鉴权）
 	mux.HandleFunc("GET /api/health", s.health)
 	// 登录（密码校验 + 会话 cookie 签发）与退出
-	mux.HandleFunc("POST /api/session", a.Login)
-	mux.HandleFunc("DELETE /api/session", a.ClearSession)
+	mux.HandleFunc("POST /api/session", d.Auth.Login)
+	mux.HandleFunc("DELETE /api/session", d.Auth.ClearSession)
 
 	// REST API（需鉴权）
 	authed := http.NewServeMux()
@@ -85,7 +104,15 @@ func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy
 	authed.HandleFunc("GET /api/settings/tls", s.tlsStatus)
 	authed.HandleFunc("GET /api/settings/tls/ca.crt", s.downloadCACert)
 	authed.HandleFunc("GET /api/settings/tls/ca.mobileconfig", s.downloadMobileConfig)
-	mux.Handle("/api/", a.Middleware(authed))
+	// 外网访问（Cloudflare Tunnel）：设置读写 + 一键安装 + 启停 + 状态
+	authed.HandleFunc("GET /api/settings/tunnel", s.getTunnelSettings)
+	authed.HandleFunc("PUT /api/settings/tunnel", s.putTunnelSettings)
+	authed.HandleFunc("POST /api/settings/tunnel/install", s.startTunnelInstall)
+	authed.HandleFunc("GET /api/settings/tunnel/install", s.tunnelInstallStatus)
+	authed.HandleFunc("GET /api/tunnel", s.tunnelStatus)
+	authed.HandleFunc("POST /api/tunnel/start", s.startTunnel)
+	authed.HandleFunc("POST /api/tunnel/stop", s.stopTunnel)
+	mux.Handle("/api/", d.Auth.Middleware(authed))
 
 	// WebSocket（需鉴权，凭 /api/session 签发的会话 cookie）
 	events := http.NewServeMux()
@@ -94,15 +121,15 @@ func New(a *auth.Authenticator, version string, mgr *adb.Manager, mirror *scrcpy
 	events.HandleFunc("GET /ws/audio/{serial}", s.handleAudio)
 	events.HandleFunc("GET /ws/term/{serial}", s.handleTerm)
 	events.HandleFunc("GET /ws/logcat/{serial}", s.handleLogcat)
-	mux.Handle("/ws/", a.WSMiddleware(events))
+	mux.Handle("/ws/", d.Auth.WSMiddleware(events))
 
 	// 静态前端（embed 进二进制）公开可访问：页面外壳只是品牌性静态资源，
 	// 不含敏感信息；真正的鉴权入口是页面内的登录表单（POST /api/session），
 	// 全部 REST API / WS 仍受会话保护。公开外壳是前端登录方案的必要条件——
 	// 未登录用户得先加载到页面，才看得到登录界面。
-	mux.Handle("/", http.FileServerFS(webFS))
+	mux.Handle("/", http.FileServerFS(d.WebFS))
 
-	return logRequest(cors(mux, parseOrigins(corsOrigins)))
+	return logRequest(cors(mux, parseOrigins(d.CORSOrigins)))
 }
 
 // cors 为跨源前端放行 API：前端可托管在另一域名（静态 Pages、反代等），

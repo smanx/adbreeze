@@ -27,6 +27,11 @@ import (
 // envPrefix 是环境变量名前缀，完整名为前缀 + 参数名大写（如 ADBREEZE_ADDR）。
 const envPrefix = "ADBREEZE_"
 
+// DefaultPassword 是管理员密码的出厂默认值。单独成常量：main.go 的
+// 安全警告与 api 层"默认密码开启公网隧道时告警"都要引用它，
+// 改默认值时只有这一处。
+const DefaultPassword = "admin"
+
 // legacyUser 承接已废弃的 -user 参数：Basic Auth 时代「用户名+密码」成对出现，
 // 旧启动脚本（docker 命令行、systemd unit 等）可能仍带着 -user xxx。
 // 参数本身已无任何作用，保留注册只为不因「未知参数」拒绝启动。
@@ -65,6 +70,18 @@ type Config struct {
 	// 凭证请求携带 Origin 头；为空时回显任意 Origin——凭证模式下必须回显具体
 	// 来源（Access-Control-Allow-Origin: * 与携带凭证互斥），故不用通配符。
 	CORSOrigins string
+
+	// 外网访问（Cloudflare Tunnel，详见 internal/tunnel 与 CF-TUNNEL-DESIGN.md）。
+	// 这两个只是无头场景（Docker / Termux / 安卓服务，没有浏览器 UI）的启动基线；
+	// 完整配置（cloudflared 路径、service、token 等）走设置页存档，
+	// 合并语义：存档优先，token 存档为空时回退到 -tunnel-token。
+	Tunnel      bool   // 启动即开启隧道（等价于设置里的 autoStart）
+	TunnelToken string // Named 模式 token；空 = Quick Tunnel
+
+	// WebRTCSTUN 是投屏 WebRTC 用的 STUN/TURN 服务器（逗号分隔）。
+	// 默认公共 STUN：没有它，跨 NAT（典型的外网访问场景）时 ICE 只有主机
+	// 候选、建连必失败。自建 coturn 或公司 TURN 在此覆盖；off 关闭。
+	WebRTCSTUN string
 }
 
 // Parse 解析配置（命令行参数 + 环境变量 + 默认值）。
@@ -81,7 +98,7 @@ func ParseArgs(args []string) (*Config, error) {
 	fs := flag.NewFlagSet("adbreeze", flag.ContinueOnError)
 	fs.BoolVar(&cfg.ShowVersion, "version", false, "打印版本号并退出")
 	fs.StringVar(&cfg.Addr, "addr", ":9080", "HTTP 监听地址（始终开启）")
-	fs.StringVar(&cfg.Password, "password", "admin", "管理员密码（前端登录用）")
+	fs.StringVar(&cfg.Password, "password", DefaultPassword, "管理员密码（前端登录用）")
 	fs.StringVar(&legacyUser, "user", "", "（已废弃，仅为兼容旧启动脚本保留，无任何作用）")
 	fs.StringVar(&cfg.AdbPath, "adb", "", "adb 可执行文件路径，默认从 PATH 查找（附常见安装位置补漏）")
 	fs.StringVar(&cfg.DataDir, "data", "", "数据目录（存放 TLS 证书，需持久保存），默认用户配置目录下的 ADBreeze")
@@ -94,6 +111,9 @@ func ParseArgs(args []string) (*Config, error) {
 	fs.StringVar(&cfg.TLSHosts, "tls-hosts", "", "追加到证书 SAN 的主机名（逗号分隔），自动探测之外补漏，如反向代理域名")
 	fs.StringVar(&cfg.TLSIPs, "tls-ips", "", "追加到证书 SAN 的 IP（逗号分隔），如 Docker 桥接 / NAT 后的外部地址")
 	fs.StringVar(&cfg.CORSOrigins, "cors-origins", "", "跨域放行的来源（逗号分隔），留空=不限制；前端托管在别的域名、手动配置后端地址时使用")
+	fs.BoolVar(&cfg.Tunnel, "tunnel", false, "启动即开启 Cloudflare Tunnel 外网访问（无头场景用；完整配置在设置页）")
+	fs.StringVar(&cfg.TunnelToken, "tunnel-token", "", "Cloudflare Tunnel 令牌（Named 模式；空=Quick Tunnel 随机地址）")
+	fs.StringVar(&cfg.WebRTCSTUN, "webrtc-stun", "stun.cloudflare.com:3478,stun.l.google.com:19302", "投屏 WebRTC 的 STUN/TURN 服务器（逗号分隔；off=关闭；自建 coturn 在此覆盖）")
 	if err := fs.Parse(args); err != nil {
 		return nil, err // 用法信息已由 flag 包打印（含 -h 的 ErrHelp）
 	}
@@ -209,6 +229,20 @@ func applyEnv(cfg *Config, set map[string]bool) {
 	}
 	if v := envStr("CORS_ORIGINS"); v != "" && !set["cors-origins"] {
 		cfg.CORSOrigins = v
+	}
+	if v := envStr("TUNNEL"); v != "" && !set["tunnel"] {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			log.Printf("[config] 环境变量 ADBREEZE_TUNNEL=%q 不是合法布尔值（true/false/1/0），已忽略", v)
+		} else {
+			cfg.Tunnel = b
+		}
+	}
+	if v := envStr("TUNNEL_TOKEN"); v != "" && !set["tunnel-token"] {
+		cfg.TunnelToken = v
+	}
+	if v := envStr("WEBRTC_STUN"); v != "" && !set["webrtc-stun"] {
+		cfg.WebRTCSTUN = v
 	}
 }
 

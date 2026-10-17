@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,13 +21,62 @@ import (
 
 // Manager 管理所有活跃的 WebRTC 观看会话。
 type Manager struct {
+	// iceServers 为 STUN/TURN 服务器列表（ pion 的 ICEServer URL 形态）。
+	// 空 = 仅主机候选（仅同局域网可用）；配了 STUN 后远端观看者也能
+	// 拿到 srflx 候选，NAPT 两侧即可打洞直连（对称 NAT 仍需 TURN）。
+	iceServers []string
+
 	mu   sync.Mutex
 	next atomic.Int64
 	alls map[string]*Session // key: serial/sessionID
 }
 
-func NewManager() *Manager {
-	return &Manager{alls: make(map[string]*Session)}
+// NewManager 构造管理器。stunCSV 为逗号分隔的 STUN/TURN 服务器
+//（见 ParseICEServers），空 = 不配置（维持纯主机候选行为）。
+func NewManager(stunCSV string) *Manager {
+	return &Manager{
+		iceServers: ParseICEServers(stunCSV),
+		alls:       make(map[string]*Session),
+	}
+}
+
+// ParseICEServers 解析逗号分隔的 STUN/TURN 服务器清单：
+//   - 空串 / "off" / "none" / "-" → 空列表（禁用）；
+//   - 已带 scheme 的（stun: / turn: / turns:）原样保留；
+//   - 裸 host:port 自动补 stun: 前缀（用户按 host:port 写更自然）。
+func ParseICEServers(csv string) []string {
+	var out []string
+	for _, item := range strings.Split(csv, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		switch strings.ToLower(item) {
+		case "off", "none", "-":
+			return nil // 显式禁用：后面的也不再收
+		}
+		// 已带 scheme（stun: / turn: / turns:）原样保留；裸 host:port 补 stun:
+		lower := strings.ToLower(item)
+		if strings.HasPrefix(lower, "stun:") || strings.HasPrefix(lower, "turn:") || strings.HasPrefix(lower, "turns:") {
+			out = append(out, item)
+			continue
+		}
+		out = append(out, "stun:"+item)
+	}
+	return out
+}
+
+// iceConfiguration 把 ICE 服务器列表转成 pion 配置（无有效条目时返回 nil，
+// 等价于不设置，pion 仍会正常收集主机候选）。
+func (m *Manager) iceConfiguration() []webrtc.ICEServer {
+	if len(m.iceServers) == 0 {
+		return nil
+	}
+	servers := make([]webrtc.ICEServer, 0, len(m.iceServers))
+	for _, u := range m.iceServers {
+		servers = append(servers, webrtc.ICEServer{URLs: []string{u}})
+	}
+	return servers
 }
 
 // Session 是单个观看者的 WebRTC 会话。
@@ -65,7 +115,10 @@ func (m *Manager) Create(serial string, mirror *scrcpy.Manager, offer webrtc.Ses
 	// 关闭 mDNS 候选：内网直连用真实 IP，省去 mDNS 解析、加快 gathering/连通
 	se := &webrtc.SettingEngine{}
 	se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
-	pc, err := webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(*se)).NewPeerConnection(webrtc.Configuration{})
+	// STUN 服务器（默认 Cloudflare + Google 公共 STUN）：让远端观看者拿到
+	// srflx 候选——不配则只有主机候选，跨 NAT（典型的外网访问场景）建连必失败
+	pc, err := webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(*se)).
+		NewPeerConnection(webrtc.Configuration{ICEServers: m.iceConfiguration()})
 	if err != nil {
 		vCap()
 		return webrtc.SessionDescription{}, fmt.Errorf("创建 PeerConnection 失败: %w", err)

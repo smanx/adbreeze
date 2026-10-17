@@ -24,6 +24,7 @@ import (
 	"adbreeze/internal/scrcpy"
 	"adbreeze/internal/settings"
 	"adbreeze/internal/tlsutil"
+	"adbreeze/internal/tunnel"
 )
 
 // version 由构建时 -ldflags "-X main.version=..." 注入。
@@ -50,7 +51,8 @@ func main() {
 	log.Printf("管理员密码: %s", cfg.Password)
 	// 默认弱口令 + 对外监听 = 局域网里任何人都能用 admin/admin 登进设备控制台。
 	// 只提示不强拒：内网隔离、防火墙等场景用户可能有意为之，拦截会破坏「双击即用」契约。
-	if cfg.Password == "admin" && listensBeyondLocalhost(cfg.Addr) {
+	// （公网隧道同理：不拦截，只记 WARN 日志 + UI 提醒，见 internal/api/tunnel.go。）
+	if cfg.Password == config.DefaultPassword && listensBeyondLocalhost(cfg.Addr) {
 		log.Printf("[安全警告] 当前使用默认密码 admin 且监听地址 %s 对外开放，局域网内任何人可登录；请用 -password 或环境变量 ADBREEZE_PASSWORD 设置强密码", cfg.Addr)
 	}
 
@@ -78,6 +80,53 @@ func main() {
 
 	// 投屏层（生命周期与应用一致，不随单个请求结束）
 	mirror := scrcpy.NewManager(ctx, mgr, adbreeze.ScrcpyServer, adbreeze.ScrcpyServerVersion)
+
+	// 外网访问（Cloudflare Tunnel）：安装包 +0——cloudflared 不内置，
+	// 用户在设置页加载配置后一键开启（详见 CF-TUNNEL-DESIGN.md）。
+	// 自启语义 = 记住上次状态：开启过且没手动关闭（resume=true）→ 本次启动
+	// 自动恢复；从未开启或手动关闭过 → 不恢复。resume 由开启/关闭动作维护
+	// （见 api.setResume），无头场景另有 -tunnel 强制开启。
+	// 配置两层：设置页存档优先；-tunnel / -tunnel-token 仅是无头场景
+	// （Docker / Termux / 安卓服务）的启动基线，其中 token 在存档为空时回退
+	// ——无头场景 UI 从未被访问、存档为空，必须能凭 flag 跑通。
+	tunCfg := st.Get().Tunnel
+	tunToken := tunCfg.Token
+	if tunToken == "" {
+		tunToken = cfg.TunnelToken
+	}
+	httpPort := "9080"
+	if _, p, err := net.SplitHostPort(cfg.Addr); err == nil && p != "" {
+		httpPort = p
+	}
+	tun := tunnel.New(ctx, tunnel.Options{
+		Binary:      tunCfg.Binary,
+		Service:     tunCfg.Service,
+		Protocol:    tunCfg.Protocol,
+		Token:       tunToken,
+		AutoRestart: tunCfg.AutoRestartEnabled(),
+		HTTPPort:    httpPort,
+		DataDir:     cfg.DataDir,
+	})
+	if cfg.Tunnel || tunCfg.ResumeEnabled() {
+		reason := "上次运行状态（未手动关闭）"
+		if cfg.Tunnel {
+			reason = "启动参数 -tunnel"
+		}
+		log.Printf("[tunnel] 按%s开启外网访问（%s 模式）...", reason, tun.Options().Mode())
+		// 失败不 fatal：本地服务优先（与 HTTPS 起不来不 fatal 一致）；
+		// 具体失败原因由 Manager 守护重试并记入 /api/tunnel 状态
+		_ = tun.Start()
+		// flag 开启也算"启动过没有手动关闭"：记住状态，下次无 flag 也恢复
+		if cfg.Tunnel && !tunCfg.ResumeEnabled() {
+			tunCfg.Resume = &cfg.Tunnel
+			tunCfg.LegacyAutoStart = nil
+			cur := st.Get()
+			cur.Tunnel = tunCfg
+			if err := st.Set(cur); err != nil {
+				log.Printf("[tunnel] 保存 resume 失败（不影响本次启动）: %v", err)
+			}
+		}
+	}
 
 	webFS, err := fs.Sub(adbreeze.WebFS, "web/dist")
 	if err != nil {
@@ -112,7 +161,18 @@ func main() {
 	// HTTPS 未开启时 Enabled=false，界面引导用户先开 HTTPS。
 	tlsInfo := tlsutil.Describe(cfg.HTTPS, tlsDir, cfg.TLSCert != "", extra, cfg.HTTPSAddr)
 
-	handler := api.New(auth.New(cfg.Password), version, mgr, mirror, webFS, st, cfg.CORSOrigins, tlsInfo)
+	handler := api.New(api.Deps{
+		Auth:        auth.New(cfg.Password),
+		Version:     version,
+		Adb:         mgr,
+		Mirror:      mirror,
+		WebFS:       webFS,
+		Settings:    st,
+		CORSOrigins: cfg.CORSOrigins,
+		TLS:         tlsInfo,
+		Tunnel:      tun,
+		WebRTCSTUN:  cfg.WebRTCSTUN,
+	})
 
 	// HTTP 始终开启：它是保底入口——自签名证书在浏览器信任之前只能靠它进界面，
 	// 且 HTTPS 配置出错时不会导致完全失联。
@@ -161,6 +221,7 @@ func main() {
 
 	<-ctx.Done()
 	log.Println("正在退出...")
+	tun.Stop() // 先收隧道：退出过程中不再放新请求经公网打入，再关本地服务
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutdownCtx)

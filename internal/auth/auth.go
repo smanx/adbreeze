@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"adbreeze/internal/config"
 )
 
 const (
@@ -48,6 +50,11 @@ func New(password string) *Authenticator {
 	}
 	return &Authenticator{password: password, key: key}
 }
+
+// WeakPassword 报告当前是否为出厂默认密码。
+// 用途：开启公网隧道（Cloudflare Tunnel）时的安全警告（日志 + UI 提醒），
+// 与局域网"默认密码 + 对外监听只警告"的策略一致——提示而不拦截。
+func (a *Authenticator) WeakPassword() bool { return a.password == config.DefaultPassword }
 
 // Middleware 保护普通 HTTP：会话有效（cookie / Bearer / ?session=）则放行，
 // 否则返回 401 JSON，由前端展示登录表单。
