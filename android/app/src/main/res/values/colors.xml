@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 品牌色与 Web 控制台保持一致（web/src/styles.css 的 primary 变量） -->
+    <color name="primary">#0F9D58</color>
+    <color name="primary_dark">#0B7A43</color>
+    <color name="primary_soft">#EAF6EF</color>
+    <color name="bg">#F2F4F6</color>
+    <color name="card">#FFFFFF</color>
+    <color name="text_primary">#1A1C1E</color>
+    <color name="text_body">#3C4043</color>
+    <color name="text_secondary">#6B7280</color>
+    <color name="text_hint">#9AA3AD</color>
+    <color name="field_bg">#F4F6F8</color>
+    <color name="field_border">#E3E7EB</color>
+    <color name="log_bg">#F7F9F8</color>
+    <color name="green">#0F9D58</color>
+    <color name="orange">#FFA000</color>
+    <color name="red">#E53935</color>
+    <color name="btn_disabled_bg">#F1F3F5</color>
+    <color name="btn_disabled_border">#E8ECEF</color>
+</resources>

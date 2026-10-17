@@ -101,7 +101,7 @@ class ServerService : Service() {
         adbBin = File(baseDir, "adb/adb")
         libDir = File(baseDir, "adb")
         goBin = File(baseDir, "adbreeze/adbreeze")
-        startForegroundWithNotification("服务启动中…")
+        startForegroundWithNotification(Lang.t("notify.starting"))
         Thread { bootstrap() }.start()
     }
 
@@ -156,12 +156,14 @@ class ServerService : Service() {
             log("HTTPS 已按 PC 端默认开启：https://127.0.0.1:$httpsPort（局域网设备硬解投屏需导入 CA，见网页设置页）")
             for (ip in lanIps()) log("局域网访问：http://$ip:$httpPort · https://$ip:$httpsPort")
             startWatcher()
-            startForegroundWithNotification("运行中：http://127.0.0.1:$httpPort")
+            startForegroundWithNotification(Lang.t("notify.running", mapOf("port" to httpPort)))
         } catch (e: Throwable) {
             errorMsg = e.message ?: e.toString()
             phase = "error" // 先设 errorMsg 再置 error：监听者刷新 UI 时要能读到
             log("启动失败: $errorMsg")
-            startForegroundWithNotification("启动失败：$errorMsg")
+            startForegroundWithNotification(
+                Lang.t("notify.failed", mapOf("msg" to (errorMsg ?: Lang.t("common.unknown"))))
+            )
         }
     }
 
@@ -308,11 +310,10 @@ class ServerService : Service() {
 
     private fun startForegroundWithNotification(text: String) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= 26) {
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "ADBreeze 服务", NotificationManager.IMPORTANCE_LOW)
-            )
-        }
+        // minSdk 26：通知渠道 API 始终可用，无需 SDK_INT 判断
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, Lang.t("notify.channel"), NotificationManager.IMPORTANCE_LOW)
+        )
         val n = buildNotification(text)
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -335,7 +336,7 @@ class ServerService : Service() {
             .setContentText(text)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentIntent(open)
-            .addAction(0, "停止服务", stop)
+            .addAction(0, Lang.t("notify.stop"), stop)
             .setOngoing(true)
             .build()
     }

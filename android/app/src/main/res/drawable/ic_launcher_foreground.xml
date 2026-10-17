@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 白色 ">_" 提示符：直接按 108 画布坐标书写，居中于 (54,54)，
+         主体 40x32，含描边后仍在 72dp 安全区（18~90）内。
+         早期版本用 group scale 绕 (54,54) 放大 24 画布路径，坐标被甩到负值整块被裁。 -->
+    <path
+        android:pathData="M 34,38 L 50,54 L 34,70"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M 58,70 L 74,70"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="8"
+        android:strokeLineCap="round" />
+</vector>
