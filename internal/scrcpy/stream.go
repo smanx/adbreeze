@@ -40,6 +40,10 @@ type Stream struct {
 	info StreamInfo
 	hub  *Hub
 
+	// 启动本流时生效的参数（withDefaults + 软编探测后的 VideoEncoder 已回填）。
+	// Manager.Start 复用已有流时据此判断新请求能否共用（如软解需求）。
+	opts Options
+
 	videoConn   net.Conn
 	audioConn   net.Conn
 	controlConn net.Conn
@@ -140,6 +144,7 @@ func start(deps streamDeps, serial string, jarBytes []byte, serverVersion string
 	// 启用音频时直接用 forward 模式：reverse 的多连接转发在部分平台
 	// （Windows adb server 实测）会丢失第 3 个（control）连接；
 	// 纯视频时 reverse 优先（无连接竞态），失败回退 forward。
+	s.opts = opts // 编码器已定（软编探测回填），记录生效参数供复用判断
 	scid := uint32(time.Now().UnixNano()) & 0x7FFFFFFF
 	s.socketName = fmt.Sprintf("scrcpy_%08x", scid)
 	capture := newOutputCapture()

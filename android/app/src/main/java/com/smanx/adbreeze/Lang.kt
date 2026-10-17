@@ -92,8 +92,8 @@ object Lang {
 
     fun isZh() = current == ZH
 
-    /** 切换按钮上显示「另一种语言」的标签。 */
-    fun toggleLabel(): String = if (isZh()) "EN" else "中文"
+    /** 切换按钮上显示当前语言的短标签（文/en），占位小不挤控制台布局。 */
+    fun toggleLabel(): String = if (isZh()) "文" else "en"
 
     /** 取文案；args 用于替换 {key} 占位符。 */
     fun t(key: String, args: Map<String, String> = emptyMap()): String {

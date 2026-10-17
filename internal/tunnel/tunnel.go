@@ -300,7 +300,8 @@ func (m *Manager) runOnce() {
 
 	opts := m.currentOpts()
 	args := buildArgs(opts)
-	cmd := exec.Command(bin, args...)
+	// android 上经 linker64 包装执行（SELinux 禁止直接 exec 应用目录二进制）
+	cmd := cloudflaredCmd(context.Background(), bin, args...)
 	// token 只经环境变量传递：不进 argv（ps 可见）
 	if opts.Token != "" {
 		cmd.Env = append(os.Environ(), "TUNNEL_TOKEN="+opts.Token)

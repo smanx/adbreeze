@@ -125,7 +125,8 @@ func Probe(opts Options) ProbeResult {
 	res := ProbeResult{Path: p}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, p, "--version").CombinedOutput()
+	// android 上经 linker64 包装（见 android.go）
+	out, err := cloudflaredCmd(ctx, p, "--version").CombinedOutput()
 	first := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
 	if err != nil && first == "" {
 		res.Error = fmt.Sprintf("cloudflared --version 执行失败: %v", err)

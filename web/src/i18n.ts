@@ -58,7 +58,7 @@ const MESSAGES = {
   'topbar.reconnecting': ['Reconnecting', '重连中'],
   'topbar.github': ['GitHub repository', 'GitHub 仓库'],
   'topbar.langTip': ['Switch language', '切换语言'],
-  'topbar.langBtn': ['中文', 'EN'],
+  'topbar.langBtn': ['文', 'en'],
   'shell.logoutConfirm': ['Logging out invalidates the current session immediately. Continue?',
     '退出将立即使当前会话失效，确定？'],
   'shell.signedOut': ['Signed out', '已退出'],

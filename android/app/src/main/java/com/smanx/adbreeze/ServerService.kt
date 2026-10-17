@@ -172,11 +172,17 @@ class ServerService : Service() {
         val am = assets
         val abi = ExecUtil.pickAbi() ?: throw IllegalStateException("设备 ABI 不受支持（需要 arm64-v8a）")
 
+        // 戳必须基于内容哈希而非长度：嵌入资源（如内嵌前端）变了但总长度恰好
+        // 不变时（Go 链接器段对齐会吸收 KB 级的内容变化），按长度会误判"没变"
+        // 而跳过重解压，旧二进制带着旧前端一直跑（2026-10-17 实测踩中）。
+        val md = java.security.MessageDigest.getInstance("SHA-256")
         val manifest = StringBuilder()
         for (top in listOf("adb/$abi", "adbreeze/$abi")) {
             for (name in am.list(top) ?: emptyArray()) {
-                val len = am.open("$top/$name").use { it.available().toLong() }
-                manifest.append(top).append('/').append(name).append(':').append(len).append('\n')
+                val bytes = am.open("$top/$name").use { it.readBytes() }
+                manifest.append(top).append('/').append(name).append(':')
+                    .append(md.digest(bytes).joinToString("") { "%02x".format(it) })
+                    .append('\n')
             }
         }
         val stamp = File(baseDir, ".assets.stamp")
@@ -225,10 +231,31 @@ class ServerService : Service() {
     }
 
     /** 拉起 Go 服务（配置经环境变量注入，Go 侧零改动）。 */
+    /**
+     * 证书 SAN 的设备名变体（供 ADBREEZE_TLS_HOSTS）：
+     * Settings.Global 的 device_name（即设置里的「手机名称」，读取无需权限）
+     * → 连字符 / 无分隔两种主机名形态，裸名与 .local 后缀各一份。
+     * 裸名必签：Windows 侧经 LLMNR/路由器把手机名解析成不带 .local 的形式访问
+     * （如 oppo-ace2），只签 .local 会出现「名称不符」。
+     * 取不到或清洗后为空返回 null（不注入，走 Go 侧默认探测）。
+     */
+    private fun tlsHostsEnv(): String? {
+        val name = try {
+            android.provider.Settings.Global.getString(contentResolver, "device_name")
+        } catch (_: Exception) {
+            null
+        }
+        if (name.isNullOrBlank()) return null
+        val hyphen = name.trim().replace(Regex("[^A-Za-z0-9\\-]"), "-").trim('-')
+        if (hyphen.isEmpty()) return null
+        val noSep = hyphen.replace("-", "")
+        return listOf("$hyphen", "$noSep", "$hyphen.local", "$noSep.local").distinct().joinToString(",")
+    }
+
     private fun startGoServer() {
         log("启动 Go 服务: ${goBin.path}")
         goProc?.destroyForcibly()
-        val env = mapOf(
+        val env = mutableMapOf(
             "ADBREEZE_ADDR" to ":$httpPort",
             // HTTPS：与 PC 端一致默认开启，端口可配（默认 9443）。
             // 本机回环访问本就是安全上下文，HTTPS 服务于局域网其他设备的浏览器
@@ -237,9 +264,17 @@ class ServerService : Service() {
             "ADBREEZE_DATA" to baseDir.path,
             "HOME" to baseDir.path, // os.UserConfigDir() 依赖 HOME，保住 settings 持久化
             "ADBREEZE_ADB" to adbBin.path,
+            // Go 服务内启动 cloudflared 也得走 linker64 包装（SELinux 同款限制），
+            // 把能用的加载器路径直接告诉它（见 ExecUtil.pickLinker）
+            "ADBREEZE_LINKER" to ExecUtil.linkerPath(),
             "ADBREEZE_PASSWORD" to cfgPass,
             "TMPDIR" to cacheDir.path,
         )
+        // 设备名进证书 SAN：局域网设备常用 <手机名>.local 访问本服务，名字不在
+        // SAN 里会 TLS 名称不匹配——浏览器顶层可手动放行，但页面里 Service Worker
+        // 的 fetch 过不去（WebKit 在证书不匹配时拒绝 SW 内的网络请求），页面瘫死。
+        // 生成两种拼写变体（连字符 / 无分隔），SAN 匹配大小写不敏感，多签零成本。
+        tlsHostsEnv()?.let { env["ADBREEZE_TLS_HOSTS"] = it }
         goProc = ExecUtil.exec(goBin.path, emptyList(), env)
         val logFile = File(baseDir, "server.log")
         Thread {

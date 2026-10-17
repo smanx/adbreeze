@@ -12,7 +12,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -81,13 +80,18 @@ type Installer struct {
 
 // NewInstaller 构造安装器。dataDir 为数据目录（二进制落 <dataDir>/bin）。
 func NewInstaller(dataDir string) *Installer {
-	return &Installer{
+	in := &Installer{
 		dataDir: dataDir,
 		baseURL: defaultBaseURL,
 		client:  &http.Client{Timeout: installTimeout},
 		smoke:   defaultSmoke,
 		status:  InstallStatus{State: InstallIdle},
 	}
+	// android：Go 纯解析器拿不到系统 DNS，安装器改用自定义解析的客户端
+	if runtime.GOOS == "android" {
+		in.client = androidHTTPClient(installTimeout)
+	}
+	return in
 }
 
 // assetFor 返回指定平台的官方 release 资产名；ok=false 表示该平台没有
@@ -144,6 +148,14 @@ func (in *Installer) Start() error {
 	}
 	name, tgz, ok := assetFor(runtime.GOOS, runtime.GOARCH)
 	if !ok {
+		// android/arm64：Cloudflare 无官方二进制，改走 Termux 仓库
+		// 的 aarch64 构建（bionic 动态 PIE，linker64 可执行，见 install_android.go）
+		if runtime.GOOS == "android" && runtime.GOARCH == "arm64" {
+			in.running = true
+			in.status = InstallStatus{State: InstallDownloading, StartedAt: time.Now()}
+			go in.runAndroid()
+			return nil
+		}
 		return fmt.Errorf("Cloudflare 未提供 %s/%s 平台的官方 cloudflared 二进制，请手动安装（winget / brew / 官方 release 页）", runtime.GOOS, runtime.GOARCH)
 	}
 	in.running = true
@@ -335,10 +347,11 @@ func extractMember(tgzPath, dst, wantBase string) error {
 }
 
 // defaultSmoke 执行 <path> --version，返回首行非空输出。
+// android 上经 linker64 包装（见 android.go）。
 func defaultSmoke(path string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), smokeTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()
+	out, err := cloudflaredCmd(ctx, path, "--version").CombinedOutput()
 	first := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
 	if err != nil && first == "" {
 		return "", err

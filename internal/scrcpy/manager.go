@@ -94,13 +94,26 @@ func (m *Manager) Start(serial string, opts Options) (StreamInfo, error) {
 		return StreamInfo{}, fmt.Errorf("设备 %s 不在线或未授权", serial)
 	}
 
+	// 已有流时通常直接复用（画质等参数以先到者为准，多观众共享同一条流）。
+	// 唯一必须满足的是软解需求：WASM 软解（h264bsd）只吃 Baseline 档，而硬编输出
+	// High——若请求方要软编而现有流是硬编，复用等于让请求方永远解不出画面
+	// （失败遮罩盖住画布，触控也全部落在遮罩上）。此时重启设备端流。
+	restart := false
 	m.mu.Lock()
 	if s, ok := m.streams[serial]; ok {
 		info := s.Info()
-		m.mu.Unlock()
-		return info, nil
+		if opts.PreferSoftwareEncoder && s.opts.VideoEncoder == "" {
+			log.Printf("[scrcpy:%s] 新请求需要软件编码器（软解），重启现有硬编流", serial)
+			restart = true
+		} else {
+			m.mu.Unlock()
+			return info, nil
+		}
 	}
 	m.mu.Unlock()
+	if restart {
+		_ = m.Stop(serial) // 停掉硬编流，落到下面按新参数重启
+	}
 
 	// 在锁外启动（耗时数百毫秒），完成后再登记
 	s, err := start(m.adb.Client(), serial, m.jar, m.serverVersion, opts)

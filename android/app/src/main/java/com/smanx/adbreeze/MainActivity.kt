@@ -9,7 +9,6 @@ import android.os.Bundle
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
@@ -222,19 +221,12 @@ class MainActivity : Activity() {
     @SuppressLint("SetTextI18n")
     private fun appendLog(line: String) {
         logView.append(if (logView.text.isEmpty()) line else "\n$line")
-        // 只保留最近 ~32KB，防长跑撑爆 TextView
+        // 只保留最近 ~32KB，防长跑撑爆 TextView。
+        // 不做任何自动滚动：日志到达时把页面拽到底部会打断用户正在看的区域。
         val s = logView.text
         if (s.length > 64 * 1024) {
             val cut = s.indexOf('\n', s.length - 32 * 1024).coerceAtLeast(0)
             logView.text = s.subSequence(cut + 1, s.length)
         }
-        scrollLogToBottom()
-    }
-
-    /** logView 现在嵌在日志卡片的容器里，向上找到 ScrollView 再滚到底。 */
-    private fun scrollLogToBottom() {
-        var p: android.view.ViewParent? = logView.parent
-        while (p != null && p !is ScrollView) p = p.parent
-        (p as? ScrollView)?.fullScroll(android.view.View.FOCUS_DOWN)
     }
 }

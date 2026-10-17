@@ -65,6 +65,14 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/session", d.Auth.Login)
 	mux.HandleFunc("DELETE /api/session", d.Auth.ClearSession)
 
+	// CA / iOS 描述文件下载（无需鉴权）：下载常发生在未登录的上下文里
+	// （iOS 跨 App 打开、另一个浏览器接手下载），带认证必然 401 跳登录、
+	// 下载失败。CA 证书本身是公开物（私钥永不出服务器），公开不泄露任何
+	// 秘密；首次下载本就无可信通道，认证也防不了调包——完整性由用户在
+	// 系统信任库核对指纹保证。
+	mux.HandleFunc("GET /api/settings/tls/ca.crt", s.downloadCACert)
+	mux.HandleFunc("GET /api/settings/tls/ca.mobileconfig", s.downloadMobileConfig)
+
 	// REST API（需鉴权）
 	authed := http.NewServeMux()
 	authed.HandleFunc("GET /api/devices", s.listDevices)
@@ -102,8 +110,6 @@ func New(d Deps) http.Handler {
 	authed.HandleFunc("POST /api/settings/adb", s.putAdbSettings)
 	// HTTPS 证书：状态查询 + CA 证书 / Apple 描述文件下载（设置页安装引导）
 	authed.HandleFunc("GET /api/settings/tls", s.tlsStatus)
-	authed.HandleFunc("GET /api/settings/tls/ca.crt", s.downloadCACert)
-	authed.HandleFunc("GET /api/settings/tls/ca.mobileconfig", s.downloadMobileConfig)
 	// 外网访问（Cloudflare Tunnel）：设置读写 + 一键安装 + 启停 + 状态
 	authed.HandleFunc("GET /api/settings/tunnel", s.getTunnelSettings)
 	authed.HandleFunc("PUT /api/settings/tunnel", s.putTunnelSettings)
