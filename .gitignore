@@ -6,5 +6,5 @@ bin/
 web/dist/
 node_modules/
 
-# 注：vendor-bin/scrcpy-server-v2.4 为构建必需的内嵌资源，随仓库分发
-# （来源：https://github.com/Genymobile/scrcpy/releases/tag/v2.4，Apache-2.0）
+# 注：vendor-bin/scrcpy-server-v5.0.1 为构建必需的内嵌资源，随仓库分发
+# （来源：https://github.com/Genymobile/scrcpy，Apache-2.0）

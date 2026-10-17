@@ -14,6 +14,10 @@
 - **设备剪贴板互通**：读取/写入设备剪贴板，一键复制到本机
 - **交互终端**：原生 PTY shell，前端 xterm.js 完整支持 vim/top 等交互程序
 - **文件管理**：目录浏览、上传下载、删除、新建（原生 adb sync 协议实现）
+- **应用管理**：应用列表、启动 / 停止 / 卸载、导出 APK
+- **设备信息 / 性能监控**：系统概览、CPU / 内存实时曲线
+- **进程管理**：进程列表与一键结束
+- **Logcat 日志**：浏览器内实时查看设备日志
 - **截图 / APK 安装**：一键 screencap 下载 PNG；浏览器拖入 APK 直接安装
 - **批量命令**：勾选多台设备并行执行 shell
 - **设备热插拔**：`host:track-devices` 长连接监听，设备上下线实时推送
@@ -34,21 +38,23 @@ ADBreeze 服务进程（Go 单二进制）
 ```
 
 - **ADB 层**：不依赖 `adb` 子进程（除启动 server 外），原生实现 smart socket（`host:transport` / `host:track-devices` / forward / reverse）与 sync 协议（SEND/DATA/DONE、LIST/RECV）
-- **投屏**：嵌入 `scrcpy-server` v2.4，reverse 隧道优先（无连接竞态）、forward 自动回退；视频流经 Hub 扇出给多个 WebSocket 订阅者，新订阅者自动补发 SPS/PPS 并对齐关键帧
+- **投屏**：嵌入 `scrcpy-server` v5.0.1，reverse 隧道优先（无连接竞态）、forward 自动回退；视频流经 Hub 扇出给多个 WebSocket 订阅者，新订阅者自动补发 SPS/PPS 并对齐关键帧
 - **鉴权**：管理员密码登录（页面内登录表单），登录后凭 12 小时会话（cookie / Bearer token）访问，支持登出、防爆破锁定
 
 ## 快速开始
 
-前端产物 `web/dist` 通过 `go:embed` 嵌入二进制，且不随仓库分发（见 `.gitignore`），因此**克隆后首次构建需先构建前端**（依赖用 [pnpm](https://pnpm.io) 管理）：
+**直接下载**：无需构建，到 [GitHub Releases](https://github.com/smanx/adbreeze/releases) 下载对应平台的单文件（Windows 双击即用，见下文），或拉取预构建 Docker 镜像（见 [Docker](#docker) 一节）。
+
+**从源码构建**：前端产物 `web/dist` 通过 `go:embed` 嵌入二进制，且不随仓库分发（见 `.gitignore`），因此**克隆后首次构建需先构建前端**（依赖用 [pnpm](https://pnpm.io) 管理）：
 
 ```powershell
-# 1. 构建前端（Node 18+ / pnpm 9+）
+# 1. 构建前端（Node 18+ / pnpm 10+）
 cd web
 pnpm install
 pnpm run build
 cd ..
 
-# 2. 构建（Go 1.22+）
+# 2. 构建（Go 1.26+；或 `make build`，自动先构建前端）
 go build -o bin/adbreeze.exe ./cmd/adbreeze
 
 # 3. 运行：所有参数都可省略，默认密码 admin，HTTP :9080 + HTTPS :9443
@@ -199,7 +205,7 @@ Named 模式：设置页填入 CF 后台的 tunnel token 即可。**建议给固
 
 **1. 创建隧道拿 token**（二选一）：
 
-- 后台：Cloudflare Zero Trust 控制台 → Networks → Tunnels → Create tunnel → 选 cloudflared → 起个名字（如 `adbreeze`→ 创建后在安装页面复制 token（`eyJ...` 开头的一长串）
+- 后台：Cloudflare Zero Trust 控制台 → Networks → Tunnels → Create tunnel → 选 cloudflared → 起个名字（如 `adbreeze`）→ 创建后在安装页面复制 token（`eyJ...` 开头的一长串）
 - CLI：`cloudflared tunnel login` → `cloudflared tunnel create adbreeze` → `cloudflared tunnel token adbreeze`
 
 **2. 绑定公网主机名**：Tunnel → Public Hostname → Add：子域名（如 `adb.example.com`）→ 类型选 **HTTP** → 地址填 `127.0.0.1:9080`（ADBreeze 的 HTTP 端口；边缘侧由 CF 提供受信任证书，本地无需配证书）。也可用 CLI：`cloudflared tunnel route dns adbreeze adb.example.com`，入口规则写在 Cloudflare 后台或本机 `config.yml` 均可——**ADBreeze 只认 token**，入口配置以 CF 后台为准。
@@ -353,11 +359,19 @@ HTTP 接口通过会话认证：先 `POST /api/session`（body `{"password": "..
 | GET | `/api/devices` | 设备列表 |
 | POST / DELETE | `/api/devices/connect`、`/api/devices/{serial}` | 网络设备连接 / 断开 |
 | POST | `/api/devices/{serial}/shell` | 执行一次性命令 |
-| POST / DELETE | `/api/devices/{serial}/mirror` | 投屏启动 / 停止 |
-| WS | `/ws/video/{serial}` | 视频流（下行二进制帧，上行 JSON 控制事件） |
-| WS | `/ws/term/{serial}` | 交互终端 |
+| POST / GET / DELETE | `/api/devices/{serial}/mirror` | 投屏启动 / 信息 / 停止 |
+| POST | `/api/devices/{serial}/webrtc` | 建立 WebRTC 视频通道（回退 / 外网 P2P） |
+| GET | `/api/devices/{serial}/overview` | 设备系统概览（型号 / 电量 / 存储等） |
+| GET | `/api/devices/{serial}/perf` | 性能采样（CPU / 内存） |
+| GET | `/api/devices/{serial}/ui-dump` | UI 层级 dump（控件树） |
+| GET / POST | `/api/devices/{serial}/apps`、`/apps/info`、`/apps/action`、`/apps/apk` | 应用列表 / 详情 / 启停卸载 / 导出 APK |
+| GET / POST | `/api/devices/{serial}/processes`、`/processes/kill` | 进程列表 / 结束进程 |
+| WS | `/ws/video/{serial}`、`/ws/audio/{serial}` | 视频流（下行二进制帧，上行 JSON 控制事件） / 音频流 |
+| WS | `/ws/term/{serial}`、`/ws/logcat/{serial}` | 交互终端 / 实时日志 |
 | WS | `/ws/events` | 设备上下线推送 |
 | GET/PUT/DELETE | `/api/devices/{serial}/files` | 文件浏览 / 上传 / 删除 |
+| GET | `/api/devices/{serial}/files/content` | 文件下载 |
+| POST | `/api/devices/{serial}/files/mkdir`、`/files/rename` | 新建目录 / 重命名 |
 | GET/POST | `/api/devices/{serial}/clipboard` | 剪贴板读取 / 写入 |
 | GET | `/api/devices/{serial}/screenshot` | 截图 PNG |
 | POST | `/api/devices/{serial}/install` | APK 安装 |
@@ -374,10 +388,11 @@ ADB 意味着设备的**完全控制权**。密码务必妥善保管（默认 `a
 
 ```
 adbreeze/
-├── cmd/adbreeze/          # 入口
+├── cmd/adbreeze/          # 入口（launch.go 双击体验 / console_*.go 控制台代码页）
 ├── internal/
 │   ├── adb/               # adb server 协议（smart socket + sync）
 │   ├── scrcpy/            # 投屏（server 生命周期 / 协议解析 / ControlMessage / SPS）
+│   ├── webrtc/            # WebRTC 会话（非安全上下文 / 外网场景的视频回退）
 │   ├── api/               # REST + WebSocket + 静态前端
 │   ├── auth/              # 管理员密码登录 + 会话 cookie/token
 │   ├── browser/           # 调起系统默认浏览器（双击运行的收尾体验）
@@ -385,9 +400,10 @@ adbreeze/
 │   ├── tlsutil/           # 自签名证书生成 / 复用（HTTPS）
 │   ├── tunnel/            # 外网访问：托管 cloudflared 子进程（CF-TUNNEL-DESIGN.md）
 │   └── config/            # 命令行配置
-├── cmd/adbreeze/          # 入口（launch.go 双击体验 / console_*.go 控制台代码页）
-├── web/dist/              # 前端（embed 进二进制）
-│   └── (manifest.webmanifest / sw.js / icons/ 随构建产出，支撑 PWA 安装)
+├── web/                   # 前端源码（React + Vite）
+│   └── dist/              # 前端构建产物（embed 进二进制，不随仓库分发；
+│                          #   manifest.webmanifest / sw.js / icons/ 随构建产出，支撑 PWA）
+├── android/               # Android App（Go 服务端嵌入 assets，APK 形态）
 ├── scripts/               # 跨平台开发脚本（go run ./scripts）
 ├── vendor-bin/            # 内嵌 scrcpy-server jar
 ├── Dockerfile / Makefile / .github/workflows/release.yml
@@ -398,6 +414,8 @@ adbreeze/
 - [scrcpy](https://github.com/Genymobile/scrcpy)（Apache-2.0）—— 投屏核心 `scrcpy-server` 与协议参考
 - [ws-scrcpy](https://github.com/DeviceFarmer/ws-scrcpy) —— 协议实现的参考资料
 
+> 注意：本项目代码以 MIT 协议发布；内嵌的 `scrcpy-server` 仍遵循其原 Apache-2.0 协议。
+
 ## License
 
-Apache-2.0
+[MIT](LICENSE)
