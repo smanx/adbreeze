@@ -98,7 +98,15 @@ export default function Shell() {
           rel="noopener noreferrer"
           aria-label={t('topbar.github')}
         ><Icon name="github" /></a>
-        <button className="btn ghost" onClick={logout}>{t('topbar.logout')}</button>
+        <button
+          className="btn ghost logout-btn has-tip"
+          data-tip={t('topbar.logout')}
+          aria-label={t('topbar.logout')}
+          onClick={logout}
+        >
+          <Icon name="logout" />
+          <span className="logout-txt">{t('topbar.logout')}</span>
+        </button>
       </header>
 
       <div className="app-body">
@@ -138,11 +146,12 @@ export default function Shell() {
         {TABS.map(tab => (
           <button
             key={tab.id}
-            className={'tab' + (panel === tab.id ? ' active' : '')}
+            className={'tab has-tip' + (panel === tab.id ? ' active' : '')}
+            data-tip={t(tab.labelKey)}
+            aria-label={t(tab.labelKey)}
             onClick={() => setPanel(tab.id)}
           >
             <Icon name={tab.id} />
-            <span className="tab-txt">{t(tab.labelKey)}</span>
           </button>
         ))}
       </nav>

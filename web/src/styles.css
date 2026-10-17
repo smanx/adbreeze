@@ -90,6 +90,8 @@ input, select {
 .gh-link:hover, .gh-link:focus-visible { color: var(--primary); }
 /* 顶栏语言切换按钮：固定宽度不压缩（中/英标签长度不同） */
 .lang-btn { flex: 0 0 auto; min-width: 44px; }
+/* 顶栏退出按钮：图标 + 文字横排（手机端只留图标，见手机断点） */
+.logout-btn { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 
 /* PC 顶栏 Tab 切换（手机隐藏，用底部 TabBar）：纯图标，悬停才出名称 */
 .topbar-tabs { display: flex; gap: 2px; }
@@ -99,7 +101,8 @@ input, select {
 }
 .topbar-tabs .tab.active { background: #eaf6ef; color: var(--primary); }
 
-/* 名称气泡（data-tip）：hover / 键盘聚焦时才显示，触屏无 hover 故底栏保留文字。
+/* 名称气泡（data-tip）：hover / 键盘聚焦时才显示，触屏无 hover 故纯图标控件
+   一律配 aria-label 兜底（底栏 Tab、手机端退出按钮）。
    顶栏 Tab 与投屏工具栏共用；长说明限宽 300px 自动换行。
    仅在带 data-tip 时生成伪元素——结构化列表（.tip-list）走真实 DOM，两者互斥。
    ⚠️ position:relative 是两类提示共同的定位锚，删了它们会全部错位到包含块底部。 */
@@ -124,8 +127,10 @@ input, select {
   left: auto; right: 0; transform: none;
 }
 /* 顶栏右侧外链（GitHub，其右只剩「退出」）：气泡右缘贴按钮右缘，
-   防止居中墨迹伸出顶栏右缘、被祖先滚动区计出横向滚动条 */
-.topbar .gh-link[data-tip]::after { left: auto; right: 0; transform: none; }
+   防止居中墨迹伸出顶栏右缘、被祖先滚动区计出横向滚动条；
+   退出按钮（最右缘，手机端也只剩图标）同理 */
+.topbar .gh-link[data-tip]::after,
+.topbar .logout-btn[data-tip]::after { left: auto; right: 0; transform: none; }
 
 /* 结构化提示列表（统计行的链路延迟明细）：真实 DOM，支持多行对齐与合计行 */
 .tip-list {
@@ -635,6 +640,9 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
   .drawer-toggle { display: block; }
   .topbar-tabs { display: none; }
   .content { padding: 12px 12px calc(var(--tabbar-h) + 12px); }
+  /* 顶栏退出按钮：只留图标不显示文字（名称走悬停气泡 / aria-label） */
+  .logout-btn { padding: 6px 8px; }
+  .logout-btn .logout-txt { display: none; }
   .tabbar {
     display: flex; position: fixed; left: 0; right: 0; bottom: 0; height: var(--tabbar-h);
     background: var(--panel); border-top: 1px solid var(--border); z-index: 80;
@@ -645,6 +653,13 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
     cursor: pointer; display: flex; flex-direction: column; align-items: center;
     justify-content: center; gap: 2px; padding: 4px 0;
   }
-  .tab .tab-txt { font-size: 11px; line-height: 1; }
+  /* 纯图标 Tab：名称不占位，悬停气泡给可读名（aria-label 同文）。
+     气泡默认在按钮下方会掉出屏幕底部，这里翻到上方 */
+  .tabbar .has-tip[data-tip]::after {
+    top: auto; bottom: calc(100% + 7px);
+  }
+  /* 左右两缘 Tab 的气泡居中会伸出一半，贴缘对齐 */
+  .tabbar .tab:first-child::after { left: 0; transform: none; }
+  .tabbar .tab:last-child::after { left: auto; right: 0; transform: none; }
   .tab.active { color: var(--primary); font-weight: 600; }
 }
