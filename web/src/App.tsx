@@ -6,16 +6,18 @@ import AboutPage from './components/AboutPage'
 // 登录由页面内的登录表单完成（未持有效会话时 Shell 整屏切换到登录卡片），
 // 能渲染到应用外壳说明已通过 /api/session 鉴权。
 //
-// /about 是独立的介绍页路由（无需登录、不加载控制台）：路径以 /about 结尾即渲染
-// （endsWith 兼容反代/子路径部署），「进入控制台」跳回根路径。
-// 双语偏好共用同一 i18n 模块（localStorage），两页自动同步。
+// 介绍页走 hash 路由 /#/about：GitHub Pages 等纯静态托管没有 SPA fallback，
+// 路径式路由（/about）刷新必 404；hash 完全由前端解析，任何托管都能用。
+// 自托管（Go embed）下两种写法都工作。双语偏好共用同一 i18n 模块，两页自动同步。
 export default function App() {
   const [about, setAbout] = useState(() => isAbout())
 
+  // hashchange 覆盖前进/后退与手动改地址；popstate 在 hash 导航时也会触发，
+  // 只听一个事件足够
   useEffect(() => {
-    const onPop = () => setAbout(isAbout())
-    window.addEventListener('popstate', onPop)
-    return () => window.removeEventListener('popstate', onPop)
+    const sync = () => setAbout(isAbout())
+    window.addEventListener('hashchange', sync)
+    return () => window.removeEventListener('hashchange', sync)
   }, [])
 
   useEffect(() => {
@@ -29,5 +31,5 @@ export default function App() {
 }
 
 function isAbout(): boolean {
-  return location.pathname.replace(/\/+$/, '').endsWith('/about')
+  return location.hash.replace(/\/+$/, '').endsWith('#/about')
 }

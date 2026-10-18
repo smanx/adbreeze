@@ -6,7 +6,9 @@ import { Icon } from './Icon'
 
 export default function AboutPage() {
   const t = useT()
-  const toConsole = () => { location.href = './' }
+  // 回控制台：清掉 hash 即可（hashchange 触发 App 切回 Shell）；
+  // href 保留当前路径（兼容 GitHub Pages 子路径部署），hash 指向根路由
+  const toConsole = () => { location.hash = '#/' }
 
   return (
     <div className="about-page">
