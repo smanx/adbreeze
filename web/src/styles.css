@@ -852,9 +852,14 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
 }
 .about-docker-cmd.show { opacity: 1; transform: translateY(0); }
 .about-docker-cmd code {
-  display: block; text-align: left; overflow-x: auto; white-space: nowrap;
-  font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: #9fe8c4;
+  display: block; text-align: left;
+  /* 命令自动换行完整显示，不出现横向滚动 */
+  overflow-wrap: anywhere; white-space: pre-wrap; word-break: break-all;
+  font-family: ui-monospace, Consolas, monospace; font-size: 12px; line-height: 1.8; color: #9fe8c4;
+  /* 兜底：极窄屏万一溢出，滚动条也隐形（仍可滚动） */
+  scrollbar-width: none;
 }
+.about-docker-cmd code::-webkit-scrollbar { display: none; }
 
 /* 分组标题 */
 .about-section { margin-top: 52px; }
