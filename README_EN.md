@@ -46,6 +46,38 @@ ADBreeze service process (Go single binary)
 - **Mirroring**: embeds `scrcpy-server` v5.0.1, reverse tunnel first (no connection race) with automatic forward fallback; the video stream fans out through a Hub to multiple WebSocket subscribers, and new subscribers automatically receive SPS/PPS aligned to a keyframe
 - **Authentication**: admin password login (in-page login form); after login, a 12-hour session (cookie / Bearer token) grants access, with logout and brute-force lockout
 
+## How It Works
+
+Two typical deployment shapes:
+
+**Scenario 1: Server runs on the controlled device** — everything on a single Android phone
+
+```
+┌─ Same Android device ────────────┐
+│  Controlled = Server             │
+│  (ADBreeze APK runs adb server   │
+│   + the Go service)              │
+└───────────────┬──────────────────┘
+                │ LAN direct or Cloudflare Tunnel (HTTP / HTTPS)
+                ▼
+     Controller: browser (the phone itself or any computer on the LAN)
+```
+
+The APK runs both the adb server and the Go service on the phone; open the web UI from the phone itself or any computer on the LAN to take control.
+
+**Scenario 2: Server separate from devices** — the server runs on a PC / Docker / another Android device
+
+```
+┌─ Controlled ─────────┐                    ┌─ Server ─────────────┐
+│ Phones / tablets     │                    │ Windows              │
+│ TV boxes / car units │ ⇄ USB / Wi-Fi ⇄   │ macOS / Linux        │ ⇄ HTTP/HTTPS ⇄ Controller
+│ Emulators / more     │   (adb connect)    │ Docker               │                (any browser)
+└──────────────────────┘                    │ Android (APK)        │
+                                            └──────────────────────┘
+```
+
+One Go binary manages any number of Android devices over USB / adb connect; reachable via LAN direct or Cloudflare Tunnel. The controller is any modern browser (PWA installable) — never tied to the machine hosting the server; Windows, macOS, iOS, Linux, Android, HarmonyOS and more all work.
+
 ## Quick Start
 
 **Direct download**: no build needed — grab the single-file build for your platform from [GitHub Releases](https://github.com/smanx/adbreeze/releases) (on Windows, just double-click, see below), or pull the prebuilt Docker image (see the [Docker](#docker) section).

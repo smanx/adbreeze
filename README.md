@@ -46,6 +46,38 @@ ADBreeze 服务进程（Go 单二进制）
 - **投屏**：嵌入 `scrcpy-server` v5.0.1，reverse 隧道优先（无连接竞态）、forward 自动回退；视频流经 Hub 扇出给多个 WebSocket 订阅者，新订阅者自动补发 SPS/PPS 并对齐关键帧
 - **鉴权**：管理员密码登录（页面内登录表单），登录后凭 12 小时会话（cookie / Bearer token）访问，支持登出、防爆破锁定
 
+## 控制流程
+
+两种典型部署形态：
+
+**场景一：服务端运行在被控端** —— 全部装在一台安卓手机上
+
+```
+┌─ 同一台安卓设备 ─────────────┐
+│  被控端 = 服务端             │
+│  （ADBreeze APK 内运行       │
+│    adb server + Go 服务）    │
+└──────────────┬───────────────┘
+               │ 局域网直连 或 CF 穿透（HTTP / HTTPS）
+               ▼
+        控制端：浏览器（手机本机或局域网内任意电脑）
+```
+
+APK 在手机上同时运行 adb server 与 Go 服务；用手机本机或局域网内任意电脑的浏览器打开即可控制。
+
+**场景二：服务端与被控端分离** —— 服务端跑在电脑 / Docker / 另一台安卓上
+
+```
+┌─ 被控端 ─────────┐                  ┌─ 服务端 ─────────────┐
+│ 手机 / 平板       │                  │ Windows              │
+│ 电视盒子 / 车机   │ ⇄ USB / Wi-Fi ⇄ │ macOS / Linux        │ ⇄ HTTP/HTTPS ⇄ 控制端
+│ 模拟器 / 更多     │  （adb 连接）     │ Docker               │        （任意浏览器）
+└──────────────────┘                  │ 安卓（APK）          │
+                                      └──────────────────────┘
+```
+
+一个 Go 二进制经 USB / adb connect 管理任意多台安卓设备；可经局域网直连或 Cloudflare Tunnel 访问。控制端是任意现代浏览器（可装为 PWA），与承载服务端的机器无关——Windows、macOS、iOS、Linux、安卓、鸿蒙等设备均可。
+
 ## 快速开始
 
 **直接下载**：无需构建，到 [GitHub Releases](https://github.com/smanx/adbreeze/releases) 下载对应平台的单文件（Windows 双击即用，见下文），或拉取预构建 Docker 镜像（见 [Docker](#docker) 一节）。
