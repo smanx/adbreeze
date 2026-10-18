@@ -143,60 +143,6 @@ export default function AboutPage() {
           </div>
         </section>
 
-        {/* 控制流程：两种场景的图形化链路（图标 + 短标签，避免大段文字） */}
-        <section ref={flowRef} className="about-flow">
-          <h2><Icon name="globe" size={20} /> {t('about.secFlow')}</h2>
-
-          {/* 场景一：被控端与服务端同在一台安卓手机（APK 自身即服务端） */}
-          <div className="about-flow-scene">
-            <div className="about-flow-scene-title fx" style={{ '--i': 0 } as React.CSSProperties}>
-              <Icon name="overview" size={16} /> {t('about.flowSame')}
-            </div>
-            <div className="about-flow-chain">
-              {/* 被控端与服务端同机：两个节点包在同一个「手机」框里 */}
-              <div className="about-flow-group fx" style={{ '--i': 1 } as React.CSSProperties}>
-                <span className="about-flow-group-tag">{t('about.flowOnePhone')}</span>
-                <div className="about-flow-group-inner">
-                  <FlowNode icon="overview" label={t('about.flowPhone')} sub={t('about.flowDevice')} />
-                  <FlowArrow double />
-                  <FlowNode icon="overview" label={t('about.flowPhoneApk')} sub={t('about.flowServer')} accent />
-                </div>
-              </div>
-              <FlowConnNote label={t('about.flowHttp')} noteTop={t('about.flowLan')} noteBottom={t('about.flowCf')} />
-              <FlowController label={t('about.flowBrowser')} />
-            </div>
-            <p className="about-flow-note fx" style={{ '--i': 4 } as React.CSSProperties}>{t('about.flowSameNote')}</p>
-          </div>
-
-          {/* 场景二：被控端与服务端分离（服务端可跑在电脑 / Docker / 另一台安卓上） */}
-          <div className="about-flow-scene">
-            <div className="about-flow-scene-title fx" style={{ '--i': 0 } as React.CSSProperties}>
-              <Icon name="laptop" size={16} /> {t('about.flowSplit')}
-            </div>
-            <div className="about-flow-split">
-              <div className="about-flow-devices fx" style={{ '--i': 1 } as React.CSSProperties}>
-                <FlowNode icon="overview" label={t('about.flowDevPhone')} sub={t('about.flowDevice')} />
-                <FlowNode icon="overview" label={t('about.flowDevTv')} sub={t('about.flowDevice')} />
-                <FlowNode icon="overview" label={t('about.flowDevMore')} sub={t('about.flowDevice')} />
-              </div>
-              <div className="about-flow-split-mid fx-arrow" style={{ '--i': 2 } as React.CSSProperties}>
-                <FlowArrow double />
-                <span className="about-flow-conn">{t('about.flowUsbWifi')}</span>
-                <FlowArrow double />
-              </div>
-              <div className="about-flow-servers fx" style={{ '--i': 3 } as React.CSSProperties}>
-                <FlowNode icon="laptop" label="Windows" sub={t('about.flowServer')} accent />
-                <FlowNode icon="laptop" label="macOS / Linux" sub={t('about.flowServer')} accent />
-                <FlowNode icon="docker" label="Docker" sub={t('about.flowServer')} accent />
-                <FlowNode icon="overview" label={t('about.flowServerAndroid')} sub={t('about.flowServer')} accent />
-              </div>
-              <FlowConnNote label={t('about.flowHttp')} noteTop={t('about.flowLan')} noteBottom={t('about.flowCf')} />
-              <FlowController label={t('about.flowBrowserAny')} />
-            </div>
-            <p className="about-flow-note fx" style={{ '--i': 4 } as React.CSSProperties}>{t('about.flowSplitNote')}</p>
-          </div>
-        </section>
-
         {/* 六大功能板块：一大图 + 功能点清单，左右交替 */}
         {SECTIONS.map((sec, i) => (
           <FeatureSection key={sec.shot} icon={sec.icon} shot={sec.shot}
@@ -207,15 +153,81 @@ export default function AboutPage() {
           </FeatureSection>
         ))}
 
-        {/* Android 端说明 */}
+        {/* Android 端说明（安装 APK 指引已移除，仅保留能力说明） */}
         <section className="about-android">
           <h2>{t('about.secAndroid')}</h2>
           <p>{t('about.androidDesc')}</p>
           <ul>
             <li>{t('about.androidPt1')}</li>
             <li>{t('about.androidPt2')}</li>
-            <li>{t('about.androidPt3')}</li>
           </ul>
+        </section>
+
+        {/* 控制流程：两种场景的图形化链路（图标 + 短标签，避免大段文字） */}
+        <section ref={flowRef} className="about-flow">
+          <h2><Icon name="globe" size={20} /> {t('about.secFlow')}</h2>
+
+          {/* 场景一：被控端与服务端同在一台安卓手机（APK 自身即服务端）；链路放大，卡片加高、更透 */}
+          <div className="about-flow-scene tall">
+            <div className="about-flow-scene-title fx" style={{ '--i': 0 } as React.CSSProperties}>
+              <Icon name="overview" size={16} /> {t('about.flowSame')}
+            </div>
+            <div className="about-flow-chain">
+              {/* 被控端与服务端同机：安卓设备虚线框（含 APK），与场景二分组框同款样式 */}
+              <div className="about-flow-cluster fx" style={{ '--i': 1 } as React.CSSProperties}>
+                <span className="about-flow-cluster-tag">{t('about.flowDevice')}</span>
+                <div className="about-flow-node accent">
+                  <span className="about-flow-node-icon"><Icon name="overview" size={26} /></span>
+                  <span className="about-flow-node-label">{t('about.flowPhoneApk')}</span>
+                  <span className="about-flow-node-sub">{t('about.flowServer')}</span>
+                  <span className="about-flow-node-hint">{t('about.flowOnPhone')}</span>
+                </div>
+              </div>
+              <FlowConnNote label={t('about.flowHttp')} noteTop={t('about.flowLan')} noteBottom={t('about.flowCf')} />
+              {/* 控制端：虚线框统一标注 */}
+              <div className="about-flow-cluster fx" style={{ '--i': 4 } as React.CSSProperties}>
+                <span className="about-flow-cluster-tag">{t('about.flowClient')}</span>
+                <FlowController label={t('about.flowBrowser')} />
+              </div>
+            </div>
+          </div>
+
+          {/* 场景二：被控端与服务端分离（服务端可跑在电脑 / Docker / 另一台安卓上） */}
+          <div className="about-flow-scene">
+            <div className="about-flow-scene-title fx" style={{ '--i': 0 } as React.CSSProperties}>
+              <Icon name="laptop" size={16} /> {t('about.flowSplit')}
+            </div>
+            <div className="about-flow-split">
+              {/* 被控端组：虚线框统一标注「被控端」，设备节点不再单独重复角色名 */}
+              <div className="about-flow-cluster fx" style={{ '--i': 1 } as React.CSSProperties}>
+                <span className="about-flow-cluster-tag">{t('about.flowDevice')}</span>
+                <div className="about-flow-devices">
+                  <FlowNode icon="overview" label={t('about.flowDevPhone')} />
+                  <FlowNode icon="overview" label={t('about.flowDevTv')} />
+                  <FlowNode icon="overview" label={t('about.flowDevMore')} />
+                </div>
+              </div>
+              <div className="about-flow-split-mid fx-arrow" style={{ '--i': 2 } as React.CSSProperties}>
+                <span className="about-flow-conn streaming">{t('about.flowUsbWifi')}</span>
+              </div>
+              {/* 服务端组：虚线框统一标注「服务端」 */}
+              <div className="about-flow-cluster fx" style={{ '--i': 3 } as React.CSSProperties}>
+                <span className="about-flow-cluster-tag">{t('about.flowServer')}</span>
+                <div className="about-flow-servers">
+                  <FlowNode icon="laptop" label="Windows" accent />
+                  <FlowNode icon="laptop" label="macOS / Linux" accent />
+                  <FlowNode icon="docker" label="Docker" accent />
+                  <FlowNode icon="overview" label={t('about.flowServerAndroid')} accent />
+                </div>
+              </div>
+              <FlowConnNote label={t('about.flowHttp')} noteTop={t('about.flowLan')} noteBottom={t('about.flowCf')} />
+              {/* 控制端：虚线框统一标注 */}
+              <div className="about-flow-cluster fx" style={{ '--i': 4 } as React.CSSProperties}>
+                <span className="about-flow-cluster-tag">{t('about.flowClient')}</span>
+                <FlowController label={t('about.flowBrowserAny')} />
+              </div>
+            </div>
+          </div>
         </section>
 
         <footer className="about-footer">
@@ -302,15 +314,15 @@ function FeatureItem({ k }: { k: string }) {
   )
 }
 
-/** 控制流程节点：大图标 + 短标签 + 角色名，accent = 服务端高亮 */
+/** 控制流程节点：大图标 + 短标签（+ 可选角色名），accent = 服务端高亮 */
 function FlowNode({ icon, label, sub, accent }: {
-  icon: string; label: string; sub: string; accent?: boolean
+  icon: string; label: string; sub?: string; accent?: boolean
 }) {
   return (
     <div className={'about-flow-node' + (accent ? ' accent' : '')}>
       <span className="about-flow-node-icon"><Icon name={icon} size={26} /></span>
       <span className="about-flow-node-label">{label}</span>
-      <span className="about-flow-node-sub">{sub}</span>
+      {sub && <span className="about-flow-node-sub">{sub}</span>}
     </div>
   )
 }
@@ -335,37 +347,14 @@ function FlowController({ label }: { label: string }) {
   )
 }
 
-/**
- * 双向数据管道：一条带上下双车道的轨道，光点在两条车道上相向流动，
- * 两端是 ⇄ 箭头。vertical = 竖直（车道左右分布）。
- */
-function FlowArrow({ vertical, double = false }: { vertical?: boolean; double?: boolean }) {
-  void double
-  return (
-    <span className={'about-flow-pipe' + (vertical ? ' vert' : '')} aria-hidden="true">
-      <svg className="about-flow-pipe-heads" width="30" height="20" viewBox="0 0 30 20" fill="none"
-        stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M8 4l-4 6 4 6" /><path d="M22 4l4 6-4 6" />
-      </svg>
-      <span className="about-flow-pipe-track">
-        <span className="about-flow-pipe-lane" />
-        <span className="about-flow-packet fwd" /><span className="about-flow-packet fwd d2" />
-        <span className="about-flow-packet back" /><span className="about-flow-packet back d2" />
-      </span>
-    </span>
-  )
-}
-
-/** 箭头 + 协议标签 + 上下注释（上=局域网直连，下=CF 穿透） */
+/** 协议胶囊 + 上下注释（上=局域网直连，下=CF 穿透）：无箭头，流动感由胶囊边框流光承担 */
 function FlowConnNote({ label, noteTop, noteBottom, index = 3 }: {
   label: string; noteTop: string; noteBottom: string; index?: number
 }) {
   return (
     <div className="about-flow-connwrap fx" style={{ '--i': index } as React.CSSProperties}>
       <span className="about-flow-connnote top">{noteTop}</span>
-      <FlowArrow double />
-      <span className="about-flow-conn">{label}</span>
-      <FlowArrow double />
+      <span className="about-flow-conn streaming">{label}</span>
       <span className="about-flow-connnote bottom">{noteBottom}</span>
     </div>
   )

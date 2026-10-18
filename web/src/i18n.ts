@@ -763,12 +763,9 @@ const MESSAGES = {
   'about.flowClient': ['Controller', '控制端'],
   // 场景一：被控端与服务端同机（安卓 APK）
   'about.flowSame': ['Scenario 1: Server runs on the controlled device', '场景一：服务端运行在被控端'],
-  'about.flowOnePhone': ['Same Android device', '同一台安卓设备'],
-  'about.flowPhone': ['Android phone', '安卓手机'],
   'about.flowPhoneApk': ['ADBreeze APK', 'ADBreeze APK'],
+  'about.flowOnPhone': ['running on an Android phone', '运行在安卓手机上'],
   'about.flowBrowser': ['Browser', '浏览器'],
-  'about.flowSameNote': ['The APK runs both adb server and the Go service on the phone; open the web UI from the phone itself or any computer on the LAN.',
-    'APK 在手机上同时运行 adb server 与 Go 服务；用手机本机或局域网内任意电脑的浏览器打开即可控制。'],
   // 场景二：被控端与服务端分离
   'about.flowSplit': ['Server separate from devices', '场景二：被控端与服务端分离'],
   'about.flowDevPhone': ['Phones / tablets', '手机 / 平板'],
@@ -781,8 +778,6 @@ const MESSAGES = {
   'about.flowHttp': ['HTTP / HTTPS', 'HTTP / HTTPS'],
   'about.flowBrowserAny': ['Browser', '浏览器'],
   'about.flowPlatforms': ['Windows · macOS · iOS · Linux · Android · HarmonyOS…', 'Windows · macOS · iOS · Linux · 安卓 · 鸿蒙…'],
-  'about.flowSplitNote': ['One Go binary serves any number of Android devices over USB or adb connect; the controller is any modern browser (PWA installable), never tied to the server machine.',
-    '一个 Go 二进制经 USB / adb connect 管理任意多台安卓设备；控制端是任意现代浏览器（可装为 PWA），与承载服务端的机器无关。'],
 
   'about.secAndroid': ['Android app (APK)', '安卓端（APK）'],
   'about.androidDesc': ['The Android build keeps the same philosophy: the app itself is only a service console. It runs the adb server and the Go service on the phone; you open the web UI in a browser — on the phone or from any computer on the LAN.',
@@ -791,8 +786,6 @@ const MESSAGES = {
     '前台服务 + wake lock + 静音保活音频 + 电池优化白名单，退后台/息屏后服务持续运行。'],
   'about.androidPt2': ['A persistent notification shows the service address with a one-tap stop action; watchdog restarts crashed adb/Go processes automatically.',
     '常驻通知显示服务地址并可一键停止；看护协程自动重拉崩溃的 adb/Go 进程。'],
-  'about.androidPt3': ['Wireless debugging only — control the phone itself (adb connect 127.0.0.1:5555) or other devices on the LAN.',
-    '纯无线连接：可投手机自身（adb connect 127.0.0.1:5555），也可控局域网内其他设备。'],
 } as const
 
 export type MsgKey = keyof typeof MESSAGES

@@ -812,9 +812,14 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
   color: #fff; border-color: rgba(93,240,168,0.6);
   box-shadow: 0 0 12px rgba(15,157,88,0.3);
 }
-.about-page .about-topbar .btn.tiny.ghost { color: #cfe3d8; border-color: rgba(255,255,255,0.18); }
-.about-page .about-topbar .btn.tiny.ghost:hover { border-color: var(--primary); color: var(--primary); }
-.about-page .about-topbar .btn.tiny { background: var(--primary); color: #fff; }
+.about-page .about-topbar .btn.tiny.ghost {
+  color: #cfe3d8; border-color: rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.05);
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.about-page .about-topbar .btn.tiny.ghost:hover {
+  border-color: rgba(93,240,168,0.6); color: #fff; background: rgba(15,157,88,0.18);
+}
 
 .about-main { position: relative; z-index: 1; width: min(1060px, 100% - 32px); margin: 0 auto; padding: 24px 0 48px; }
 
@@ -997,19 +1002,27 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
   background: linear-gradient(90deg, rgba(93,240,168,0.4), transparent);
 }
 .about-flow-scene {
-  border-radius: 16px; padding: 20px 22px 16px; margin-bottom: 18px;
-  background: linear-gradient(150deg, rgba(15,157,88,0.07), rgba(255,255,255,0.03));
-  border: 1px solid rgba(93,240,168,0.2);
+  border-radius: 16px; padding: 24px 22px 26px; margin-bottom: 18px;
+  background: linear-gradient(150deg, rgba(15,157,88,0.03), rgba(255,255,255,0.01));
+  border: 1px solid rgba(93,240,168,0.12);
+}
+/* 场景一：链路放大后需要更高的卡片，透明度再低一档让背景图更透出来 */
+.about-flow-scene.tall {
+  padding: 34px 22px 38px;
+  background: linear-gradient(150deg, rgba(15,157,88,0.015), rgba(255,255,255,0.005));
+  border-color: rgba(93,240,168,0.08);
 }
 .about-flow-scene-title {
   display: flex; align-items: center; gap: 8px; margin-bottom: 16px;
   font-size: 13.5px; font-weight: 700; color: #5df0a8; letter-spacing: 0.02em;
 }
 .about-flow-scene-title .ico { color: #3f8f66; }
-/* 链路行：节点 + 箭头水平排布 */
+/* 链路行：节点 + 连接水平排布；场景一链路较短，整体放大让视觉重量与场景二相当。
+   align-items: center：控制端节点按内容自适应高度，不被拉伸出大片留白 */
 .about-flow-chain {
-  display: flex; align-items: stretch; justify-content: center;
+  display: flex; align-items: center; justify-content: center;
   gap: 12px; flex-wrap: wrap;
+  transform: scale(1.22); transform-origin: center center;
 }
 /* 场景一节点 */
 .about-flow-node {
@@ -1018,22 +1031,7 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
   background: rgba(255,255,255,0.03);
   border: 1px solid rgba(255,255,255,0.1);
 }
-/* 同机分组框：被控端+服务端包在同一个「一台安卓设备」框内 */
-.about-flow-group {
-  position: relative; padding: 26px 14px 12px; border-radius: 16px;
-  border: 1.5px dashed rgba(93,240,168,0.45);
-  background: rgba(15,157,88,0.05);
-}
-.about-flow-group-tag {
-  position: absolute; top: -9px; left: 50%; transform: translateX(-50%);
-  padding: 1px 10px; border-radius: 999px;
-  font-size: 10.5px; font-weight: 600; color: #5df0a8; white-space: nowrap;
-  background: #101820; border: 1px solid rgba(93,240,168,0.45);
-}
-.about-flow-group-inner { display: flex; align-items: stretch; gap: 10px; }
-.about-flow-group-inner .about-flow-node { min-width: 96px; padding: 12px 10px 10px; }
-.about-flow-group-inner .about-flow-node-icon { width: 38px; height: 38px; border-radius: 11px; }
-.about-flow-group-inner .about-flow-node-icon svg { width: 22px; height: 22px; }
+/* 场景一节点高亮（服务端） */
 .about-flow-node.accent {
   border-color: rgba(93,240,168,0.5);
   background: rgba(15,157,88,0.1);
@@ -1048,6 +1046,8 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
 .about-flow-node.accent .about-flow-node-icon { color: #5df0a8; }
 .about-flow-node-label { font-size: 13px; font-weight: 700; color: #e8edf2; white-space: nowrap; }
 .about-flow-node-sub { font-size: 11px; color: #6b7884; letter-spacing: 0.06em; }
+/* 节点补充说明小字（如「运行在安卓手机上」） */
+.about-flow-node-hint { font-size: 10px; color: #55636e; }
 /* 控制端节点下方的平台小图标行：任意设备经浏览器均可访问 */
 .about-flow-platforms {
   display: flex; align-items: center; gap: 6px;
@@ -1062,6 +1062,17 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
 .about-flow-split {
   display: grid; grid-template-columns: minmax(0, 2fr) auto minmax(0, 2.2fr) auto minmax(0, 1.4fr);
   gap: 12px; align-items: center;
+}
+/* 虚线分组框：整组设备的统一角色标注（被控端 / 服务端），标签嵌在框顶边上 */
+.about-flow-cluster {
+  position: relative; border: 1.5px dashed rgba(93,240,168,0.4);
+  border-radius: 16px; padding: 18px 10px 10px;
+}
+.about-flow-cluster-tag {
+  position: absolute; top: -9px; left: 50%; transform: translateX(-50%);
+  padding: 1px 10px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 600; color: #5df0a8; white-space: nowrap;
+  background: #101820; border: 1px solid rgba(93,240,168,0.45);
 }
 .about-flow-devices, .about-flow-servers {
   display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; align-content: center;
@@ -1129,82 +1140,44 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
   0%, 100% { box-shadow: 0 0 14px rgba(15,157,88,0.18); }
   50% { box-shadow: 0 0 30px rgba(15,157,88,0.45); }
 }
-/* ---------- 数据管道：⇄ 箭头 + 双车道 + 相向流动的光点 ---------- */
-/* 管道整体：竖排两行（箭头行 / 轨道行），入场由 fx-arrow 控制 */
-.about-flow-pipe {
-  display: inline-flex; flex-direction: column; align-items: center; gap: 2px;
-  align-self: center; color: #3f8f66;
-  min-width: 54px;
-}
-.about-flow-pipe-heads { flex: 0 0 auto; }
-/* 轨道：两条车道（::before/::after 画上下轨道线），水平 or 竖直 */
-.about-flow-pipe-track {
-  position: relative; width: 44px; height: 10px; overflow: visible;
-}
-.about-flow-pipe-lane, .about-flow-pipe-track::before, .about-flow-pipe-track::after {
-  content: ''; position: absolute; left: 0; right: 0; height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(93,240,168,0.4), transparent);
-}
-.about-flow-pipe-track::before { top: 1px; }
-.about-flow-pipe-track::after { bottom: 1px; }
-.about-flow-pipe-lane { display: none; }
-/* 光点：上方车道向右（fwd），下方车道向左（back），各两颗错峰 */
-.about-flow-packet {
-  position: absolute; top: -1.5px; left: 0;
-  width: 4px; height: 4px; border-radius: 50%;
-  background: #5df0a8;
-  box-shadow: 0 0 6px rgba(93,240,168,0.9), 0 0 12px rgba(15,157,88,0.5);
-  opacity: 0;
-}
-.about-flow-packet.back { top: auto; bottom: -1.5px; }
-.about-flow.play .about-flow-packet.fwd {
-  animation: packetFwd 1.5s linear infinite;
-}
-.about-flow.play .about-flow-packet.back {
-  animation: packetBack 1.5s linear infinite;
-}
-.about-flow.play .about-flow-packet.d2 { animation-delay: 0.75s; }
-@keyframes packetFwd {
-  0% { left: -4px; opacity: 0; }
-  12% { opacity: 1; }
-  88% { opacity: 1; }
-  100% { left: calc(100% + 0px); opacity: 0; }
-}
-@keyframes packetBack {
-  0% { left: calc(100% + 0px); opacity: 0; }
-  12% { opacity: 1; }
-  88% { opacity: 1; }
-  100% { left: -4px; opacity: 0; }
-}
-/* 竖直管道：轨道旋转 90°，车道左右分布，箭头同步旋转 */
-.about-flow-pipe.vert .about-flow-pipe-track { transform: rotate(90deg); }
-.about-flow-pipe.vert .about-flow-pipe-heads { transform: rotate(90deg); }
-/* 入场浮现（沿用 fx-arrow 类） */
+/* 入场浮现（fx-arrow 类：连接列的错峰淡入） */
 .about-flow .fx-arrow { transform: translateY(18px); opacity: 0; }
 .about-flow.play .fx-arrow {
   animation: flowRise 0.5s ease-out forwards;
   animation-delay: calc(var(--i, 0) * 90ms);
 }
-/* 分组虚线框：描边流动（常驻） */
-.about-flow.play .about-flow-group { position: relative; }
-.about-flow.play .about-flow-group::after {
-  content: ''; position: absolute; inset: -1.5px; border-radius: 16px; pointer-events: none;
-  border: 1.5px dashed rgba(93,240,168,0.6);
-  mask: linear-gradient(#000 25%, transparent 50%, #000 75%);
-  -webkit-mask: linear-gradient(#000 25%, transparent 50%, #000 75%);
-  animation: flowGroupGlow 3s ease-in-out infinite;
-}
-@keyframes flowGroupGlow {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 1; }
-}
-/* 连接胶囊：微微起伏发光 */
-.about-flow.play .about-flow-conn {
+/* 控制流程动效说明：cluster 均带 .fx 入场动画；场景二服务端组的 accent 节点另有 flowPulse 呼吸光晕 */
+/* 连接胶囊：微微起伏发光（仅非 streaming 的普通胶囊） */
+.about-flow.play .about-flow-conn:not(.streaming) {
   animation: flowConnGlow 2.4s ease-in-out 1s infinite;
 }
 @keyframes flowConnGlow {
   0%, 100% { box-shadow: 0 0 0 rgba(15,157,88,0); }
   50% { box-shadow: 0 0 12px rgba(15,157,88,0.4); }
+}
+/* 协议胶囊（streaming）：内部双向流动的光带——两道扫光相向循环扫过，
+   表达 HTTP/HTTPS 通道里数据双向传输 */
+.about-flow-conn.streaming {
+  position: relative; overflow: hidden;
+  border-color: rgba(93,240,168,0.4);
+}
+.about-flow-conn.streaming::before,
+.about-flow-conn.streaming::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 42%;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(93,240,168,0.5), transparent);
+}
+/* 上层光带：从左向右扫 */
+.about-flow-conn.streaming::before { left: -42%; animation: connSweepR 1.9s linear infinite; }
+/* 下层光带：从右向左扫（相位错开，避免两道光带同时重叠） */
+.about-flow-conn.streaming::after { right: -42%; animation: connSweepL 1.9s linear infinite; animation-delay: 0.95s; }
+@keyframes connSweepR {
+  from { transform: translateX(0); }
+  to { transform: translateX(338%); } /* 恰好从 -42% 扫到 100% 出右侧 */
+}
+@keyframes connSweepL {
+  from { transform: translateX(0); }
+  to { transform: translateX(-338%); }
 }
 /* 控制端平台小图标：逐个弹入（--pi 阶梯） */
 .about-flow-platforms .about-flow-platforms-item { opacity: 0; transform: scale(0.4); }
@@ -1231,9 +1204,9 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
   }
   .about-flow.play .about-flow-scene,
   .about-flow.play .about-flow-node.accent,
-  .about-flow.play .about-flow-group::after,
   .about-flow.play .about-flow-conn,
-  .about-flow .about-flow-packet { animation: none !important; opacity: 0; }
+  .about-flow-conn.streaming::before,
+  .about-flow-conn.streaming::after { animation: none !important; }
 }
 
 /* Android 端专节 */
@@ -1293,9 +1266,9 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
   .about-section-body,
   .about-section.flip .about-section-body { grid-template-columns: 1fr; gap: 14px; }
   .about-section.flip .about-shot { order: 0; }
-  /* 控制流程小屏：场景一竖排、场景二单列，箭头改向下 */
+  /* 控制流程小屏：场景一竖排、场景二单列，箭头改向下；取消放大避免溢出 */
   .about-flow-scene { padding: 16px 14px 12px; }
-  .about-flow-chain { flex-direction: column; align-items: center; }
+  .about-flow-chain { flex-direction: column; align-items: center; transform: none; }
   .about-flow-split { grid-template-columns: 1fr; }
   .about-flow-split-mid { flex-direction: row; }
   .about-flow-arrow.vert svg { transform: none; }
