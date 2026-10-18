@@ -662,6 +662,8 @@ const MESSAGES = {
     '一个自包含的二进制文件，让任何电脑——甚至手机自身——变成功能齐全的 ADB 控制中心。浏览器打开即用：投屏、反向触控、终端、文件管理、应用管理等，客户端零安装。'],
   'about.badgeSingleBinary': ['single binary', '单文件交付'],
   'about.badgeWebOnly': ['browser only', '纯浏览器操作'],
+  'about.shotZoomHint': ['Click to zoom', '点击放大'],
+  'about.shotZoomClose': ['Close', '关闭'],
 
   'about.secMirror': ['Screen mirroring & interaction', '投屏与交互'],
   'about.fMirror': ['Real-time mirroring', '实时投屏'],

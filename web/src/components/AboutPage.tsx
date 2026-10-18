@@ -4,10 +4,11 @@
 //
 // 版式：每个功能大项一个「截图 + 功能点」的横向板块——
 //   截图（16:10，cover 裁切）居一侧，该大项下的所有功能点排在另一侧，
-//   左右交替（zigzag）。鼠标悬停板块时截图平滑放大（scale），浏览细节。
+//   左右交替（zigzag）。悬停截图出现「点击放大」提示，点击后灯箱查看原图。
 //
-// 截图替换：把图片放进 web/public/screenshots/ 并按 Section.shot 命名
-// （如 mirror.png），构建后自动显示；文件缺失时显示 CSS 占位（img onError 回退）。
+// 截图替换：把图片放进 web/screenshots/ 并按 Section.shot 命名
+// （如 mirror.png），site 构建（pnpm run build:site）后自动显示；文件缺失时
+// 显示 CSS 占位（img onError 回退）。主应用构建不包含截图。
 import { useState } from 'react'
 import { toggleLang, useT } from '../i18n'
 import { Icon } from './Icon'
@@ -134,34 +135,41 @@ export default function AboutPage() {
 }
 
 /**
- * 单个功能大项：截图（cover 裁切，悬停放大）与功能点清单左右排布，
+ * 单个功能大项：截图（cover 裁切，点击灯箱放大）与功能点清单左右排布，
  * flip = 图在右侧。每项一个对勾 + 名称 + 一句话说明。
  */
 function FeatureSection({ icon, shot, title, flip, children }: {
   icon: string; shot: string; title: string; flip: boolean; children: React.ReactNode
 }) {
+  const [zoomed, setZoomed] = useState(false)
   return (
     <section className={'about-section' + (flip ? ' flip' : '')}>
       <h2 className="about-sec-title"><Icon name={icon} /> {title}</h2>
       <div className="about-section-body">
-        <Shot shot={shot} title={title} icon={icon} />
+        <Shot shot={shot} title={title} icon={icon} onZoom={() => setZoomed(true)} />
         <ul className="about-fitems">{children}</ul>
       </div>
+      {zoomed && <ZoomOverlay shot={shot} title={title} onClose={() => setZoomed(false)} />}
     </section>
   )
 }
 
-/** 大截图位：真图（悬停浮出全尺寸预览）或 CSS 占位 */
-function Shot({ shot, title, icon }: { shot: string; title: string; icon: string }) {
+/** 大截图位：真图（悬停提示、点击放大）或 CSS 占位 */
+function Shot({ shot, title, icon, onZoom }: {
+  shot: string; title: string; icon: string; onZoom: () => void
+}) {
+  const t = useT()
   const [imgOk, setImgOk] = useState(true)
-  const [hover, setHover] = useState<{ x: number; y: number } | null>(null)
   const file = `./screenshots/${shot}.png`
   return (
-    <div
+    <button
+      type="button"
       className={'about-shot' + (imgOk ? '' : ' is-placeholder')}
-      onMouseMove={imgOk ? e => setHover({ x: e.clientX, y: e.clientY }) : undefined}
-      onMouseLeave={imgOk ? () => setHover(null) : undefined}
+      onClick={imgOk ? onZoom : undefined}
+      aria-label={imgOk ? t('about.shotZoomHint') : title}
+      title={imgOk ? t('about.shotZoomHint') : undefined}
     >
+      {imgOk && <span className="about-shot-hint">{t('about.shotZoomHint')}</span>}
       {imgOk
         ? <img src={file} alt={title} loading="lazy" onError={() => setImgOk(false)} />
         : (
@@ -171,34 +179,21 @@ function Shot({ shot, title, icon }: { shot: string; title: string; icon: string
             <span className="about-shot-ph-hint">screenshot · {shot}.png</span>
           </div>
         )}
-      {/* 悬浮预览：挂在 fixed 层，原图 contain 完整显示，跟鼠标位置避让 */}
-      {hover && imgOk && (
-        <div
-          className="about-hover-preview"
-          style={hoverPos(hover.x, hover.y)}
-          aria-hidden="true"
-        >
-          <img src={file} alt="" />
-        </div>
-      )}
-    </div>
+    </button>
   )
 }
 
-/**
- * 浮层定位：优先出现在鼠标同侧、垂直居中；贴近屏幕边缘时翻到另一侧。
- * 尺寸由 CSS 限定（max 82vw × 78vh，contain 完整显示），此处只算左上角坐标。
- */
-function hoverPos(mx: number, my: number): React.CSSProperties {
-  const w = Math.min(window.innerWidth * 0.82, 1200)
-  const h = window.innerHeight * 0.78
-  const gap = 20
-  // 鼠标在屏幕左半 → 浮层放右边；反之放左边
-  const left = mx < window.innerWidth / 2
-    ? Math.min(mx + gap, window.innerWidth - w - 10)
-    : Math.max(mx - gap - w, 10)
-  const top = Math.max(10, Math.min(my - h / 2, window.innerHeight - h - 10))
-  return { left, top }
+/** 灯箱：fixed 全屏遮罩 + 原图 contain 完整显示，点击任意处或 Esc 关闭 */
+function ZoomOverlay({ shot, title, onClose }: { shot: string; title: string; onClose: () => void }) {
+  const t = useT()
+  return (
+    <div className="about-zoom" role="dialog" aria-modal="true" aria-label={title}
+      onClick={onClose} onKeyDown={e => { if (e.key === 'Escape') onClose() }}
+      tabIndex={-1} ref={el => el?.focus()}>
+      <button type="button" className="about-zoom-close">{t('about.shotZoomClose')} ✕</button>
+      <img src={`./screenshots/${shot}.png`} alt={title} />
+    </div>
+  )
 }
 
 /** 功能点：i18n 键约定 `about.<x>` = 名称，`about.<x>.desc` = 说明 */

@@ -892,22 +892,38 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
 .about-section.flip .about-shot { order: 2; }
 .about-section.flip .about-fitems { order: 1; }
 
-/* 大截图位：16:10，真图或占位 */
+/* 大截图位：16:10，真图或占位；真图悬停出现「点击放大」提示，点击灯箱查看 */
 .about-shot {
   position: relative; aspect-ratio: 16 / 10; overflow: hidden;
-  border-radius: 16px;
+  border-radius: 16px; padding: 0; cursor: zoom-in; text-align: initial;
   border: 1px solid rgba(255,255,255,0.1);
   box-shadow: 0 18px 44px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.02) inset;
   transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
 }
+.about-shot.is-placeholder { cursor: default; }
 .about-section:hover .about-shot {
   transform: translateY(-3px) scale(1.005);
   border-color: rgba(93,240,168,0.4);
   box-shadow: 0 22px 54px rgba(0,0,0,0.55), 0 0 30px rgba(15,157,88,0.16);
 }
 .about-shot img {
-  /* cover 裁切填满；悬停时浮出全尺寸预览浮层（见 .about-hover-preview） */
+  /* cover 裁切填满；点击经灯箱查看原图（见 .about-zoom） */
   width: 100%; height: 100%; object-fit: cover; display: block;
+}
+/* 悬停提示角标：右下角浮现「点击放大」 */
+.about-shot-hint {
+  position: absolute; right: 12px; bottom: 12px; z-index: 1;
+  padding: 5px 12px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; color: #eaf6ef;
+  background: rgba(6,14,10,0.78); border: 1px solid rgba(93,240,168,0.45);
+  backdrop-filter: blur(4px);
+  opacity: 0; transform: translateY(6px);
+  transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+  pointer-events: none;
+}
+.about-shot:hover .about-shot-hint,
+.about-shot:focus-visible .about-shot-hint {
+  opacity: 1; transform: translateY(0);
 }
 .about-shot.is-placeholder {
   background:
@@ -958,26 +974,39 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
 .about-footer a { color: #5df0a8; text-decoration: none; }
 .about-footer a:hover { text-decoration: underline; }
 
-/* 悬停悬浮预览：fixed 浮层显示原图（contain 完整不裁切），带浮入动画与投影 */
-.about-hover-preview {
-  position: fixed; z-index: 150;
-  max-width: 82vw; max-height: 78vh;
-  border-radius: 14px; overflow: hidden;
+/* 灯箱：全屏遮罩 + 原图 contain 完整显示，点击任意处或 Esc 关闭 */
+.about-zoom {
+  position: fixed; inset: 0; z-index: 150;
+  display: flex; align-items: center; justify-content: center;
+  padding: 4vh 4vw; cursor: zoom-out;
+  background: rgba(4,8,6,0.88); backdrop-filter: blur(6px);
+  animation: aboutZoomIn 0.18s ease-out;
+}
+@keyframes aboutZoomIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.about-zoom img {
+  max-width: 92vw; max-height: 92vh;
+  width: auto; height: auto;
+  object-fit: contain; display: block;
+  border-radius: 12px;
   border: 1px solid rgba(93,240,168,0.35);
   box-shadow: 0 28px 90px rgba(0,0,0,0.75), 0 0 40px rgba(15,157,88,0.2);
   background: #0e141b;
-  pointer-events: none; /* 不挡鼠标，mousemove 持续跟随 */
-  animation: aboutPreviewIn 0.18s ease-out;
+  animation: aboutZoomImgIn 0.18s ease-out;
 }
-@keyframes aboutPreviewIn {
+@keyframes aboutZoomImgIn {
   from { opacity: 0; transform: scale(0.96); }
   to { opacity: 1; transform: scale(1); }
 }
-.about-hover-preview img {
-  max-width: 82vw; max-height: 78vh;
-  width: auto; height: auto;
-  object-fit: contain; display: block;
+.about-zoom-close {
+  position: absolute; top: 18px; right: 20px;
+  padding: 6px 14px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 600; color: #eaf6ef; cursor: pointer;
+  background: rgba(6,14,10,0.78); border: 1px solid rgba(93,240,168,0.45);
 }
+.about-zoom-close:hover { background: rgba(15,157,88,0.35); }
 
 @media (max-width: 600px) {
   .about-main { width: calc(100% - 24px); padding-top: 8px; }
