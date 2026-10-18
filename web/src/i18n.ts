@@ -657,7 +657,7 @@ const MESSAGES = {
   'about.download': ['Download', '下载'],
   'about.dockerRun': ['Copy Docker command', '复制 Docker 运行命令'],
   'about.dockerCopied': ['Copied! Paste to run', '已复制！粘贴即可运行'],
-  'about.heroTitle': ['A breeze to control Android from anywhere', '轻风般的跨平台 Android 控制中心'],
+  'about.heroTitle': ['A breeze to control Android from anywhere', '随时随地，轻管安卓'],
   'about.heroTagline': ['One self-contained binary turns any computer — or the phone itself — into a full-featured ADB control center. Point a browser at it: screen mirroring, reverse touch control, terminal, file manager, app management and more. Nothing to install on the client.',
     '一个自包含的二进制文件，让任何电脑——甚至手机自身——变成功能齐全的 ADB 控制中心。浏览器打开即用：投屏、反向触控、终端、文件管理、应用管理等，客户端零安装。'],
   'about.badgeSingleBinary': ['single binary', '单文件交付'],
