@@ -667,8 +667,8 @@ const MESSAGES = {
 
   'about.secMirror': ['Screen mirroring & interaction', '投屏与交互'],
   'about.fMirror': ['Real-time mirroring', '实时投屏'],
-  'about.fMirror.desc': ['scrcpy protocol (H.264) decoded in the browser via WebCodecs hardware acceleration — ~100 ms latency. Auto-downgrades to WebRTC / WASM soft decoding when HTTPS is unavailable.',
-    '基于 scrcpy 协议（H.264），浏览器 WebCodecs 硬解，延迟约 100ms；HTTP 场景自动降级 WebRTC / WASM 软解。'],
+  'about.fMirror.desc': ['scrcpy protocol (H.264) decoded in the browser via WebCodecs hardware acceleration — low latency. Auto-downgrades to WebRTC / WASM soft decoding when HTTPS is unavailable.',
+    '基于 scrcpy 协议（H.264），浏览器 WebCodecs 硬解，低延迟；HTTP 场景自动降级 WebRTC / WASM 软解。'],
   'about.fAudio': ['Audio forwarding', '音频转发'],
   'about.fAudio.desc': ['Device audio streamed in Opus, decoded via WebCodecs and played through an AudioWorklet — with mute toggle.',
     '设备声音以 Opus 实时转发，WebCodecs 解码 + AudioWorklet 播放，可一键静音。'],
@@ -761,11 +761,11 @@ const MESSAGES = {
   'about.flowServer': ['Server', '服务端'],
   'about.flowClient': ['Controller', '控制端'],
   // 场景一：被控端与服务端同机（安卓 APK）
-  'about.flowSame': ['All-in-one on Android', '场景一：都在一台安卓手机上'],
+  'about.flowSame': ['Scenario 1: Server runs on the controlled device', '场景一：服务端运行在被控端'],
   'about.flowOnePhone': ['Same Android device', '同一台安卓设备'],
   'about.flowPhone': ['Android phone', '安卓手机'],
   'about.flowPhoneApk': ['ADBreeze APK', 'ADBreeze APK'],
-  'about.flowBrowser': ['Browser (phone / PC)', '浏览器（本机 / 电脑）'],
+  'about.flowBrowser': ['Browser', '浏览器'],
   'about.flowSameNote': ['The APK runs both adb server and the Go service on the phone; open the web UI from the phone itself or any computer on the LAN.',
     'APK 在手机上同时运行 adb server 与 Go 服务；用手机本机或局域网内任意电脑的浏览器打开即可控制。'],
   // 场景二：被控端与服务端分离
@@ -778,7 +778,7 @@ const MESSAGES = {
   'about.flowCf': ['Cloudflare Tunnel', 'CF 穿透'],
   'about.flowServerAndroid': ['Android (APK)', '安卓（APK）'],
   'about.flowHttp': ['HTTP / HTTPS', 'HTTP / HTTPS'],
-  'about.flowBrowserAny': ['Any browser', '任意浏览器'],
+  'about.flowBrowserAny': ['Browser', '浏览器'],
   'about.flowPlatforms': ['Windows · macOS · iOS · Linux · Android · HarmonyOS…', 'Windows · macOS · iOS · Linux · 安卓 · 鸿蒙…'],
   'about.flowSplitNote': ['One Go binary serves any number of Android devices over USB or adb connect; the controller is any modern browser (PWA installable), never tied to the server machine.',
     '一个 Go 二进制经 USB / adb connect 管理任意多台安卓设备；控制端是任意现代浏览器（可装为 PWA），与承载服务端的机器无关。'],

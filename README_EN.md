@@ -12,7 +12,7 @@ Project intro page (online overview): <https://smanx.github.io/adbreeze/#/about>
 
 ## Features
 
-- **Live screen mirroring**: based on the scrcpy protocol (H.264), hardware-decoded in the browser via WebCodecs with ~100ms latency; one stream supports multiple viewers
+- **Live screen mirroring**: based on the scrcpy protocol (H.264), hardware-decoded in the browser via WebCodecs with low latency; one stream supports multiple viewers
 - **Audio forwarding**: device audio (Opus) forwarded in real time, decoded via WebCodecs and played through an AudioWorklet; mutable
 - **Reverse control**: mouse click/drag/scroll and PC keyboard drive the device directly; rotation-adaptive (the server parses SPS to track resolution in real time)
 - **Clipboard sync**: read/write the device clipboard, one-click copy to your machine
