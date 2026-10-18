@@ -6,6 +6,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"path"
 	"strings"
 
 	"adbreeze/internal/adb"
@@ -146,7 +147,9 @@ func New(d Deps) http.Handler {
 	// 不含敏感信息；真正的鉴权入口是页面内的登录表单（POST /api/session），
 	// 全部 REST API / WS 仍受会话保护。公开外壳是前端登录方案的必要条件——
 	// 未登录用户得先加载到页面，才看得到登录界面。
-	mux.Handle("/", http.FileServerFS(d.WebFS))
+	// SPA fallback：/about 等前端路由在 dist 里没有同名文件，回退 index.html
+	// 交给前端路由渲染（带扩展名的路径不回退——静态资源缺失就该 404）。
+	mux.Handle("/", spaHandler(d.WebFS))
 
 	return logRequest(cors(mux, parseOrigins(d.CORSOrigins)))
 }
@@ -199,6 +202,27 @@ func parseOrigins(csv string) map[string]struct{} {
 		}
 	}
 	return set
+}
+
+// spaHandler 包装静态文件服务：请求的路径在 FS 里不存在且不带扩展名时，
+// 回退 index.html（前端路由如 /about 由前端渲染；资源路径如 /assets/x.js
+// 缺失时仍如实 404，避免把 JS 错误掩盖成空白页）。
+// 注意 WebFS 的根是 embed 的 "web/dist"，路径需剥掉开头的 "/"（embed FS 无根目录概念）。
+func spaHandler(web fs.FS) http.Handler {
+	fileServer := http.FileServerFS(web)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		if p != "" {
+			if _, err := fs.Stat(web, p); err != nil && path.Ext(p) == "" {
+				// 文件不存在且无扩展名 → 前端路由，回退外壳
+				r2 := new(http.Request)
+				*r2 = *r
+				r2.URL.Path = "/"
+				r = r2
+			}
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
 func logRequest(next http.Handler) http.Handler {

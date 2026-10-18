@@ -119,6 +119,12 @@ export default function Shell() {
           ))}
         </nav>
         <button className="btn tiny ghost lang-btn" onClick={() => toggleLang()} title={t('topbar.langTip')}>{t('topbar.langBtn')}</button>
+        <button
+          className="icon-btn has-tip"
+          data-tip={t('shell.about')}
+          aria-label={t('shell.about')}
+          onClick={() => window.open('./about', '_blank', 'noopener')}
+        ><Icon name="info" /></button>
         <a
           className="icon-btn gh-link has-tip"
           data-tip={t('topbar.github')}
@@ -395,6 +401,9 @@ function LoginCard({ notice, onSuccess }: { notice?: string; onSuccess: () => vo
         <button className="btn primary" disabled={busy || locked > 0 || !password} onClick={() => void submit()}>
           {busy ? t('login.submitting') : t('login.submit')}
         </button>
+        <a className="auth-about-link" href="./about" target="_blank" rel="noopener noreferrer">
+          {t('shell.about')} →
+        </a>
       </div>
     </div>
   )

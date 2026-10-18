@@ -63,6 +63,8 @@ input, select {
 .auth-input { width: 100%; margin-bottom: 16px; }
 .auth-error { color: var(--danger); font-size: 12px; margin: 0 0 8px; }
 .auth-card .btn { width: 100%; }
+.auth-about-link { display: inline-block; margin-top: 14px; color: var(--muted); font-size: 12px; text-decoration: none; }
+.auth-about-link:hover { color: var(--primary); }
 
 /* ---------- 外壳 ---------- */
 .app-shell { height: 100%; display: flex; flex-direction: column; }
@@ -732,4 +734,66 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
      触屏本来也没有 hover，直接不渲染 */
   .tabbar .has-tip[data-tip]::after { display: none; }
   .tab.active { color: var(--primary); font-weight: 600; }
+}
+
+/* ---------- 关于页（/about） ---------- */
+.about-page { min-height: 100%; display: flex; flex-direction: column; background: var(--bg); }
+.about-topbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  padding: 10px 18px; padding-top: calc(10px + env(safe-area-inset-top));
+}
+.about-features-badge {
+  font-size: 11px; color: var(--muted); border: 1px solid var(--border);
+  border-radius: 999px; padding: 1px 8px;
+}
+.about-topbar .spacer { flex: 1; }
+
+.about-main { width: min(980px, 100% - 32px); margin: 0 auto; padding: 28px 0 40px; }
+.about-hero { text-align: center; padding: 20px 0 8px; }
+.about-hero h1 { margin: 0 0 10px; font-size: 26px; line-height: 1.3; }
+.about-tagline { margin: 0 auto 16px; max-width: 720px; color: var(--muted); font-size: 14px; line-height: 1.8; }
+.about-badges { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.about-badge {
+  font-size: 12px; color: var(--primary); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px;
+}
+
+.about-section { margin-top: 34px; }
+.about-sec-title {
+  display: flex; align-items: center; gap: 8px; margin: 0 0 12px;
+  font-size: 17px; color: var(--text);
+}
+.about-sec-title .ico { color: var(--primary); }
+.about-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;
+}
+.about-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 16px;
+}
+.about-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.about-card-head .ico { color: var(--primary); flex: 0 0 auto; }
+.about-card-head b { font-size: 14px; }
+.about-card p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+
+.about-android {
+  margin-top: 34px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 18px 20px;
+}
+.about-android h2 { margin: 0 0 8px; font-size: 17px; }
+.about-android p { margin: 0 0 8px; color: var(--text); font-size: 13.5px; line-height: 1.8; }
+.about-android ul { margin: 0; padding-left: 20px; }
+.about-android li { color: var(--muted); font-size: 13px; line-height: 1.9; }
+
+.about-footer {
+  margin-top: 36px; text-align: center; color: var(--muted); font-size: 12px;
+}
+.about-footer a { color: var(--primary); text-decoration: none; }
+
+@media (max-width: 600px) {
+  .about-main { width: calc(100% - 24px); padding-top: 16px; }
+  .about-hero h1 { font-size: 21px; }
+  .about-grid { grid-template-columns: 1fr; }
 }

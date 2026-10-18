@@ -36,6 +36,8 @@ const ICONS: Record<string, ReactNode> = {
   logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></>,
   // 外网访问中（顶栏徽章）：地球（Cloudflare Tunnel 暴露公网时常驻）
   globe: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3c2.6 2.6 3.8 5.6 3.8 9s-1.2 6.4-3.8 9c-2.6-2.6-3.8-5.6-3.8-9s1.2-6.4 3.8-9z" /></>,
+  // 关于/介绍（顶栏入口）：圆圈 i
+  info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 8h.01" /></>,
 
   // ---------- 投屏工具栏 ----------
   // 返回 / 主页 / 菜单 / 通知 / 电源（与 controller 的 op 名对应，直接 name={op}）
