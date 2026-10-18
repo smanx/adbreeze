@@ -2,6 +2,9 @@
 bin/
 *.exe
 
+# 签名密钥（本地生成，绝不提交；CI 通过 GitHub Secrets 注入）
+*.keystore
+
 # 前端打包输出（go:embed 资源，构建前需先 npm run build）
 web/dist/
 node_modules/

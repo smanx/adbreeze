@@ -78,10 +78,17 @@ jobs:
       - name: Cross compile Go server (android/arm64)
         run: make android-go VERSION=${{ steps.tag.outputs.value }}
 
+      # 解码 GitHub Secrets 中的正式签名密钥（base64 编码的 keystore）
+      - name: Decode signing keystore
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
+
       - name: Build Android APK
         working-directory: android
         env:
           APP_VERSION: ${{ steps.tag.outputs.value }}
+          KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: ./gradlew assembleRelease --console=plain --no-daemon -PappVersion="${APP_VERSION#v}"
 
       - name: Collect APK

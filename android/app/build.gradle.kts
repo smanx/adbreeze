@@ -22,11 +22,32 @@ android {
         versionName = appVersion
     }
 
+    // 正式签名：CI 通过环境变量注入（KEYSTORE_FILE 指向已解码的 keystore）；
+    // 未注入时（本地无密钥）release 回落 debug 签名，保证本地仍可构建
+    val releaseStoreFile = System.getenv("KEYSTORE_FILE")
+    val releaseStorePassword = System.getenv("KEYSTORE_PASSWORD")
+    val releaseKeyAlias = System.getenv("KEY_ALIAS") ?: "adbreeze"
+
+    signingConfigs {
+        if (releaseStoreFile != null && releaseStorePassword != null) {
+            create("release") {
+                storeFile = file(releaseStoreFile)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseStorePassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // 与 Flutter 项目同策略：release 先用 debug 签名，正式签名走 CI 注入
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (releaseStoreFile != null && releaseStorePassword != null) {
+                signingConfigs.getByName("release")
+            } else {
+                // 本地无密钥时回落 debug 签名
+                signingConfigs.getByName("debug")
+            }
         }
     }
 
