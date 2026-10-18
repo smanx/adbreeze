@@ -8,6 +8,8 @@
 
 Project home: <https://github.com/smanx/adbreeze>
 
+Project intro page (online overview): <https://smanx.github.io/adbreeze/#/about>
+
 ## Features
 
 - **Live screen mirroring**: based on the scrcpy protocol (H.264), hardware-decoded in the browser via WebCodecs with ~100ms latency; one stream supports multiple viewers

@@ -8,6 +8,8 @@
 
 项目地址：<https://github.com/smanx/adbreeze>
 
+项目简介页（在线演示文档）：<https://smanx.github.io/adbreeze/#/about>
+
 ## 特性
 
 - **实时投屏**：基于 scrcpy 协议（H.264），浏览器 WebCodecs 硬解，延迟约 100ms；一路流支持多观众

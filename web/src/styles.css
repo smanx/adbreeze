@@ -52,7 +52,13 @@ input, select {
 
 /* ---------- 鉴权页 ---------- */
 .auth-page {
+  position: relative;
   height: 100%; display: flex; align-items: center; justify-content: center;
+}
+/* 语言切换：悬浮在登录卡片右上角（登录前唯一可用的设置入口） */
+.auth-lang {
+  position: absolute; top: 18px; right: 18px;
+  min-width: 44px; font-weight: 600;
 }
 .auth-card {
   width: min(360px, 90vw); background: var(--panel); border: 1px solid var(--border);
@@ -736,64 +742,220 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
   .tab.active { color: var(--primary); font-weight: 600; }
 }
 
-/* ---------- 关于页（/about） ---------- */
-.about-page { min-height: 100%; display: flex; flex-direction: column; background: var(--bg); }
-.about-topbar {
-  position: sticky; top: 0; z-index: 10;
+/* ---------- 关于页（/#/about）：暗色炫酷主题（作用域内覆盖，不影响控制台） ---------- */
+.about-page {
+  position: relative; min-height: 100%;
+  background: #0b0f14; color: #e8edf2;
+  display: flex; flex-direction: column; overflow-x: clip;
+}
+/* 背景装饰：极光渐变 + 透视网格，纯 CSS */
+.about-bg { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+.about-bg-aurora {
+  position: absolute; inset: -20%;
+  background:
+    radial-gradient(38% 42% at 18% 12%, rgba(15,157,88, 0.22), transparent 70%),
+    radial-gradient(34% 38% at 82% 20%, rgba(56,132,255, 0.18), transparent 70%),
+    radial-gradient(30% 34% at 50% 88%, rgba(15,157,88, 0.12), transparent 70%);
+  filter: blur(40px);
+  animation: aboutAurora 18s ease-in-out infinite alternate;
+}
+@keyframes aboutAurora {
+  from { transform: translate3d(-2%, -1%, 0) scale(1); }
+  to   { transform: translate3d(2%, 2%, 0) scale(1.06); }
+}
+.about-bg-grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(72% 60% at 50% 24%, #000 30%, transparent 100%);
+}
+/* 作用域内元素配色：顶栏/卡片改暗色 */
+.about-page .about-topbar {
+  position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; gap: 10px;
-  background: var(--panel); border-bottom: 1px solid var(--border);
-  padding: 10px 18px; padding-top: calc(10px + env(safe-area-inset-top));
+  background: rgba(11,15,20,0.78); backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  padding: 12px 20px; padding-top: calc(12px + env(safe-area-inset-top));
 }
+.about-page .brand { color: var(--primary); font-size: 17px; }
 .about-features-badge {
-  font-size: 11px; color: var(--muted); border: 1px solid var(--border);
-  border-radius: 999px; padding: 1px 8px;
+  font-size: 11px; color: #9fe8c4; border: 1px solid rgba(15,157,88,0.45);
+  border-radius: 999px; padding: 2px 10px; letter-spacing: 0.06em;
 }
-.about-topbar .spacer { flex: 1; }
+.about-page .about-topbar .spacer { flex: 1; }
+.about-page .about-topbar .btn.tiny.ghost { color: #cfe3d8; border-color: rgba(255,255,255,0.18); }
+.about-page .about-topbar .btn.tiny.ghost:hover { border-color: var(--primary); color: var(--primary); }
+.about-page .about-topbar .btn.tiny { background: var(--primary); color: #fff; }
 
-.about-main { width: min(980px, 100% - 32px); margin: 0 auto; padding: 28px 0 40px; }
-.about-hero { text-align: center; padding: 20px 0 8px; }
-.about-hero h1 { margin: 0 0 10px; font-size: 26px; line-height: 1.3; }
-.about-tagline { margin: 0 auto 16px; max-width: 720px; color: var(--muted); font-size: 14px; line-height: 1.8; }
+.about-main { position: relative; z-index: 1; width: min(1060px, 100% - 32px); margin: 0 auto; padding: 24px 0 48px; }
+
+/* Hero */
+.about-hero { text-align: center; padding: 56px 0 20px; }
+.about-hero-logo {
+  width: 76px; height: 76px; margin: 0 auto 20px; border-radius: 20px;
+  display: flex; align-items: center; justify-content: center;
+  color: #5df0a8;
+  background: linear-gradient(145deg, rgba(15,157,88,0.28), rgba(56,132,255,0.18));
+  border: 1px solid rgba(15,157,88,0.5);
+  box-shadow: 0 0 42px rgba(15,157,88,0.35), inset 0 0 22px rgba(15,157,88,0.12);
+  animation: aboutFloat 5s ease-in-out infinite;
+}
+@keyframes aboutFloat {
+  0%, 100% { transform: translateY(0); box-shadow: 0 0 42px rgba(15,157,88,0.35), inset 0 0 22px rgba(15,157,88,0.12); }
+  50% { transform: translateY(-7px); box-shadow: 0 0 58px rgba(15,157,88,0.5), inset 0 0 22px rgba(15,157,88,0.12); }
+}
+.about-hero-title {
+  margin: 0 0 14px; font-size: 40px; line-height: 1.25; font-weight: 800; letter-spacing: 0.01em;
+  background: linear-gradient(92deg, #e8edf2 12%, #5df0a8 46%, #62a8ff 82%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.about-tagline { margin: 0 auto 22px; max-width: 760px; color: #9aa7b2; font-size: 15px; line-height: 1.9; }
 .about-badges { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 .about-badge {
-  font-size: 12px; color: var(--primary); background: var(--panel);
-  border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px;
+  font-size: 12.5px; color: #b9c6d0; background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12); border-radius: 999px; padding: 4px 14px;
 }
+.about-badge.glow {
+  color: #5df0a8; border-color: rgba(15,157,88,0.55);
+  box-shadow: 0 0 14px rgba(15,157,88,0.28); background: rgba(15,157,88,0.1);
+}
+.about-cta {
+  margin-top: 30px; padding: 12px 34px; border: 0; border-radius: 999px; cursor: pointer;
+  font-size: 15px; font-weight: 700; color: #04150c;
+  background: linear-gradient(92deg, #22c06d, #14a05a);
+  box-shadow: 0 6px 26px rgba(15,157,88,0.4);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.about-cta:hover { transform: translateY(-2px); box-shadow: 0 10px 34px rgba(15,157,88,0.55); }
+.about-cta-arrow { display: inline-block; transition: transform 0.15s; }
+.about-cta:hover .about-cta-arrow { transform: translateX(4px); }
 
-.about-section { margin-top: 34px; }
+/* 分组标题 */
+.about-section { margin-top: 52px; }
 .about-sec-title {
-  display: flex; align-items: center; gap: 8px; margin: 0 0 12px;
-  font-size: 17px; color: var(--text);
+  display: flex; align-items: center; gap: 10px; margin: 0 0 16px;
+  font-size: 19px; color: #e8edf2;
 }
-.about-sec-title .ico { color: var(--primary); }
-.about-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;
+.about-sec-title .ico { color: #5df0a8; }
+.about-sec-title::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, rgba(93,240,168,0.4), transparent);
 }
-.about-card {
-  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-  padding: 14px 16px;
-}
-.about-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.about-card-head .ico { color: var(--primary); flex: 0 0 auto; }
-.about-card-head b { font-size: 14px; }
-.about-card p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
 
+/* 功能大项：一大图 + 功能点清单，左右交替（flip 时图在右） */
+.about-section { margin-top: 64px; }
+.about-sec-title {
+  display: flex; align-items: center; gap: 10px; margin: 0 0 18px;
+  font-size: 20px; color: #e8edf2;
+}
+.about-sec-title .ico { color: #5df0a8; }
+.about-sec-title::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, rgba(93,240,168,0.4), transparent);
+}
+.about-section-body {
+  display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  gap: 22px; align-items: center;
+}
+.about-section.flip .about-section-body { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); }
+.about-section.flip .about-shot { order: 2; }
+.about-section.flip .about-fitems { order: 1; }
+
+/* 大截图位：16:10，真图或占位 */
+.about-shot {
+  position: relative; aspect-ratio: 16 / 10; overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.1);
+  box-shadow: 0 18px 44px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.02) inset;
+  transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+}
+.about-section:hover .about-shot {
+  transform: translateY(-3px) scale(1.005);
+  border-color: rgba(93,240,168,0.4);
+  box-shadow: 0 22px 54px rgba(0,0,0,0.55), 0 0 30px rgba(15,157,88,0.16);
+}
+.about-shot img {
+  /* cover 裁切填满；悬停时浮出全尺寸预览浮层（见 .about-hover-preview） */
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.about-shot.is-placeholder {
+  background:
+    repeating-linear-gradient(-45deg, rgba(255,255,255,0.02) 0 12px, transparent 12px 24px),
+    radial-gradient(75% 95% at 50% 32%, rgba(15,157,88,0.16), transparent 78%),
+    #0e141b;
+}
+.about-shot-ph {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 9px;
+}
+.about-shot-ph-icon {
+  width: 66px; height: 66px; border-radius: 18px;
+  display: flex; align-items: center; justify-content: center;
+  color: #3f8f66; background: rgba(15,157,88,0.12); border: 1px dashed rgba(93,240,168,0.4);
+}
+.about-shot-ph-name { color: #55636e; font-size: 13.5px; font-weight: 600; letter-spacing: 0.04em; }
+.about-shot-ph-hint {
+  color: #3a4750; font-size: 10px; letter-spacing: 0.24em; text-transform: uppercase;
+}
+
+/* 功能点清单 */
+.about-fitems { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.about-fitem { display: flex; gap: 12px; align-items: flex-start; }
+.about-fitem-check {
+  flex: 0 0 auto; width: 22px; height: 22px; margin-top: 1px;
+  border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: #04150c;
+  background: linear-gradient(135deg, #2fd37a, #12905a);
+  box-shadow: 0 2px 10px rgba(15,157,88,0.4);
+}
+.about-fitem b { display: block; font-size: 14.5px; color: #e8edf2; margin-bottom: 2px; }
+.about-fitem p { margin: 0; color: #93a0ac; font-size: 12.5px; line-height: 1.7; }
+
+/* Android 端专节 */
 .about-android {
-  margin-top: 34px; background: var(--panel); border: 1px solid var(--border);
-  border-radius: 10px; padding: 18px 20px;
+  margin-top: 52px; border-radius: 16px; padding: 24px 26px;
+  background: linear-gradient(150deg, rgba(15,157,88,0.12), rgba(56,132,255,0.07));
+  border: 1px solid rgba(15,157,88,0.3);
 }
-.about-android h2 { margin: 0 0 8px; font-size: 17px; }
-.about-android p { margin: 0 0 8px; color: var(--text); font-size: 13.5px; line-height: 1.8; }
+.about-android h2 { margin: 0 0 10px; font-size: 18px; color: #5df0a8; }
+.about-android p { margin: 0 0 10px; color: #c4cfd8; font-size: 13.5px; line-height: 1.85; }
 .about-android ul { margin: 0; padding-left: 20px; }
-.about-android li { color: var(--muted); font-size: 13px; line-height: 1.9; }
+.about-android li { color: #93a0ac; font-size: 13px; line-height: 2; }
+.about-android li::marker { color: #3f8f66; }
 
-.about-footer {
-  margin-top: 36px; text-align: center; color: var(--muted); font-size: 12px;
+.about-footer { margin-top: 48px; text-align: center; color: #55636e; font-size: 12px; }
+.about-footer a { color: #5df0a8; text-decoration: none; }
+.about-footer a:hover { text-decoration: underline; }
+
+/* 悬停悬浮预览：fixed 浮层显示原图（contain 完整不裁切），带浮入动画与投影 */
+.about-hover-preview {
+  position: fixed; z-index: 150;
+  max-width: 82vw; max-height: 78vh;
+  border-radius: 14px; overflow: hidden;
+  border: 1px solid rgba(93,240,168,0.35);
+  box-shadow: 0 28px 90px rgba(0,0,0,0.75), 0 0 40px rgba(15,157,88,0.2);
+  background: #0e141b;
+  pointer-events: none; /* 不挡鼠标，mousemove 持续跟随 */
+  animation: aboutPreviewIn 0.18s ease-out;
 }
-.about-footer a { color: var(--primary); text-decoration: none; }
+@keyframes aboutPreviewIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+.about-hover-preview img {
+  max-width: 82vw; max-height: 78vh;
+  width: auto; height: auto;
+  object-fit: contain; display: block;
+}
 
 @media (max-width: 600px) {
-  .about-main { width: calc(100% - 24px); padding-top: 16px; }
-  .about-hero h1 { font-size: 21px; }
-  .about-grid { grid-template-columns: 1fr; }
+  .about-main { width: calc(100% - 24px); padding-top: 8px; }
+  .about-hero { padding-top: 32px; }
+  .about-hero-title { font-size: 27px; }
+  .about-section-body,
+  .about-section.flip .about-section-body { grid-template-columns: 1fr; gap: 14px; }
+  .about-section.flip .about-shot { order: 0; }
+  .about-android { padding: 18px; }
 }

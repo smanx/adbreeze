@@ -47,9 +47,10 @@ export default function Shell() {
     return () => { clearReconnectTimer() }
   }, [loggedOut, backendRevision])
 
-  // 隧道徽章轮询：仅在登录态进行
+  // 隧道徽章轮询：仅在登录态进行。设置页打开时暂停——
+  // 设置页的 TunnelSettings 有自己的 3s 轮询，两叠加会双倍打 /api/tunnel
   useEffect(() => {
-    if (loggedOut) return
+    if (loggedOut || panel === 'settings') return
     let alive = true
     const poll = async () => {
       try {
@@ -60,7 +61,7 @@ export default function Shell() {
     void poll()
     const timer = setInterval(poll, 10000)
     return () => { alive = false; clearInterval(timer) }
-  }, [loggedOut])
+  }, [loggedOut, panel])
 
   // 退出：清除后端会话 cookie 与本地 token 并断开事件通道。
   // 会话凭证只有这一处，退出即真失效——这是相对 Basic Auth 的核心改进。
@@ -380,6 +381,12 @@ function LoginCard({ notice, onSuccess }: { notice?: string; onSuccess: () => vo
 
   return (
     <div className="auth-page">
+      <button
+        className="btn tiny ghost auth-lang"
+        onClick={() => toggleLang()}
+        title={t('topbar.langTip')}
+        aria-label={t('topbar.langTip')}
+      >{t('topbar.langBtn')}</button>
       <div className="auth-card">
         <h1>{t('login.title')}</h1>
         {notice && <p className="auth-sub">{notice}</p>}
