@@ -1,3 +1,5 @@
+[English](README_EN.md) | [简体中文](README.md)
+
 # ADBreeze
 
 **轻风般的跨平台 ADB 控制中心** —— 一个二进制文件，在 Windows / macOS / Linux / Docker / Android 上运行，通过浏览器完成对任意 Android 设备的全部控制：投屏、反向触控、终端、文件管理、剪贴板、截图、APK 安装。
