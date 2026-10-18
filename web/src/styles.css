@@ -958,6 +958,118 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
 .about-fitem b { display: block; font-size: 14.5px; color: #e8edf2; margin-bottom: 2px; }
 .about-fitem p { margin: 0; color: #93a0ac; font-size: 12.5px; line-height: 1.7; }
 
+/* 控制流程：两种场景的图形化链路（图标节点 + 双向箭头） */
+.about-flow { margin-top: 56px; }
+.about-flow h2 {
+  display: flex; align-items: center; gap: 10px; margin: 0 0 18px;
+  font-size: 20px; color: #e8edf2;
+}
+.about-flow h2 .ico { color: #5df0a8; }
+.about-flow h2::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, rgba(93,240,168,0.4), transparent);
+}
+.about-flow-scene {
+  border-radius: 16px; padding: 20px 22px 16px; margin-bottom: 18px;
+  background: linear-gradient(150deg, rgba(15,157,88,0.07), rgba(255,255,255,0.03));
+  border: 1px solid rgba(93,240,168,0.2);
+}
+.about-flow-scene-title {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 16px;
+  font-size: 13.5px; font-weight: 700; color: #5df0a8; letter-spacing: 0.02em;
+}
+.about-flow-scene-title .ico { color: #3f8f66; }
+/* 链路行：节点 + 箭头水平排布 */
+.about-flow-chain {
+  display: flex; align-items: stretch; justify-content: center;
+  gap: 12px; flex-wrap: wrap;
+}
+/* 场景一节点 */
+.about-flow-node {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  min-width: 108px; padding: 16px 14px 12px; border-radius: 14px; text-align: center;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.1);
+}
+/* 同机分组框：被控端+服务端包在同一个「一台安卓设备」框内 */
+.about-flow-group {
+  position: relative; padding: 26px 14px 12px; border-radius: 16px;
+  border: 1.5px dashed rgba(93,240,168,0.45);
+  background: rgba(15,157,88,0.05);
+}
+.about-flow-group-tag {
+  position: absolute; top: -9px; left: 50%; transform: translateX(-50%);
+  padding: 1px 10px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 600; color: #5df0a8; white-space: nowrap;
+  background: #101820; border: 1px solid rgba(93,240,168,0.45);
+}
+.about-flow-group-inner { display: flex; align-items: stretch; gap: 10px; }
+.about-flow-group-inner .about-flow-node { min-width: 96px; padding: 12px 10px 10px; }
+.about-flow-group-inner .about-flow-node-icon { width: 38px; height: 38px; border-radius: 11px; }
+.about-flow-group-inner .about-flow-node-icon svg { width: 22px; height: 22px; }
+.about-flow-node.accent {
+  border-color: rgba(93,240,168,0.5);
+  background: rgba(15,157,88,0.1);
+  box-shadow: 0 0 18px rgba(15,157,88,0.15);
+}
+.about-flow-node-icon {
+  width: 48px; height: 48px; margin-bottom: 5px; border-radius: 13px;
+  display: flex; align-items: center; justify-content: center;
+  color: #7de8ae; background: rgba(15,157,88,0.12);
+  border: 1px solid rgba(93,240,168,0.3);
+}
+.about-flow-node.accent .about-flow-node-icon { color: #5df0a8; }
+.about-flow-node-label { font-size: 13px; font-weight: 700; color: #e8edf2; white-space: nowrap; }
+.about-flow-node-sub { font-size: 11px; color: #6b7884; letter-spacing: 0.06em; }
+/* 控制端节点下方的平台小图标行：任意设备经浏览器均可访问 */
+.about-flow-platforms {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 4px; padding: 5px 10px; border-radius: 999px;
+  color: #7de8ae; background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(93,240,168,0.25);
+}
+/* 双向箭头 */
+.about-flow-arrow { align-self: center; color: #3f8f66; display: flex; }
+.about-flow-arrow.vert svg { transform: rotate(90deg); }
+/* 场景二：被控端组 | USB/Wi-Fi | 服务端组 | HTTP | 控制端 */
+.about-flow-split {
+  display: grid; grid-template-columns: minmax(0, 2fr) auto minmax(0, 2.2fr) auto minmax(0, 1.4fr);
+  gap: 12px; align-items: center;
+}
+.about-flow-devices, .about-flow-servers {
+  display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; align-content: center;
+}
+.about-flow-devices .about-flow-node { padding: 12px 10px 10px; min-width: 96px; flex: 1 1 96px; }
+.about-flow-devices .about-flow-node-icon { width: 38px; height: 38px; border-radius: 11px; }
+.about-flow-devices .about-flow-node-icon svg { width: 22px; height: 22px; }
+.about-flow-servers .about-flow-node { padding: 12px 10px 10px; min-width: 100px; flex: 1 1 100px; }
+.about-flow-servers .about-flow-node-icon { width: 38px; height: 38px; border-radius: 11px; }
+.about-flow-servers .about-flow-node-icon svg { width: 22px; height: 22px; }
+.about-flow-conn {
+  font-size: 10.5px; font-weight: 600; color: #5df0a8;
+  padding: 3px 10px; border-radius: 999px;
+  background: rgba(15,157,88,0.12); border: 1px solid rgba(93,240,168,0.35);
+  white-space: nowrap;
+}
+/* 场景一：服务端 ⇄ 控制端之间的「箭头 + 协议 + 上下注释」横排 */
+.about-flow-connwrap {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  align-self: center;
+}
+.about-flow-connnote {
+  font-size: 10px; color: #6b7884; letter-spacing: 0.04em; white-space: nowrap;
+}
+/* 场景二：被控端 ⇄ 服务端之间的竖直双箭头 + 中间连接胶囊 */
+.about-flow-split-mid {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  color: #3f8f66;
+}
+/* 场景说明（一句话小字） */
+.about-flow-note {
+  margin: 14px 0 0; text-align: center;
+  color: #6b7884; font-size: 12px; line-height: 1.7;
+}
+
 /* Android 端专节 */
 .about-android {
   margin-top: 52px; border-radius: 16px; padding: 24px 26px;
@@ -1015,5 +1127,11 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
   .about-section-body,
   .about-section.flip .about-section-body { grid-template-columns: 1fr; gap: 14px; }
   .about-section.flip .about-shot { order: 0; }
+  /* 控制流程小屏：场景一竖排、场景二单列，箭头改向下 */
+  .about-flow-scene { padding: 16px 14px 12px; }
+  .about-flow-chain { flex-direction: column; align-items: center; }
+  .about-flow-split { grid-template-columns: 1fr; }
+  .about-flow-split-mid { flex-direction: row; }
+  .about-flow-arrow.vert svg { transform: none; }
   .about-android { padding: 18px; }
 }

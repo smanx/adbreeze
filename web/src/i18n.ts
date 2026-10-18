@@ -1,4 +1,4 @@
-﻿// 前端国际化：en（默认）+ zh 双语词典。
+// 前端国际化：en（默认）+ zh 双语词典。
 //
 // 设计要点：
 //   - 模块级语言状态 + useSyncExternalStore 订阅：组件用 useT() 拿 t（语言切换自动重渲染），
@@ -754,6 +754,34 @@ const MESSAGES = {
   'about.fI18n': ['Bilingual UI', '中英双语'],
   'about.fI18n.desc': ['The whole interface — including this page — switches between English and Chinese with one click; preference remembered.',
     '整个界面（含本页）一键切换中英文，偏好自动记忆。'],
+
+  'about.secFlow': ['How it works', '控制流程'],
+  // 角色短标签（节点下方的小字）
+  'about.flowDevice': ['Controlled', '被控端'],
+  'about.flowServer': ['Server', '服务端'],
+  'about.flowClient': ['Controller', '控制端'],
+  // 场景一：被控端与服务端同机（安卓 APK）
+  'about.flowSame': ['All-in-one on Android', '场景一：都在一台安卓手机上'],
+  'about.flowOnePhone': ['Same Android device', '同一台安卓设备'],
+  'about.flowPhone': ['Android phone', '安卓手机'],
+  'about.flowPhoneApk': ['ADBreeze APK', 'ADBreeze APK'],
+  'about.flowBrowser': ['Browser (phone / PC)', '浏览器（本机 / 电脑）'],
+  'about.flowSameNote': ['The APK runs both adb server and the Go service on the phone; open the web UI from the phone itself or any computer on the LAN.',
+    'APK 在手机上同时运行 adb server 与 Go 服务；用手机本机或局域网内任意电脑的浏览器打开即可控制。'],
+  // 场景二：被控端与服务端分离
+  'about.flowSplit': ['Server separate from devices', '场景二：被控端与服务端分离'],
+  'about.flowDevPhone': ['Phones / tablets', '手机 / 平板'],
+  'about.flowDevTv': ['TV boxes / car units', '电视盒子 / 车机'],
+  'about.flowDevMore': ['Emulators / more', '模拟器 / 更多'],
+  'about.flowUsbWifi': ['USB / Wi-Fi', 'USB / Wi-Fi'],
+  'about.flowLan': ['LAN', '局域网'],
+  'about.flowCf': ['Cloudflare Tunnel', 'CF 穿透'],
+  'about.flowServerAndroid': ['Android (APK)', '安卓（APK）'],
+  'about.flowHttp': ['HTTP / HTTPS', 'HTTP / HTTPS'],
+  'about.flowBrowserAny': ['Any browser', '任意浏览器'],
+  'about.flowPlatforms': ['Windows · macOS · iOS · Linux · Android · HarmonyOS…', 'Windows · macOS · iOS · Linux · 安卓 · 鸿蒙…'],
+  'about.flowSplitNote': ['One Go binary serves any number of Android devices over USB or adb connect; the controller is any modern browser (PWA installable), never tied to the server machine.',
+    '一个 Go 二进制经 USB / adb connect 管理任意多台安卓设备；控制端是任意现代浏览器（可装为 PWA），与承载服务端的机器无关。'],
 
   'about.secAndroid': ['Android app (APK)', '安卓端（APK）'],
   'about.androidDesc': ['The Android build keeps the same philosophy: the app itself is only a service console. It runs the adb server and the Go service on the phone; you open the web UI in a browser — on the phone or from any computer on the LAN.',
