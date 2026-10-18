@@ -78,9 +78,17 @@ jobs:
       - name: Cross compile Go server (android/arm64)
         run: make android-go VERSION=${{ steps.tag.outputs.value }}
 
-      # 解码 GitHub Secrets 中的正式签名密钥（base64 编码的 keystore）
+      # 解码 GitHub Secrets 中的正式签名密钥（base64 编码的 keystore）；
+      # 未配置时明确报错，避免 gradle 读到空文件报出难排查的签名错误
       - name: Decode signing keystore
-        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::缺少签名密钥：请先在仓库 Settings → Secrets → Actions 配置 ANDROID_KEYSTORE_BASE64、ANDROID_KEYSTORE_PASSWORD、ANDROID_KEY_ALIAS" >&2
+            exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
 
       - name: Build Android APK
         working-directory: android

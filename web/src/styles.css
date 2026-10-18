@@ -748,8 +748,22 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
   background: #0b0f14; color: #e8edf2;
   display: flex; flex-direction: column; overflow-x: clip;
 }
-/* 背景装饰：极光渐变 + 透视网格，纯 CSS */
+/* 背景装饰：照片底图（手机投屏）+ 暗化遮罩 + 极光渐变 + 透视网格 */
 .about-bg { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+.about-bg-photo {
+  position: absolute; inset: 0;
+  /* 图片由 site 构建的 copy-screenshots 脚本拷到 dist-site/screenshots/，
+     主应用构建不打包（组件层也按 MODE 排除渲染） */
+  background: url('./screenshots/about-bg.png') center 28% / cover no-repeat;
+  opacity: 0.38;
+}
+/* 照片上下渐隐进暗色底，保证正文区域文字可读 */
+.about-bg-photo::after {
+  content: ''; position: absolute; inset: 0;
+  background:
+    linear-gradient(180deg, rgba(11,15,20,0.82) 0%, rgba(11,15,20,0.45) 26%, rgba(11,15,20,0.72) 60%, rgba(11,15,20,0.95) 100%),
+    radial-gradient(120% 90% at 50% 30%, transparent 40%, rgba(11,15,20,0.6) 100%);
+}
 .about-bg-aurora {
   position: absolute; inset: -20%;
   background:
@@ -785,6 +799,18 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
   border-radius: 999px; padding: 2px 10px; letter-spacing: 0.06em;
 }
 .about-page .about-topbar .spacer { flex: 1; }
+/* 顶栏 GitHub 项目跳转图标 */
+.about-gh-link {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 9px;
+  color: #cfe3d8; background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.18);
+  transition: color 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.about-gh-link:hover {
+  color: #fff; border-color: rgba(93,240,168,0.6);
+  box-shadow: 0 0 12px rgba(15,157,88,0.3);
+}
 .about-page .about-topbar .btn.tiny.ghost { color: #cfe3d8; border-color: rgba(255,255,255,0.18); }
 .about-page .about-topbar .btn.tiny.ghost:hover { border-color: var(--primary); color: var(--primary); }
 .about-page .about-topbar .btn.tiny { background: var(--primary); color: #fff; }
@@ -1068,6 +1094,145 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
 .about-flow-note {
   margin: 14px 0 0; text-align: center;
   color: #6b7884; font-size: 12px; line-height: 1.7;
+}
+
+/* ---------- 控制流程动效 ---------- */
+/* 入场：滚动进入视口后由 .about-flow.play 一次性触发，子元素按 --i 阶梯延迟 */
+.about-flow .fx {
+  opacity: 0; transform: translateY(18px) scale(0.96);
+}
+.about-flow.play .fx {
+  animation: flowRise 0.55s cubic-bezier(0.2, 0.8, 0.25, 1) forwards;
+  animation-delay: calc(var(--i, 0) * 90ms);
+}
+@keyframes flowRise {
+  to { opacity: 1; transform: none; }
+}
+/* 场景卡片：入场时边框扫过一道流光 */
+.about-flow.play .about-flow-scene {
+  animation: flowSceneIn 0.7s ease-out both, flowSheen 1.4s ease-out 0.9s both;
+}
+@keyframes flowSceneIn {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes flowSheen {
+  from { border-color: rgba(93,240,168,0.9); box-shadow: 0 0 0 1px rgba(93,240,168,0.5), 0 0 34px rgba(15,157,88,0.3); }
+  to { border-color: rgba(93,240,168,0.2); box-shadow: none; }
+}
+/* 服务端高亮节点：呼吸光晕（常驻） */
+.about-flow.play .about-flow-node.accent {
+  animation: flowPulse 2.6s ease-in-out 1.2s infinite;
+}
+@keyframes flowPulse {
+  0%, 100% { box-shadow: 0 0 14px rgba(15,157,88,0.18); }
+  50% { box-shadow: 0 0 30px rgba(15,157,88,0.45); }
+}
+/* ---------- 数据管道：⇄ 箭头 + 双车道 + 相向流动的光点 ---------- */
+/* 管道整体：竖排两行（箭头行 / 轨道行），入场由 fx-arrow 控制 */
+.about-flow-pipe {
+  display: inline-flex; flex-direction: column; align-items: center; gap: 2px;
+  align-self: center; color: #3f8f66;
+  min-width: 54px;
+}
+.about-flow-pipe-heads { flex: 0 0 auto; }
+/* 轨道：两条车道（::before/::after 画上下轨道线），水平 or 竖直 */
+.about-flow-pipe-track {
+  position: relative; width: 44px; height: 10px; overflow: visible;
+}
+.about-flow-pipe-lane, .about-flow-pipe-track::before, .about-flow-pipe-track::after {
+  content: ''; position: absolute; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(93,240,168,0.4), transparent);
+}
+.about-flow-pipe-track::before { top: 1px; }
+.about-flow-pipe-track::after { bottom: 1px; }
+.about-flow-pipe-lane { display: none; }
+/* 光点：上方车道向右（fwd），下方车道向左（back），各两颗错峰 */
+.about-flow-packet {
+  position: absolute; top: -1.5px; left: 0;
+  width: 4px; height: 4px; border-radius: 50%;
+  background: #5df0a8;
+  box-shadow: 0 0 6px rgba(93,240,168,0.9), 0 0 12px rgba(15,157,88,0.5);
+  opacity: 0;
+}
+.about-flow-packet.back { top: auto; bottom: -1.5px; }
+.about-flow.play .about-flow-packet.fwd {
+  animation: packetFwd 1.5s linear infinite;
+}
+.about-flow.play .about-flow-packet.back {
+  animation: packetBack 1.5s linear infinite;
+}
+.about-flow.play .about-flow-packet.d2 { animation-delay: 0.75s; }
+@keyframes packetFwd {
+  0% { left: -4px; opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { left: calc(100% + 0px); opacity: 0; }
+}
+@keyframes packetBack {
+  0% { left: calc(100% + 0px); opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { left: -4px; opacity: 0; }
+}
+/* 竖直管道：轨道旋转 90°，车道左右分布，箭头同步旋转 */
+.about-flow-pipe.vert .about-flow-pipe-track { transform: rotate(90deg); }
+.about-flow-pipe.vert .about-flow-pipe-heads { transform: rotate(90deg); }
+/* 入场浮现（沿用 fx-arrow 类） */
+.about-flow .fx-arrow { transform: translateY(18px); opacity: 0; }
+.about-flow.play .fx-arrow {
+  animation: flowRise 0.5s ease-out forwards;
+  animation-delay: calc(var(--i, 0) * 90ms);
+}
+/* 分组虚线框：描边流动（常驻） */
+.about-flow.play .about-flow-group { position: relative; }
+.about-flow.play .about-flow-group::after {
+  content: ''; position: absolute; inset: -1.5px; border-radius: 16px; pointer-events: none;
+  border: 1.5px dashed rgba(93,240,168,0.6);
+  mask: linear-gradient(#000 25%, transparent 50%, #000 75%);
+  -webkit-mask: linear-gradient(#000 25%, transparent 50%, #000 75%);
+  animation: flowGroupGlow 3s ease-in-out infinite;
+}
+@keyframes flowGroupGlow {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+/* 连接胶囊：微微起伏发光 */
+.about-flow.play .about-flow-conn {
+  animation: flowConnGlow 2.4s ease-in-out 1s infinite;
+}
+@keyframes flowConnGlow {
+  0%, 100% { box-shadow: 0 0 0 rgba(15,157,88,0); }
+  50% { box-shadow: 0 0 12px rgba(15,157,88,0.4); }
+}
+/* 控制端平台小图标：逐个弹入（--pi 阶梯） */
+.about-flow-platforms .about-flow-platforms-item { opacity: 0; transform: scale(0.4); }
+.about-flow.play .about-flow-platforms .about-flow-platforms-item {
+  display: inline-flex; align-items: center;
+  animation: flowPop 0.45s cubic-bezier(0.3, 1.6, 0.5, 1) forwards;
+  animation-delay: calc(0.7s + var(--pi, 0) * 80ms);
+}
+@keyframes flowPop {
+  to { opacity: 1; transform: scale(1); }
+}
+/* 悬停：节点轻浮起 + 图标亮起 */
+.about-flow-node { transition: transform 0.2s, border-color 0.2s; }
+.about-flow-node:hover { transform: translateY(-3px); border-color: rgba(93,240,168,0.45); }
+.about-flow-node:hover .about-flow-node-icon {
+  color: #5df0a8; border-color: rgba(93,240,168,0.55);
+  box-shadow: 0 0 16px rgba(15,157,88,0.3);
+  transition: color 0.2s, border-color 0.2s, box-shadow 0.2s;
+}
+/* 尊重系统减弱动效偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .about-flow .fx, .about-flow .fx-arrow, .about-flow-platforms .about-flow-platforms-item {
+    opacity: 1; transform: none; animation: none !important;
+  }
+  .about-flow.play .about-flow-scene,
+  .about-flow.play .about-flow-node.accent,
+  .about-flow.play .about-flow-group::after,
+  .about-flow.play .about-flow-conn,
+  .about-flow .about-flow-packet { animation: none !important; opacity: 0; }
 }
 
 /* Android 端专节 */

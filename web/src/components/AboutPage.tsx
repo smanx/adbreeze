@@ -9,7 +9,7 @@
 // 截图替换：把图片放进 web/screenshots/ 并按 Section.shot 命名
 // （如 mirror.png），site 构建（pnpm run build:site）后自动显示；文件缺失时
 // 显示 CSS 占位（img onError 回退）。主应用构建不包含截图。
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toggleLang, useT } from '../i18n'
 import { Icon } from './Icon'
 
@@ -45,6 +45,22 @@ export default function AboutPage() {
   const t = useT()
   // Docker 一键运行：复制到剪贴板（与 README 的 Docker 节命令一致）
   const [copied, setCopied] = useState(false)
+  // 控制流程动效：滚动进入视口后加 .play 一次性触发入场动画
+  const flowRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    const el = flowRef.current
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      flowRef.current?.classList.add('play')
+      return
+    }
+    const io = new IntersectionObserver(entries => {
+      for (const e of entries) {
+        if (e.isIntersecting) { el.classList.add('play'); io.disconnect() }
+      }
+    }, { threshold: 0.25 })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [])
   const DOCKER_CMD = 'docker run -d --name adbreeze -p 9080:9080 -p 9443:9443 -v adbreeze-config:/config ghcr.io/smanx/adbreeze:latest'
   const copyDocker = async () => {
     try {
@@ -56,8 +72,9 @@ export default function AboutPage() {
 
   return (
     <div className="about-page">
-      {/* 背景装饰层：极光渐变 + 网格，纯 CSS 不耗资源 */}
+      {/* 背景装饰层：照片底图（仅 site 构建打包，主应用构建按截图同规则排除）+ 极光渐变 + 网格 */}
       <div className="about-bg" aria-hidden="true">
+        {import.meta.env.MODE === 'site' && <div className="about-bg-photo" />}
         <div className="about-bg-aurora" />
         <div className="about-bg-grid" />
       </div>
@@ -66,6 +83,16 @@ export default function AboutPage() {
         <span className="brand">ADBreeze</span>
         <span className="about-features-badge">Features</span>
         <span className="spacer" />
+        <a
+          className="about-gh-link"
+          href="https://github.com/smanx/adbreeze"
+          target="_blank"
+          rel="noopener noreferrer"
+          title={t('about.ghLink')}
+          aria-label={t('about.ghLink')}
+        >
+          <Icon name="github" size={20} />
+        </a>
         <button className="btn tiny ghost" onClick={() => toggleLang()} title={t('topbar.langTip')}>
           {t('topbar.langBtn')}
         </button>
@@ -106,17 +133,17 @@ export default function AboutPage() {
         </section>
 
         {/* 控制流程：两种场景的图形化链路（图标 + 短标签，避免大段文字） */}
-        <section className="about-flow">
+        <section ref={flowRef} className="about-flow">
           <h2><Icon name="globe" size={20} /> {t('about.secFlow')}</h2>
 
           {/* 场景一：被控端与服务端同在一台安卓手机（APK 自身即服务端） */}
           <div className="about-flow-scene">
-            <div className="about-flow-scene-title">
+            <div className="about-flow-scene-title fx" style={{ '--i': 0 } as React.CSSProperties}>
               <Icon name="overview" size={16} /> {t('about.flowSame')}
             </div>
             <div className="about-flow-chain">
               {/* 被控端与服务端同机：两个节点包在同一个「手机」框里 */}
-              <div className="about-flow-group">
+              <div className="about-flow-group fx" style={{ '--i': 1 } as React.CSSProperties}>
                 <span className="about-flow-group-tag">{t('about.flowOnePhone')}</span>
                 <div className="about-flow-group-inner">
                   <FlowNode icon="overview" label={t('about.flowPhone')} sub={t('about.flowDevice')} />
@@ -127,26 +154,26 @@ export default function AboutPage() {
               <FlowConnNote label={t('about.flowHttp')} noteTop={t('about.flowLan')} noteBottom={t('about.flowCf')} />
               <FlowController label={t('about.flowBrowser')} />
             </div>
-            <p className="about-flow-note">{t('about.flowSameNote')}</p>
+            <p className="about-flow-note fx" style={{ '--i': 4 } as React.CSSProperties}>{t('about.flowSameNote')}</p>
           </div>
 
           {/* 场景二：被控端与服务端分离（服务端可跑在电脑 / Docker / 另一台安卓上） */}
           <div className="about-flow-scene">
-            <div className="about-flow-scene-title">
+            <div className="about-flow-scene-title fx" style={{ '--i': 0 } as React.CSSProperties}>
               <Icon name="laptop" size={16} /> {t('about.flowSplit')}
             </div>
             <div className="about-flow-split">
-              <div className="about-flow-devices">
+              <div className="about-flow-devices fx" style={{ '--i': 1 } as React.CSSProperties}>
                 <FlowNode icon="overview" label={t('about.flowDevPhone')} sub={t('about.flowDevice')} />
                 <FlowNode icon="overview" label={t('about.flowDevTv')} sub={t('about.flowDevice')} />
                 <FlowNode icon="overview" label={t('about.flowDevMore')} sub={t('about.flowDevice')} />
               </div>
-              <div className="about-flow-split-mid">
+              <div className="about-flow-split-mid fx-arrow" style={{ '--i': 2 } as React.CSSProperties}>
                 <FlowArrow double />
                 <span className="about-flow-conn">{t('about.flowUsbWifi')}</span>
                 <FlowArrow double />
               </div>
-              <div className="about-flow-servers">
+              <div className="about-flow-servers fx" style={{ '--i': 3 } as React.CSSProperties}>
                 <FlowNode icon="laptop" label="Windows" sub={t('about.flowServer')} accent />
                 <FlowNode icon="laptop" label="macOS / Linux" sub={t('about.flowServer')} accent />
                 <FlowNode icon="docker" label="Docker" sub={t('about.flowServer')} accent />
@@ -155,7 +182,7 @@ export default function AboutPage() {
               <FlowConnNote label={t('about.flowHttp')} noteTop={t('about.flowLan')} noteBottom={t('about.flowCf')} />
               <FlowController label={t('about.flowBrowserAny')} />
             </div>
-            <p className="about-flow-note">{t('about.flowSplitNote')}</p>
+            <p className="about-flow-note fx" style={{ '--i': 4 } as React.CSSProperties}>{t('about.flowSplitNote')}</p>
           </div>
         </section>
 
@@ -280,41 +307,50 @@ function FlowNode({ icon, label, sub, accent }: {
 /** 控制端节点：浏览器大图标 + 各平台小图标行（表明任意设备经浏览器均可访问） */
 function FlowController({ label }: { label: string }) {
   const t = useT()
+  const PLATFORMS = ['windows', 'apple', 'linux', 'phone', 'tablet', 'harmony', 'globe']
   return (
-    <div className="about-flow-node">
+    <div className="about-flow-node fx" style={{ '--i': 4 } as React.CSSProperties}>
       <span className="about-flow-node-icon"><Icon name="browser" size={26} /></span>
       <span className="about-flow-node-label">{label}</span>
       <span className="about-flow-node-sub">{t('about.flowClient')}</span>
       <span className="about-flow-platforms" title={t('about.flowPlatforms')} aria-hidden="true">
-        <Icon name="windows" size={15} />
-        <Icon name="apple" size={15} />
-        <Icon name="linux" size={15} />
-        <Icon name="phone" size={15} />
-        <Icon name="tablet" size={15} />
-        <Icon name="harmony" size={15} />
-        <Icon name="globe" size={15} />
+        {PLATFORMS.map((p, i) => (
+          <span key={p} className="about-flow-platforms-item" style={{ '--pi': i } as React.CSSProperties}>
+            <Icon name={p} size={15} />
+          </span>
+        ))}
       </span>
     </div>
   )
 }
 
-/** 双向箭头：默认水平（⇄），vertical = 竖直（⇅） */
+/**
+ * 双向数据管道：一条带上下双车道的轨道，光点在两条车道上相向流动，
+ * 两端是 ⇄ 箭头。vertical = 竖直（车道左右分布）。
+ */
 function FlowArrow({ vertical, double = false }: { vertical?: boolean; double?: boolean }) {
   void double
   return (
-    <span className={'about-flow-arrow' + (vertical ? ' vert' : '')} aria-hidden="true">
-      <svg width="26" height="14" viewBox="0 0 26 14" fill="none" stroke="currentColor"
-        strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M5 4l-3 3 3 3" /><path d="M21 4l3 3-3 3" /><path d="M2.6 7h20.8" />
+    <span className={'about-flow-pipe' + (vertical ? ' vert' : '')} aria-hidden="true">
+      <svg className="about-flow-pipe-heads" width="30" height="20" viewBox="0 0 30 20" fill="none"
+        stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M8 4l-4 6 4 6" /><path d="M22 4l4 6-4 6" />
       </svg>
+      <span className="about-flow-pipe-track">
+        <span className="about-flow-pipe-lane" />
+        <span className="about-flow-packet fwd" /><span className="about-flow-packet fwd d2" />
+        <span className="about-flow-packet back" /><span className="about-flow-packet back d2" />
+      </span>
     </span>
   )
 }
 
 /** 箭头 + 协议标签 + 上下注释（上=局域网直连，下=CF 穿透） */
-function FlowConnNote({ label, noteTop, noteBottom }: { label: string; noteTop: string; noteBottom: string }) {
+function FlowConnNote({ label, noteTop, noteBottom, index = 3 }: {
+  label: string; noteTop: string; noteBottom: string; index?: number
+}) {
   return (
-    <div className="about-flow-connwrap">
+    <div className="about-flow-connwrap fx" style={{ '--i': index } as React.CSSProperties}>
       <span className="about-flow-connnote top">{noteTop}</span>
       <FlowArrow double />
       <span className="about-flow-conn">{label}</span>

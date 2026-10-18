@@ -653,6 +653,7 @@ const MESSAGES = {
 
   // ---------- 关于页（/about） ----------
   'about.openConsole': ['Open console', '进入控制台'],
+  'about.ghLink': ['View project on GitHub', '在 GitHub 查看项目'],
   'about.zoom': ['Click to zoom in', '点击放大查看'],
   'about.download': ['Download', '下载'],
   'about.dockerRun': ['Copy Docker command', '复制 Docker 运行命令'],
