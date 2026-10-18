@@ -18,6 +18,10 @@ interface Store {
   backendIssue: BackendIssue
   /** 后端配置变更计数：自增即重建事件通道 */
   backendRevision: number
+  /** 外网访问（Cloudflare Tunnel）是否在运行：顶栏徽章数据源；
+   *  登录后查一次，之后由设置页的开关操作直接写入（不再轮询） */
+  tunnelOn: boolean
+  setTunnelOn: (on: boolean) => void
   setPanel: (p: string) => void
   select: (serial: string | null) => void
   refresh: () => Promise<void>
@@ -48,6 +52,8 @@ export const useStore = create<Store>((set, get) => ({
   backendReachable: false,
   backendIssue: 'none',
   backendRevision: 0,
+  tunnelOn: false,
+  setTunnelOn: on => set({ tunnelOn: on }),
 
   setPanel: p => set({ panel: p }),
   select: serial => {

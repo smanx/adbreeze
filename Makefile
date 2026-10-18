@@ -12,19 +12,24 @@ TARGETS := windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 lin
 
 # go:embed 的前端产物（assets.go 引用 web/dist）；CI/本地都走这一条契约。
 # 任一前端源文件比产物新即触发重建，避免打包出陈旧前端。
+# 注意：主应用产物不含关于页截图；截图只进 site 产物（web/dist-site，Nginx/Pages 用）。
 WEB_STAMP  := web/dist/index.html
 WEB_INPUTS := $(wildcard web/index.html web/vite.config.ts web/package.json web/pnpm-lock.yaml) \
               $(wildcard web/src/*.tsx web/src/*.ts web/src/*.css) \
               $(wildcard web/src/*/*.tsx web/src/*/*.ts) \
               $(wildcard web/public/*)
 
-.PHONY: build build-all web docker android android-go android-apk clean
+.PHONY: build build-all web site docker android android-go android-apk clean
 
 ## web: 构建前端产物 web/dist
 web: $(WEB_STAMP)
 
 $(WEB_STAMP): $(WEB_INPUTS)
 	cd web && pnpm install --frozen-lockfile && pnpm run build
+
+## site: 构建静态站点产物 web/dist-site（含关于页截图，供 Nginx / GitHub Pages）
+site:
+	cd web && pnpm install --frozen-lockfile && pnpm run build:site
 
 ## build: 编译当前平台（前端已 embed，需先有 web/dist）
 build: $(WEB_STAMP)

@@ -41,20 +41,20 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
-      - name: Build frontend
+      - name: Build frontend (site，含关于页截图)
         working-directory: web
         run: |
           pnpm install --frozen-lockfile
-          pnpm run build
+          pnpm run build:site
 
-      # Pages 默认经 Jekyll 处理；.nojekyll 关闭它以原样服务 dist 内容
+      # Pages 默认经 Jekyll 处理；.nojekyll 关闭它以原样服务 dist-site 内容
       - name: Disable Jekyll processing
-        run: touch web/dist/.nojekyll
+        run: touch web/dist-site/.nojekyll
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: web/dist
+          path: web/dist-site
 
       - name: Deploy to GitHub Pages
         id: deployment

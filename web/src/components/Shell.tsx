@@ -34,9 +34,9 @@ export default function Shell() {
   const loginSucceeded = useStore(s => s.loginSucceeded)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [loggedOut, setLoggedOut] = useState(false)
-  // 外网访问（Cloudflare Tunnel）状态：顶栏常驻徽章的数据源。
-  // 10s 轻轮询（一个加锁快照，不碰 adb）；失败静默——徽章不值得打扰用户。
-  const [tunnelOn, setTunnelOn] = useState(false)
+  // 外网访问（Cloudflare Tunnel）徽章：数据源在 store（登录后查一次，
+  // 之后由设置页开关隧道时直接写入），这里只订阅
+  const tunnelOn = useStore(s => s.tunnelOn)
   const t = useT()
 
   // 后端配置变更（backendRevision 自增）或重新登录时重建事件通道，
@@ -47,21 +47,17 @@ export default function Shell() {
     return () => { clearReconnectTimer() }
   }, [loggedOut, backendRevision])
 
-  // 隧道徽章轮询：仅在登录态进行。设置页打开时暂停——
-  // 设置页的 TunnelSettings 有自己的 3s 轮询，两叠加会双倍打 /api/tunnel
+  // 隧道徽章：登录后查一次作为初始值；此后由设置页的开关操作直接写 store
+  // （setTunnelOn），不再轮询——徽章即时跟随开关变化，接口零常态调用。
+  const setTunnelOn = useStore(s => s.setTunnelOn)
   useEffect(() => {
-    if (loggedOut || panel === 'settings') return
+    if (loggedOut) return
     let alive = true
-    const poll = async () => {
-      try {
-        const st = await getTunnelStatus()
-        if (alive) setTunnelOn(st.running)
-      } catch { /* 静默：后端不可达时徽章不显示 */ }
-    }
-    void poll()
-    const timer = setInterval(poll, 10000)
-    return () => { alive = false; clearInterval(timer) }
-  }, [loggedOut, panel])
+    getTunnelStatus()
+      .then(st => { if (alive) setTunnelOn(st.running) })
+      .catch(() => { /* 静默：后端不可达时徽章不显示 */ })
+    return () => { alive = false }
+  }, [loggedOut, setTunnelOn])
 
   // 退出：清除后端会话 cookie 与本地 token 并断开事件通道。
   // 会话凭证只有这一处，退出即真失效——这是相对 Basic Auth 的核心改进。
@@ -709,6 +705,7 @@ function TunnelSettings() {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
+  const setTunnelOn = useStore(s => s.setTunnelOn) // 开关隧道后同步顶栏徽章
   const t = useT()
 
   const load = async () => {
@@ -785,7 +782,9 @@ function TunnelSettings() {
     if (!confirm(t('tunnel.confirmStart'))) return
     setBusy(true); setErr(''); setMsg('')
     try {
-      setStatus(await startTunnel())
+      const st = await startTunnel()
+      setStatus(st)
+      setTunnelOn(st.running) // 同步顶栏徽章（store）
     } catch (e) {
       setErr(t('tunnel.startFailed') + (e as Error).message)
     } finally {
@@ -796,7 +795,9 @@ function TunnelSettings() {
   const stop = async () => {
     setBusy(true); setErr(''); setMsg('')
     try {
-      setStatus(await stopTunnel())
+      const st = await stopTunnel()
+      setStatus(st)
+      setTunnelOn(st.running) // 同步顶栏徽章（store）
     } catch (e) {
       setErr(t('tunnel.stopFailed') + (e as Error).message)
     } finally {
