@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="ADBreeze">
-  <rect width="512" height="512" rx="112" fill="#0f9d58"/>
-  <g fill="#ffffff">
-    <rect x="120" y="168" width="280" height="48" rx="24"/>
-    <rect x="160" y="232" width="200" height="48" rx="24"/>
-    <rect x="200" y="296" width="120" height="48" rx="24"/>
-  </g>
-</svg>
