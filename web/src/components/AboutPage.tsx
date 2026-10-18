@@ -74,7 +74,13 @@ export default function AboutPage() {
     <div className="about-page">
       {/* 背景装饰层：照片底图（仅 site 构建打包，主应用构建按截图同规则排除）+ 极光渐变 + 网格 */}
       <div className="about-bg" aria-hidden="true">
-        {import.meta.env.MODE === 'site' && <div className="about-bg-photo" />}
+        {import.meta.env.MODE === 'site' && (
+          // 内联样式：相对 HTML 文档解析（./screenshots/...），不进 CSS、不被 Vite 打包
+          <div
+            className="about-bg-photo"
+            style={{ backgroundImage: 'url(./screenshots/about-bg.png)' }}
+          />
+        )}
         <div className="about-bg-aurora" />
         <div className="about-bg-grid" />
       </div>

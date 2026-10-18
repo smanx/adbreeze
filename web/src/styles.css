@@ -752,9 +752,10 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
 .about-bg { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
 .about-bg-photo {
   position: absolute; inset: 0;
-  /* 图片由 site 构建的 copy-screenshots 脚本拷到 dist-site/screenshots/，
+  /* 背景图 url 由组件以内联样式注入（相对 HTML 文档解析、不被 Vite 打包）：
+     图片由 site 构建的 copy-screenshots 脚本拷到 dist-site/screenshots/，
      主应用构建不打包（组件层也按 MODE 排除渲染） */
-  background: url('./screenshots/about-bg.png') center 28% / cover no-repeat;
+  background-size: cover; background-position: center 28%; background-repeat: no-repeat;
   opacity: 0.38;
 }
 /* 照片上下渐隐进暗色底，保证正文区域文字可读 */
