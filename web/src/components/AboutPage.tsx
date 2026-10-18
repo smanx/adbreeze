@@ -45,6 +45,8 @@ export default function AboutPage() {
   const t = useT()
   // Docker 一键运行：复制到剪贴板（与 README 的 Docker 节命令一致）
   const [copied, setCopied] = useState(false)
+  // 背景图加载失败（如主应用构建未打包该文件）时隐藏背景层，回退纯渐变/网格
+  const [bgErr, setBgErr] = useState(false)
   // 控制流程动效：滚动进入视口后加 .play 一次性触发入场动画
   const flowRef = useRef<HTMLElement | null>(null)
   useEffect(() => {
@@ -72,13 +74,16 @@ export default function AboutPage() {
 
   return (
     <div className="about-page">
-      {/* 背景装饰层：照片底图（仅 site 构建打包，主应用构建按截图同规则排除）+ 极光渐变 + 网格 */}
+      {/* 背景装饰层：照片底图 + 极光渐变 + 网格 */}
+      {/* 背景图与截图同规则：引用 ./screenshots/about-bg.png（相对文档解析，不被 Vite
+          打包），site 构建由 copy-screenshots 拷入、dev 由 vite 静态服务、主应用生产
+          构建文件不存在 → onError 隐藏背景层，仅剩极光/网格（与截图占位同理） */}
       <div className="about-bg" aria-hidden="true">
-        {import.meta.env.MODE === 'site' && (
-          // 内联样式：相对 HTML 文档解析（./screenshots/...），不进 CSS、不被 Vite 打包
+        {!bgErr && (
           <div
             className="about-bg-photo"
             style={{ backgroundImage: 'url(./screenshots/about-bg.png)' }}
+            onError={() => setBgErr(true)}
           />
         )}
         <div className="about-bg-aurora" />
