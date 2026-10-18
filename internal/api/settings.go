@@ -64,50 +64,102 @@ func (s *Server) putAdbSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 落盘（失败则不改变运行时状态）
-	cur := s.settings.Get()
-	cur.AdbPath = req.Path
-	if err := s.settings.Set(cur); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.mgr.SetAdbPath(req.Path)
-
-	// 用新路径重启 server，让切换立即生效而非等到下次崩溃自愈。
-	// restart 失败不回滚设置：路径本身已验证可执行，失败多半是环境问题
-	// （如 5037 被别的 adb 占用），保留用户选择并在 message 里如实说明。
-	restarted := true
-	var restartMsg string
-	if err := s.restartAdbServer(); err != nil {
-		restarted = false
-		restartMsg = err.Error()
-		log.Printf("[adb] 切换 adb 路径后重启 server 失败: %v", err)
-	}
-
-	msg := "已切换 adb 路径"
-	if restarted {
-		msg += "，adb server 已用新路径重启"
-	} else {
-		msg += "（adb server 重启失败：" + restartMsg + "，将在下次自动恢复时使用新路径）"
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"message":   msg,
-		"path":      req.Path,
-		"restarted": restarted,
-		"version":   versionOut,
-	})
+	// 落盘 + 切运行时 + 重启 server（与一键安装成功后的自动切换共用同一条链路）
+	writeJSON(w, http.StatusOK, s.applyAdbPathWithRestart(req.Path, versionOut))
 }
 
-// restartAdbServer 用当前路径执行 kill-server 再 start-server，
+// adbCandidates GET /api/settings/adb/candidates
+//
+// 设置页「快捷切换」用：列出所有可用的 adb 候选（当前生效 / 一键安装落点 /
+// 常见安装位置扫描），每项带 version 探测结果，点击即切换。
+func (s *Server) adbCandidates(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, adb.ScanCandidates(s.dataDir, s.mgr.AdbPath()))
+}
+
+// startAdbInstall POST /api/settings/adb/install
+//
+// 一键安装 adb（platform-tools）：从 Google 官方仓库下载当前平台的 zip 到
+// 数据目录 platform-tools/（URL 由服务端拼装，见 internal/adb/install.go）。
+// 下载在后台进行，立即返回当前状态；进度经 GET 轮询。
+// 安装成功后自动切换：设置里存档的路径会更新为新位置（保存时已存的旧路径
+// 优先级高于自动探测，装完必须显式接管才能立即生效）。
+func (s *Server) startAdbInstall(w http.ResponseWriter, _ *http.Request) {
+	if err := s.adbInst.Start(); err != nil {
+		// 安装中 / 平台不受支持 / 数据目录未知：都是"现在不能开始"的冲突
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, s.adbInst.Status())
+}
+
+// adbInstallStatus GET /api/settings/adb/install
+func (s *Server) adbInstallStatus(w http.ResponseWriter, _ *http.Request) {
+	st := s.adbInst.Status()
+	// 首次看到安装成功（本进程生命周期内）时自动切换到新装的 adb：
+	// 写入设置存档 + 切运行时路径 + 重启 server。与用户在设置页手动保存
+	// 同一条链路（putAdbSettings），差异仅在路径来源是安装落点。
+	if st.State == adb.AdbInstallDone && s.instAppliedPath != st.Path {
+		s.instAppliedPath = st.Path
+		if err := s.applyAdbPath(st.Path); err != nil {
+			log.Printf("[adb] 自动切换到新安装的 adb 失败: %v", err)
+		}
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+// applyAdbPath 把路径落盘并切运行时路径，然后重启 adb server 生效。
+// 一键安装成功后的自动切换用（错误直接返回，由调用方记日志）。
+func (s *Server) applyAdbPath(path string) error {
+	cur := s.settings.Get()
+	cur.AdbPath = path
+	if err := s.settings.Set(cur); err != nil {
+		return err
+	}
+	s.mgr.SetAdbPath(path)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return s.restartAdbServerWith(ctx)
+}
+
+// applyAdbPathWithRestart 把路径落盘 + 切运行时路径 + 重启 server，返回设置页
+// 所需的 message / restarted / version 字段（设置页手动保存场景用）。
+// 落盘失败返回 {"error": ...}（调用方转 500）；重启失败不回滚设置：
+// 路径本身已验证可执行，失败多半是环境问题（如 5037 被别的 adb 占用），
+// 保留用户选择并在 message 里如实说明。
+func (s *Server) applyAdbPathWithRestart(path, versionOut string) map[string]any {
+	cur := s.settings.Get()
+	cur.AdbPath = path
+	if err := s.settings.Set(cur); err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	s.mgr.SetAdbPath(path)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := s.restartAdbServerWith(ctx); err != nil {
+		log.Printf("[adb] 切换 adb 路径后重启 server 失败: %v", err)
+		return map[string]any{
+			"message":   "已切换 adb 路径（adb server 重启失败：" + err.Error() + "，将在下次自动恢复时使用新路径）",
+			"path":      path,
+			"restarted": false,
+			"version":   versionOut,
+		}
+	}
+	return map[string]any{
+		"message":   "已切换 adb 路径，adb server 已用新路径重启",
+		"path":      path,
+		"restarted": true,
+		"version":   versionOut,
+	}
+}
+
+// restartAdbServerWith 用当前路径执行 kill-server 再 start-server，
 // 让新二进制接管 5037 端口。kill 失败（本来就没在跑）不视为错误。
-func (s *Server) restartAdbServer() error {
+func (s *Server) restartAdbServerWith(ctx context.Context) error {
 	path, err := adb.ResolveAdbPath(s.mgr.AdbPath())
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
 	_ = adb.RunAdb(ctx, path, "kill-server")
 	if err := adb.RunAdb(ctx, path, "start-server"); err != nil {
 		return err

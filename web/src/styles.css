@@ -80,7 +80,7 @@ input, select {
 }
 .conn-dot.ok { background: var(--primary); }
 .conn-dot.err { background: var(--danger); }
-/* 顶栏「外网访问中」徽章：公网暴露期间常驻可见（防遗忘），点击跳设置页 */
+/* 顶栏「外网访问已开启」徽章：公网暴露期间常驻可见（防遗忘），纯图标 + 悬停气泡，点击跳设置页 */
 .tunnel-badge { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; color: var(--primary); }
 .tunnel-badge .ico { display: block; }
 .current-device {
@@ -223,6 +223,23 @@ input, select {
   background: #eef1f4; padding: 1px 5px; border-radius: 4px; word-break: break-all;
 }
 .hint.ok-text { color: var(--primary); }
+
+/* 二进制候选快捷切换（ADB 路径 / cloudflared 通用） */
+.candidate-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.candidate-list li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; font-size: 12px; }
+.candidate-btn { flex-shrink: 0; }
+.candidate-tag {
+  flex-shrink: 0; padding: 1px 6px; border-radius: 10px;
+  font-size: 11px; background: #eef1f4; color: var(--text);
+}
+.candidate-tag.src-current { background: var(--primary); color: #fff; }
+.candidate-tag.src-installed { background: #e3f2e3; color: #2c6e2c; }
+.candidate-path {
+  font-family: ui-monospace, Consolas, monospace; background: #eef1f4;
+  padding: 1px 5px; border-radius: 4px; word-break: break-all;
+  max-width: 100%;
+}
+.candidate-ver { color: var(--text-dim, #888); }
 
 /* 外网访问（Cloudflare Tunnel）设置卡片 */
 .tunnel-url {
@@ -694,9 +711,8 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
   /* 顶栏退出按钮：只留图标不显示文字（名称走悬停气泡 / aria-label） */
   .logout-btn { padding: 6px 8px; }
   .logout-btn .logout-txt { display: none; }
-  /* 外网徽章同理：手机端只留地球图标 */
+  /* 外网徽章：本来就是纯图标（文字走悬停气泡），手机端仅收紧内边距 */
   .tunnel-badge { padding: 3px 6px; }
-  .tunnel-badge .tunnel-badge-txt { display: none; }
   .tabbar {
     display: flex; position: fixed; left: 0; right: 0; bottom: 0; height: var(--tabbar-h);
     background: var(--panel); border-top: 1px solid var(--border); z-index: 80;

@@ -6,6 +6,8 @@ import android.content.Intent
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -95,6 +97,7 @@ class MainActivity : Activity() {
             return
         }
         saveConfig()
+        requestIgnoreBatteryOptimization()
         startForegroundService(Intent(this, ServerService::class.java))
         Toast.makeText(this, Lang.t("toast.starting"), Toast.LENGTH_SHORT).show()
         syncState()
@@ -109,12 +112,32 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * 申请电池优化白名单：已是白名单则静默跳过，否则弹系统对话框（仅首次）。
+     * 用户拒绝也不阻塞启动——只是后台存活率下降。
+     */
+    private fun requestIgnoreBatteryOptimization() {
+        val pm = getSystemService(PowerManager::class.java)
+        if (pm.isIgnoringBatteryOptimizations(packageName)) return
+        runCatching {
+            startActivity(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName"))
+            )
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         ServerService.logListeners.add(logListener)
         ServerService.phaseListeners.add(phaseListener)
-        // 回放已有日志（应用重开 / 从通知回来）
-        logView.text = ServerService.logLines.joinToString("\n")
+        // 回放已有日志（应用重开 / 从通知回来）。
+        // 先快照再 join：logLines 是同步包装的 ArrayDeque，日志线程并发写入，
+        // 直接迭代会 ConcurrentModificationException（真机崩溃实录）。
+        val snapshot = synchronized(ServerService.logLines) {
+            ServerService.logLines.toList()
+        }
+        logView.text = snapshot.joinToString("\n")
         syncState()
     }
 

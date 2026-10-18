@@ -203,6 +203,14 @@ func (s *Server) tunnelStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.tun.Status())
 }
 
+// tunnelCandidates GET /api/settings/tunnel/candidates
+//
+// 设置页「快捷切换」用：列出所有可用的 cloudflared 候选（当前指定 /
+// 一键安装落点 / PATH / 常见安装位置），每项带 version 探测结果。
+func (s *Server) tunnelCandidates(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, tunnel.ScanCandidates(s.dataDir, s.tun.Options().Binary))
+}
+
 // startTunnelInstall POST /api/settings/tunnel/install
 //
 // 一键安装 cloudflared：从官方 GitHub releases 下载当前平台二进制到数据目录

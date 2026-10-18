@@ -31,8 +31,13 @@ type Server struct {
 	mirror   *scrcpy.Manager
 	webrtc   *webrtc.Manager
 	settings *settings.Store
-	tls      tlsutil.Info // HTTPS 证书元信息（设置页证书安装功能用）
-	tun      *tunnel.Manager
+	adbInst  *adb.AdbInstaller
+	// instAppliedPath 记录已自动切换到的新装 adb 路径（done 只应用一次，幂等）
+	instAppliedPath string
+	// dataDir 数据目录（候选扫描/一键安装落点都从这推导）
+	dataDir string
+	tls     tlsutil.Info // HTTPS 证书元信息（设置页证书安装功能用）
+	tun     *tunnel.Manager
 }
 
 // Deps 是 New 的依赖集合。位置参数已多到容易传错位，收拢成结构体：
@@ -44,6 +49,8 @@ type Deps struct {
 	Mirror      *scrcpy.Manager
 	WebFS       fs.FS
 	Settings    *settings.Store
+	AdbInst     *adb.AdbInstaller
+	DataDir     string
 	CORSOrigins string
 	TLS         tlsutil.Info // HTTPS 证书元信息（设置页证书安装功能用）
 	Tunnel      *tunnel.Manager
@@ -55,7 +62,7 @@ func New(d Deps) http.Handler {
 	s := &Server{
 		auth: d.Auth, version: d.Version, mgr: d.Adb, mirror: d.Mirror,
 		webrtc: webrtc.NewManager(d.WebRTCSTUN), settings: d.Settings,
-		tls: d.TLS, tun: d.Tunnel,
+		adbInst: d.AdbInst, dataDir: d.DataDir, tls: d.TLS, tun: d.Tunnel,
 	}
 	mux := http.NewServeMux()
 
@@ -108,6 +115,9 @@ func New(d Deps) http.Handler {
 	// 运行时设置（adb 可执行文件路径可随时切换）
 	authed.HandleFunc("GET /api/settings/adb", s.getAdbSettings)
 	authed.HandleFunc("POST /api/settings/adb", s.putAdbSettings)
+	authed.HandleFunc("POST /api/settings/adb/install", s.startAdbInstall)
+	authed.HandleFunc("GET /api/settings/adb/install", s.adbInstallStatus)
+	authed.HandleFunc("GET /api/settings/adb/candidates", s.adbCandidates)
 	// HTTPS 证书：状态查询 + CA 证书 / Apple 描述文件下载（设置页安装引导）
 	authed.HandleFunc("GET /api/settings/tls", s.tlsStatus)
 	// 外网访问（Cloudflare Tunnel）：设置读写 + 一键安装 + 启停 + 状态
@@ -115,9 +125,12 @@ func New(d Deps) http.Handler {
 	authed.HandleFunc("PUT /api/settings/tunnel", s.putTunnelSettings)
 	authed.HandleFunc("POST /api/settings/tunnel/install", s.startTunnelInstall)
 	authed.HandleFunc("GET /api/settings/tunnel/install", s.tunnelInstallStatus)
+	authed.HandleFunc("GET /api/settings/tunnel/candidates", s.tunnelCandidates)
 	authed.HandleFunc("GET /api/tunnel", s.tunnelStatus)
 	authed.HandleFunc("POST /api/tunnel/start", s.startTunnel)
 	authed.HandleFunc("POST /api/tunnel/stop", s.stopTunnel)
+	// 服务日志（设置页展示进程 log 输出的环形缓冲）
+	authed.HandleFunc("GET /api/logs", s.serviceLogs)
 	mux.Handle("/api/", d.Auth.Middleware(authed))
 
 	// WebSocket（需鉴权，凭 /api/session 签发的会话 cookie）

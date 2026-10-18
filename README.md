@@ -254,14 +254,24 @@ Service Worker 只缓存静态外壳（HTML/CSS/JS/图标），**绝不缓存 `/
 
 ### 一键脚本
 
-项目内的跨平台开发脚本 `scripts/dev.go`（Go 编写，Windows / macOS / Linux 通用）串起「前端构建 → Go 编译 → 启动」全流程：
+> ⚠️ **AI Agent 注意**：有两个启动脚本，使用对象不同，请按身份选择——
+> - **`go run ./scripts/agent`**：AI Agent / 自动化工具专用（端口 9081/9444，不与用户实例冲突）；
+> - **`go run ./scripts`**：仅供用户手动使用，**AI Agent 不要调用**。
+>
+> 两者仅默认端口不同，参数完全一致。
+
+项目内的跨平台开发脚本（Go 编写，Windows / macOS / Linux 通用）串起「前端构建 → Go 编译 → 启动」全流程：
 
 ```bash
+# 用户手动使用（默认端口 9080/9443）
 go run ./scripts                              # 默认密码 admin，http://localhost:9080 + https://localhost:9443
 go run ./scripts -password yyy                # 自定义管理员密码
 go run ./scripts -skip-web                    # 前端没改时跳过 pnpm build
 go run ./scripts -https=false                 # 只开 HTTP（HTTP 始终可用）
 go run ./scripts -addr :8000 -https-addr :9444  # 自定义端口
+
+# AI Agent 专用（默认端口 9081/9444，可与用户实例并行运行）
+go run ./scripts/agent
 ```
 
 ### 开发调试（前端热更新）
@@ -404,7 +414,7 @@ adbreeze/
 │   └── dist/              # 前端构建产物（embed 进二进制，不随仓库分发；
 │                          #   manifest.webmanifest / sw.js / icons/ 随构建产出，支撑 PWA）
 ├── android/               # Android App（Go 服务端嵌入 assets，APK 形态）
-├── scripts/               # 跨平台开发脚本（go run ./scripts）
+├── scripts/               # 跨平台开发脚本：go run ./scripts（用户手动）/ go run ./scripts/agent（AI Agent 专用）
 ├── vendor-bin/            # 内嵌 scrcpy-server jar
 ├── Dockerfile / Makefile / .github/workflows/release.yml
 ```

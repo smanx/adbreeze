@@ -50,7 +50,16 @@ const (
 
 	// maxBackoff：自动重启退避上限。
 	maxBackoff = 30 * time.Second
+
+	// 429 退避：trycloudflare 的 quick tunnel 按 IP 限流 provisioning（实测
+	// 返回 "quick tunnel provisioning failed with status 429" 后进程退出码 1）。
+	// 被限流后短退避重试只会一直 429（窗口分钟级），拉长节奏等窗口翻篇。
+	rateLimitBackoff    = 60 * time.Second
+	rateLimitMaxBackoff = 10 * time.Minute
 )
+
+// rateLimitRe 匹配 cloudflared 输出里的限流/配额类失败（不区分大小写）。
+var rateLimitRe = regexp.MustCompile(`(?i)status 429|rate limit|too many requests`)
 
 // urlRe 匹配 quick tunnel 的外网地址。cloudflared 的创建成功横幅形如：
 //
@@ -119,6 +128,9 @@ type Manager struct {
 
 	stopping bool
 	active   bool // supervisor 是否在跑（防重复 Start 拉起两个子进程）
+	// rateLimited：本轮子进程输出里检出 429/限流（supervise 据此拉长退避；
+	// runOnce 下一轮启动时复位）。
+	rateLimited bool
 	stopReq  chan struct{} // Stop 时关闭，触发 runOnce 终止进程
 	done     chan struct{} // supervisor 退出时关闭，Stop 等待它
 	appCtx   context.Context
@@ -261,6 +273,7 @@ func (m *Manager) supervise() {
 		m.mu.Lock()
 		stopping := m.stopping
 		auto := m.opts.AutoRestart
+		rateLimited := m.rateLimited
 		m.mu.Unlock()
 		if stopping || m.appCtx.Err() != nil {
 			return
@@ -268,7 +281,16 @@ func (m *Manager) supervise() {
 		if !auto {
 			return
 		}
-		// 退避等待，可被 Stop / ctx 取消打断
+		// 退避等待，可被 Stop / ctx 取消打断。
+		// 429 限流时换用更长节奏（60s 起步、10 分钟封顶），
+		// 避免在 CF 限流窗口内高频重试、每轮都注定失败。
+		backoffCap := maxBackoff
+		if rateLimited {
+			backoffCap = rateLimitMaxBackoff
+			if delay < rateLimitBackoff {
+				delay = rateLimitBackoff
+			}
+		}
 		select {
 		case <-m.stopReq:
 			return
@@ -276,7 +298,7 @@ func (m *Manager) supervise() {
 			return
 		case <-time.After(delay):
 		}
-		delay = min(delay*2, maxBackoff)
+		delay = min(delay*2, backoffCap)
 
 		m.mu.Lock()
 		m.state = stateStarting
@@ -326,6 +348,7 @@ func (m *Manager) runOnce() {
 	m.state = stateStarting
 	m.url = ""
 	m.errMsg = ""
+	m.rateLimited = false
 	m.startedAt = time.Now()
 	m.mu.Unlock()
 	m.addLog("[tunnel] 启动: " + filepath.Base(bin) + " " + strings.Join(args, " "))
@@ -366,7 +389,6 @@ func (m *Manager) runOnce() {
 		m.mu.Unlock()
 		log.Printf("[tunnel] 外网地址就绪: %s", url)
 	}
-
 	// 阶段二：等进程退出（或被停止）
 	select {
 	case err := <-waitCh:
@@ -377,6 +399,13 @@ func (m *Manager) runOnce() {
 			return
 		}
 		if err != nil {
+			m.mu.Lock()
+			limited := m.rateLimited
+			m.mu.Unlock()
+			if limited {
+				m.setFailed(errors.New("cloudflared 被 Cloudflare 限流（quick tunnel 申请过多），将延长间隔自动重试；详见隧道日志"))
+				return
+			}
 			m.setFailed(fmt.Errorf("cloudflared 异常退出: %w", err))
 			return
 		}
@@ -403,7 +432,8 @@ func (m *Manager) terminate(cmd *exec.Cmd, waitCh chan error) {
 	}
 }
 
-// scanLines 逐行读子进程输出：进环形日志 + 尝试解析 URL（命中一次即止）。
+// scanLines 逐行读子进程输出：进环形日志 + 尝试解析 URL（命中一次即止） +
+// 检出 429/限流（supervise 据此拉长退避；关键错误行同时透传到服务日志）。
 func scanLines(r io.Reader, m *Manager, urlCh chan string) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024) // cloudflared 偶有长行
@@ -415,6 +445,12 @@ func scanLines(r io.Reader, m *Manager, urlCh chan string) {
 			case urlCh <- loc:
 			default: // 已命中过
 			}
+		}
+		if rateLimitRe.MatchString(line) {
+			m.mu.Lock()
+			m.rateLimited = true
+			m.mu.Unlock()
+			log.Printf("[tunnel] cloudflared 限流: %s", strings.TrimSpace(line))
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"adbreeze/internal/api"
 	"adbreeze/internal/auth"
 	"adbreeze/internal/config"
+	"adbreeze/internal/logbuf"
 	"adbreeze/internal/scrcpy"
 	"adbreeze/internal/settings"
 	"adbreeze/internal/tlsutil"
@@ -35,6 +37,9 @@ func main() {
 	// 双击启动场景尤其明显。仅影响本进程的控制台，退出时恢复（见 console_*.go）。
 	enableUTF8Console()
 	defer restoreConsoleCP()
+
+	// 日志镜像进环形缓冲：所有 log 输出同时进内存（网页设置页「服务日志」展示）
+	log.SetOutput(io.MultiWriter(os.Stderr, logbuf.Writer()))
 
 	cfg, err := config.Parse()
 	if err != nil {
@@ -161,6 +166,10 @@ func main() {
 	// HTTPS 未开启时 Enabled=false，界面引导用户先开 HTTPS。
 	tlsInfo := tlsutil.Describe(cfg.HTTPS, tlsDir, cfg.TLSCert != "", extra, cfg.HTTPSAddr)
 
+	// 一键安装 adb（platform-tools）：与 cloudflared 安装器同款机制，
+	// 从 Google 官方仓库下载到 <DataDir>/platform-tools/，装完自动切换生效。
+	adbInst := adb.NewAdbInstaller(cfg.DataDir)
+
 	handler := api.New(api.Deps{
 		Auth:        auth.New(cfg.Password),
 		Version:     version,
@@ -168,6 +177,8 @@ func main() {
 		Mirror:      mirror,
 		WebFS:       webFS,
 		Settings:    st,
+		AdbInst:     adbInst,
+		DataDir:     cfg.DataDir,
 		CORSOrigins: cfg.CORSOrigins,
 		TLS:         tlsInfo,
 		Tunnel:      tun,

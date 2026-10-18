@@ -227,6 +227,51 @@ export interface AdbSettingsSaveResult {
   version: string
 }
 
+// ---------- 一键安装 ADB（platform-tools） ----------
+
+/** GET /api/settings/adb/install 状态（与 TunnelInstallStatus 同构） */
+export interface AdbInstallStatus {
+  /** idle / downloading / verifying / done / failed */
+  state: string
+  /** 0-100；总长未知时为 0 */
+  progress: number
+  downloaded: number
+  /** 0 = 服务端未给出 Content-Length */
+  total: number
+  path: string
+  version: string
+  sha256: string
+  error: string
+  /** RFC3339 */
+  startedAt: string
+  finishedAt: string
+}
+
+export function startAdbInstall(): Promise<AdbInstallStatus> {
+  return api('POST', '/api/settings/adb/install')
+}
+
+export function getAdbInstall(): Promise<AdbInstallStatus> {
+  return api('GET', '/api/settings/adb/install')
+}
+
+/** GET /api/settings/adb/candidates：快捷切换的 adb 候选列表 */
+export interface BinaryCandidate {
+  path: string
+  /** current（当前生效）/ installed（一键安装）/ discovered（扫描发现） */
+  source: string
+  /** version 探测首行；空 = 探测失败（路径可能不可用） */
+  version: string
+}
+
+export function getAdbCandidates(): Promise<BinaryCandidate[]> {
+  return api('GET', '/api/settings/adb/candidates')
+}
+
+export function getTunnelCandidates(): Promise<BinaryCandidate[]> {
+  return api('GET', '/api/settings/tunnel/candidates')
+}
+
 // ---------- 外网访问（Cloudflare Tunnel） ----------
 
 /** GET /api/settings/tunnel 与 PUT 成功后的响应 */
@@ -298,6 +343,27 @@ export function startTunnel(): Promise<TunnelStatus> {
 
 export function stopTunnel(): Promise<TunnelStatus> {
   return api('POST', '/api/tunnel/stop')
+}
+
+// ---------- 服务日志（设置页） ----------
+
+/** GET /api/logs 的一行（服务端 log 输出，环形缓冲） */
+export interface ServiceLogLine {
+  /** 时间（服务端本地格式化） */
+  t: string
+  text: string
+}
+
+export interface ServiceLogs {
+  lines: ServiceLogLine[]
+  /** 服务端当前时间（unix 毫秒），作下一轮 since 增量拉取 */
+  now: number
+}
+
+/** 拉取服务日志；sinceMs（unix 毫秒）缺省时返回全量缓冲 */
+export function getServiceLogs(sinceMs?: number): Promise<ServiceLogs> {
+  const q = sinceMs ? `?since=${sinceMs}` : ''
+  return api('GET', '/api/logs' + q)
 }
 
 // ---------- 一键安装 cloudflared ----------

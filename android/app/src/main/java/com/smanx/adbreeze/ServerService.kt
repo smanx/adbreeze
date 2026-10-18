@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import java.io.File
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -86,6 +87,8 @@ class ServerService : Service() {
     private var adbProc: Process? = null
     private var goProc: Process? = null
     private val watcher = AtomicReference<java.util.concurrent.ScheduledExecutorService?>()
+    /** Partial wake lock：息屏/Doze 期间保住 CPU，让 adb/Go 子进程和看护协程持续运行。 */
+    private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var baseDir: File
     private lateinit var adbBin: File
     private lateinit var goBin: File
@@ -101,6 +104,7 @@ class ServerService : Service() {
         adbBin = File(baseDir, "adb/adb")
         libDir = File(baseDir, "adb")
         goBin = File(baseDir, "adbreeze/adbreeze")
+        acquireWakeLock()
         startForegroundWithNotification(Lang.t("notify.starting"))
         Thread { bootstrap() }.start()
     }
@@ -115,11 +119,23 @@ class ServerService : Service() {
 
     override fun onDestroy() {
         watcher.get()?.shutdownNow()
+        KeepAlive.stop()
+        runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
+        wakeLock = null
         killAll()
         phase = "idle"
         errorMsg = null
         log("服务已停止")
         super.onDestroy()
+    }
+
+    /** 持有不限时的 partial wake lock（服务存续期间 CPU 不休眠；onDestroy 释放）。 */
+    private fun acquireWakeLock() {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "adbreeze:server").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
     }
 
     // ---------- 配置 ----------
@@ -154,9 +170,17 @@ class ServerService : Service() {
             phase = "ready"
             log("服务就绪：http://127.0.0.1:$httpPort（用浏览器打开操作设备）")
             log("HTTPS 已按 PC 端默认开启：https://127.0.0.1:$httpsPort（局域网设备硬解投屏需导入 CA，见网页设置页）")
-            for (ip in lanIps()) log("局域网访问：http://$ip:$httpPort · https://$ip:$httpsPort")
+            val ips = lanIps()
+            for (ip in ips) log("局域网访问：http://$ip:$httpPort · https://$ip:$httpsPort")
             startWatcher()
-            startForegroundWithNotification(Lang.t("notify.running", mapOf("port" to httpPort)))
+            // 通知中心的服务卡片带上局域网地址：其他设备照着输即可连
+            startForegroundWithNotification(
+                Lang.t("notify.running", mapOf("port" to httpPort))
+                    .let { t ->
+                        if (ips.isEmpty()) t else t + "\n" +
+                            Lang.t("notify.lan", mapOf("url" to "http://${ips.first()}:$httpPort"))
+                    }
+            )
         } catch (e: Throwable) {
             errorMsg = e.message ?: e.toString()
             phase = "error" // 先设 errorMsg 再置 error：监听者刷新 UI 时要能读到
@@ -350,11 +374,18 @@ class ServerService : Service() {
             NotificationChannel(CHANNEL_ID, Lang.t("notify.channel"), NotificationManager.IMPORTANCE_LOW)
         )
         val n = buildNotification(text)
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        // mediaPlayback 类型：让 ROM 冻结器（ColorOS HansManager 等）按「正在播放音频」
+        // 豁免本进程（配合 KeepAlive 的静音流）；specialUse 仅作 34+ 的次选不再单独用
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(
+                NOTIFICATION_ID, n,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
         } else {
             startForeground(NOTIFICATION_ID, n)
         }
+        KeepAlive.start()
     }
 
     private fun buildNotification(text: String): Notification {

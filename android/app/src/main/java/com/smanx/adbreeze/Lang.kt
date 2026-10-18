@@ -66,6 +66,7 @@ object Lang {
         "notify.channel" to ("ADBreeze 服务" to "ADBreeze service"),
         "notify.starting" to ("服务启动中…" to "Starting service…"),
         "notify.running" to ("运行中：http://127.0.0.1:{port}" to "Running: http://127.0.0.1:{port}"),
+        "notify.lan" to ("局域网：{url}" to "LAN: {url}"),
         "notify.failed" to ("启动失败：{msg}" to "Failed to start: {msg}"),
         "notify.stop" to ("停止服务" to "Stop service"),
 
@@ -92,8 +93,8 @@ object Lang {
 
     fun isZh() = current == ZH
 
-    /** 切换按钮上显示当前语言的短标签（文/en），占位小不挤控制台布局。 */
-    fun toggleLabel(): String = if (isZh()) "文" else "en"
+    /** 切换按钮上显示当前语言的短标签（文/EN），占位小不挤控制台布局。 */
+    fun toggleLabel(): String = if (isZh()) "文" else "EN"
 
     /** 取文案；args 用于替换 {key} 占位符。 */
     fun t(key: String, args: Map<String, String> = emptyMap()): String {

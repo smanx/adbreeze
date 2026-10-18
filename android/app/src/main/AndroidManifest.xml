@@ -5,7 +5,13 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- mediaPlayback 前台服务：ColorOS/HansManager 只对「正在播放音频」的应用豁免进程冻结 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 息屏后保住 CPU（Doze 期间看护协程与 adb/Go 子进程继续跑） -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 申请电池优化白名单：国产 ROM 后台杀前台服务的首因 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:name=".App"
@@ -29,7 +35,7 @@
             android:name=".ServerService"
             android:exported="false"
             android:stopWithTask="false"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="specialUse|mediaPlayback">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="ADB 控制中心后端：本地运行 adb server 与 Go 服务进程供 WebView 界面使用" />

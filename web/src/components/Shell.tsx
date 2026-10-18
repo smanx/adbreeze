@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { clearReconnectTimer, useStore } from '../store'
-import { api, apiUrl, authHeaders, clearSession, isCrossOrigin, loadBackendConfig, login, normalizeBackendBase, probeBackend, backendBase, getTunnelStatus, getTunnelSettings, saveTunnelSettings, startTunnel, stopTunnel, getTunnelInstall, startTunnelInstall, type AdbSettings, type AdbSettingsSaveResult, type TunnelSettings, type TunnelSettingsSave, type TunnelStatus, type TunnelInstallStatus } from '../api'
+import { api, apiUrl, authHeaders, clearSession, isCrossOrigin, loadBackendConfig, login, normalizeBackendBase, probeBackend, backendBase, getTunnelStatus, getTunnelSettings, saveTunnelSettings, startTunnel, stopTunnel, getTunnelInstall, startTunnelInstall, getAdbInstall, startAdbInstall, getAdbCandidates, getTunnelCandidates, getServiceLogs, type AdbSettings, type AdbSettingsSaveResult, type AdbInstallStatus, type BinaryCandidate, type TunnelSettings, type TunnelSettingsSave, type TunnelStatus, type TunnelInstallStatus, type ServiceLogLine } from '../api'
 import { Placeholder, TABS } from '../panels'
 import DeviceList from './DeviceList'
 import MirrorPanel from '../panels/MirrorPanel'
@@ -15,7 +15,7 @@ import PerfPanel from '../panels/PerfPanel'
 import LayoutPanel from '../panels/LayoutPanel'
 import QrCode from './QrCode'
 import { Icon } from './Icon'
-import { toggleLang, useT } from '../i18n'
+import { toggleLang, useT, type MsgKey } from '../i18n'
 
 // 应用外壳：
 //   PC（≥880px）：顶栏 + 左侧设备栏 + 主内容（标签页面板）
@@ -101,7 +101,7 @@ export default function Shell() {
             aria-label={t('tunnel.badge')}
             onClick={() => setPanel('settings')}
           >
-            <Icon name="globe" /><span className="tunnel-badge-txt">{t('tunnel.badge')}</span>
+            <Icon name="globe" />
           </button>
         )}
         <span className={'conn-dot' + (serverConnected ? ' ok' : '')} title={serverConnected ? t('topbar.serviceOnline') : t('topbar.reconnecting')} />
@@ -194,6 +194,8 @@ function SettingsPanel() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
+  const [inst, setInst] = useState<AdbInstallStatus | null>(null)
+  const instStateRef = useRef('') // 记住上一次见到的安装状态：done 只提示一次
   const t = useT()
 
   const load = async () => {
@@ -207,7 +209,7 @@ function SettingsPanel() {
     }
   }
 
-  useEffect(() => { void load() }, [])
+  useEffect(() => { void load(); void loadInstall() }, [])
 
   // 保存并立即生效：后端会用新路径执行 adb version 验证，再重启 adb server
   const save = async (path: string) => {
@@ -221,6 +223,37 @@ function SettingsPanel() {
     } finally { setBusy(false) }
   }
 
+  // 一键安装状态：done 时刷新设置（新 adb 已被后端自动切换）并提示一次
+  const loadInstall = async () => {
+    try {
+      const st = await getAdbInstall()
+      setInst(st)
+      if (st.state === 'done' && instStateRef.current !== 'done') {
+        setMsg(t('settings.adbInstallDone', { v: st.version || 'platform-tools', p: st.path }))
+        await load()
+      }
+      instStateRef.current = st.state
+    } catch { /* 轮询失败静默 */ }
+  }
+
+  // 安装期间 1s 轮询进度
+  const installing = inst?.state === 'downloading' || inst?.state === 'verifying'
+  useEffect(() => {
+    if (!installing) return
+    const timer = setInterval(() => void loadInstall(), 1000)
+    return () => clearInterval(timer)
+  }, [installing])
+
+  // 一键安装 platform-tools：后台下载，装完由后端自动切换并重启 adb server
+  const install = async () => {
+    setErr(''); setMsg('')
+    try {
+      setInst(await startAdbInstall())
+    } catch (e) {
+      setErr(t('settings.adbInstallFailed') + (e as Error).message)
+    }
+  }
+
   const usingDefault = !!info && info.path === ''
 
   return (
@@ -228,10 +261,6 @@ function SettingsPanel() {
       <h2>{t('settings.title')}</h2>
 
       <BackendSettings />
-
-      <TlsSettings />
-
-      <TunnelSettings />
 
       <div className="settings-block">
         <h3>{t('settings.adbPath')}</h3>
@@ -255,7 +284,42 @@ function SettingsPanel() {
             onClick={() => save('')} title={t('settings.usePathTitle')}>
             {t('settings.resetDefault')}
           </button>
+          <button
+            className="btn"
+            disabled={busy || installing}
+            onClick={() => void install()}
+            title={t('settings.adbInstallTip')}
+          >
+            {installing ? t('settings.adbInstalling') : t('settings.adbInstall')}
+          </button>
         </div>
+        {installing && (
+          <>
+            <div className="tunnel-progress">
+              <div className="tunnel-progress-fill" style={{ width: (inst?.progress || 0) + '%' }} />
+            </div>
+            <p className="hint">
+              {inst?.state === 'verifying'
+                ? t('settings.adbInstallVerifying')
+                : inst && inst.total > 0
+                  ? t('settings.adbInstallProgressKnown', { n: inst.progress, d: fmtMB(inst.downloaded), t: fmtMB(inst.total) })
+                  : t('settings.adbInstallProgressUnknown', { d: fmtMB(inst?.downloaded || 0) })}
+            </p>
+          </>
+        )}
+        {!installing && inst?.state === 'failed' && <p className="hint error-text">{t('settings.adbInstallFailed') + inst.error}</p>}
+        {!installing && inst?.state === 'done' && inst.path && (
+          <p className="hint">
+            {t('settings.adbInstalledTo')}<code>{inst.path}</code>
+            {inst.sha256 && <>　SHA256 <code>{inst.sha256.slice(0, 16)}…</code></>}
+          </p>
+        )}
+        <CandidatePicker
+          fetcher={getAdbCandidates}
+          onPick={p => void save(p)}
+          labelKey="settings.candidateTitle"
+          emptyKey="settings.candidateEmpty"
+        />
         {err && <p className="hint error-text">{err}</p>}
         {msg && <p className="hint ok-text">{msg}</p>}
         {info && (
@@ -265,6 +329,12 @@ function SettingsPanel() {
           </p>
         )}
       </div>
+
+      <TunnelSettings />
+
+      <TlsSettings />
+
+      <ServiceLogsBlock />
 
       <p className="hint">
         {t('settings.authHint')}
@@ -547,6 +617,60 @@ function fmtMB(n: number): string {
   return (n / 1048576).toFixed(1) + ' MB'
 }
 
+// 二进制候选快捷切换：details 折叠面板 + 候选列表。
+// 点击候选项即调用 onPick(path)（由调用方执行保存切换链路）。
+// fetcher 由调用方注入（adb / tunnel 各有端点），打开面板时才拉取。
+function CandidatePicker({ fetcher, onPick, labelKey, emptyKey }: {
+  fetcher: () => Promise<BinaryCandidate[]>
+  onPick: (path: string) => void
+  labelKey: MsgKey
+  emptyKey: MsgKey
+}) {
+  const [items, setItems] = useState<BinaryCandidate[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [open, setOpen] = useState(false)
+  const t = useT()
+
+  const load = async () => {
+    setLoading(true)
+    try { setItems(await fetcher()) } catch { setItems([]) } finally { setLoading(false) }
+  }
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    if (next && !items) void load()
+  }
+
+  return (
+    <details className="cert-help candidate-picker" open={open}>
+      <summary onClick={e => { e.preventDefault(); toggle() }}>{t(labelKey)}</summary>
+      {open && (
+        loading && !items ? <p className="hint">{t('common.loading')}</p>
+          : !items || items.length === 0 ? <p className="hint">{t(emptyKey)}</p>
+            : (
+              <ul className="candidate-list">
+                {items.map(c => (
+                  <li key={c.path}>
+                    <button className="btn tiny ghost candidate-btn" onClick={() => onPick(c.path)}>
+                      {t('settings.candidateUse')}
+                    </button>
+                    <span className={'candidate-tag src-' + c.source}>
+                      {t(CANDIDATE_SRC_KEYS[c.source as keyof typeof CANDIDATE_SRC_KEYS] ?? CANDIDATE_SRC_KEYS.discovered)}
+                    </span>
+                    <code className="candidate-path" title={c.path}>{c.path}</code>
+                    {c.version && <span className="hint candidate-ver">{c.version.split('\n')[0]}</span>}
+                  </li>
+                ))}
+              </ul>
+            )
+      )}
+    </details>
+  )
+}
+
+const CANDIDATE_SRC_KEYS = { current: 'settings.candidateSrc.current', installed: 'settings.candidateSrc.installed', discovered: 'settings.candidateSrc.discovered' } as const
+
 type TunnelStateKey = 'tunnel.state.idle' | 'tunnel.state.starting' | 'tunnel.state.running' | 'tunnel.state.stopped' | 'tunnel.state.failed'
 
 const TUNNEL_STATE_KEYS: Record<string, TunnelStateKey> = {
@@ -729,6 +853,7 @@ function TunnelSettings() {
           <span className="hint">{t('tunnel.urlLabel')}</span>
           <code className="tunnel-url">{status.url}</code>
           <button className="btn tiny ghost" onClick={() => void copyUrl()}>{t('tunnel.copy')}</button>
+          <button className="btn tiny ghost" onClick={() => status.url && window.open(status.url, '_blank', 'noopener')}>{t('tunnel.open')}</button>
         </div>
       )}
       {status?.running && status.url && (
@@ -790,6 +915,12 @@ function TunnelSettings() {
           {inst.sha256 && <>　SHA256 <code>{inst.sha256.slice(0, 16)}…</code></>}
         </p>
       )}
+      <CandidatePicker
+        fetcher={getTunnelCandidates}
+        onPick={p => void save({ binary: p })}
+        labelKey="settings.candidateTitle"
+        emptyKey="settings.candidateEmpty"
+      />
       <p className="hint">{t('tunnel.binaryHint')}</p>
 
       <div className="adb-path-row">
@@ -861,6 +992,78 @@ function TunnelSettings() {
       <details className="cert-help">
         <summary>{t('tunnel.logs')}</summary>
         <pre className="tunnel-logs">{status?.logs.length ? status.logs.join('\n') : t('tunnel.noLogs')}</pre>
+      </details>
+    </div>
+  )
+}
+
+// 服务日志（设置页最末区块）：展示本进程 log 输出的环形缓冲。
+// 打开面板时全量拉取；「自动刷新」开启时增量轮询（since = 服务端时间戳，
+// 无客户端时钟漂移问题）。展开/收起期间轮询才运行，离开面板自动停止。
+function ServiceLogsBlock() {
+  const [lines, setLines] = useState<ServiceLogLine[] | null>(null)
+  const [auto, setAuto] = useState(true)
+  const [open, setOpen] = useState(false)
+  const [err, setErr] = useState('')
+  // sinceRef：增量拉取游标（服务端 now 毫秒）；0 = 下次拉全量
+  const sinceRef = useRef(0)
+  const t = useT()
+
+  const load = async (full: boolean) => {
+    try {
+      const since = full ? undefined : sinceRef.current || undefined
+      const r = await getServiceLogs(since)
+      sinceRef.current = r.now
+      if (full) { setLines(r.lines); return }
+      if (r.lines.length) setLines(prev => {
+        const merged = [...(prev || []), ...r.lines]
+        // 与后端环形缓冲同规模兜底：前端最多保留 500 行
+        return merged.length > 500 ? merged.slice(merged.length - 500) : merged
+      })
+      setErr('')
+    } catch (e) {
+      setErr(t('settings.logsLoadFailed') + (e as Error).message)
+    }
+  }
+
+  // 展开时全量拉一次；自动刷新开启时每 3s 增量拉
+  useEffect(() => {
+    if (!open) { sinceRef.current = 0; return }
+    void load(true)
+    if (!auto) return
+    const timer = setInterval(() => void load(false), 3000)
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, auto])
+
+  const clearView = () => {
+    setLines([])
+    // 清空显示只是前端视图清空：游标拨到当前，避免下轮增量把旧日志又灌回来
+    sinceRef.current = Date.now()
+  }
+
+  return (
+    <div className="settings-block">
+      <h3>{t('settings.logs')}</h3>
+      <p className="hint">{t('settings.logsIntro')}</p>
+      <div className="adb-path-row">
+        <button className="btn" disabled={!open} onClick={() => void load(true)}>{t('settings.logsRefresh')}</button>
+        <label className="tunnel-check">
+          <input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)} />
+          {t('settings.logsAuto')}
+        </label>
+        <button className="btn ghost" disabled={!open} onClick={clearView}>{t('settings.logsClearView')}</button>
+      </div>
+      <details className="cert-help" open={open}>
+        <summary onClick={e => { e.preventDefault(); setOpen(o => !o) }}>
+          {t('settings.logs')} · {lines?.length ?? 0}
+        </summary>
+        {err && <p className="hint error-text">{err}</p>}
+        <pre className="tunnel-logs">
+          {lines === null ? t('common.loading')
+            : lines.length === 0 ? t('settings.logsEmpty')
+              : lines.map(l => `${l.t} ${l.text}`).join('\n')}
+        </pre>
       </details>
     </div>
   )
