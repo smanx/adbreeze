@@ -42,9 +42,6 @@ const SECTIONS: { icon: string; shot: string; titleKey: string; items: string[] 
 
 export default function AboutPage() {
   const t = useT()
-  // 回控制台：清掉 hash 即可（hashchange 触发 App 切回 Shell）；
-  // href 保留当前路径（兼容 GitHub Pages 子路径部署），hash 指向根路由
-  const toConsole = () => { location.hash = '#/' }
   // Docker 一键运行：复制到剪贴板（与 README 的 Docker 节命令一致）
   const [copied, setCopied] = useState(false)
   const DOCKER_CMD = 'docker run -d --name adbreeze -p 9080:9080 -p 9443:9443 -v adbreeze-config:/config ghcr.io/smanx/adbreeze:latest'
@@ -71,7 +68,6 @@ export default function AboutPage() {
         <button className="btn tiny ghost" onClick={() => toggleLang()} title={t('topbar.langTip')}>
           {t('topbar.langBtn')}
         </button>
-        <button className="btn tiny" onClick={toConsole}>{t('about.openConsole')}</button>
       </header>
 
       <main className="about-main">
@@ -100,9 +96,6 @@ export default function AboutPage() {
             </a>
             <button className="about-cta about-cta-ghost" onClick={() => void copyDocker()}>
               <Icon name="copy" size={17} /> {copied ? t('about.dockerCopied') : t('about.dockerRun')}
-            </button>
-            <button className="about-cta about-cta-plain" onClick={toConsole}>
-              {t('about.openConsole')} <span className="about-cta-arrow">→</span>
             </button>
           </div>
           {/* Docker 复制成功的命令回显 */}
