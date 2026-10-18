@@ -737,8 +737,8 @@ const MESSAGES = {
 
   'about.secInfra': ['Platform & reliability', '平台与可靠性'],
   'about.fSingle': ['Single-file delivery', '单文件交付'],
-  'about.fSingle.desc': ['Frontend and scrcpy-server embedded in one ~10 MB binary. Deployment = copy a file. Also ships as official Docker image (amd64 + arm64).',
-    '前端与 scrcpy-server 全部嵌入单个约 10MB 二进制，部署 = 拷贝文件；另有官方 Docker 镜像（amd64 + arm64）。'],
+  'about.fSingle.desc': ['Frontend and scrcpy-server embedded in a single binary. Deployment = copy a file. Also ships as official Docker image (amd64 + arm64).',
+    '前端与 scrcpy-server 全部嵌入单个二进制，部署 = 拷贝文件；另有官方 Docker 镜像（amd64 + arm64）。'],
   'about.fHttps': ['HTTPS with self-managed CA', 'HTTPS 自管证书'],
   'about.fHttps.desc': ['Auto-generated local CA + leaf certificates covering all NIC IPs/hostnames. Trust once — network or IP changes never invalidate it. CA / iOS profile downloadable in the settings page.',
     '自动生成本地 CA + 叶证书，SAN 覆盖全部网卡 IP/主机名；信任一次，换网/换 IP 免重导。设置页可直接下载 CA / iOS 描述文件。'],

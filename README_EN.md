@@ -12,6 +12,7 @@ Project intro page (online overview): <https://smanx.github.io/adbreeze/#/about>
 
 ## Features
 
+- **Remote control**: works over the LAN directly, and over the internet via Cloudflare Tunnel — control your Android phone from anywhere
 - **Live screen mirroring**: based on the scrcpy protocol (H.264), hardware-decoded in the browser via WebCodecs with low latency; one stream supports multiple viewers
 - **Audio forwarding**: device audio (Opus) forwarded in real time, decoded via WebCodecs and played through an AudioWorklet; mutable
 - **Reverse control**: mouse click/drag/scroll and PC keyboard drive the device directly; rotation-adaptive (the server parses SPS to track resolution in real time)
@@ -25,7 +26,7 @@ Project intro page (online overview): <https://smanx.github.io/adbreeze/#/about>
 - **Screenshot / APK install**: one-click screencap PNG download; drag-and-drop APK install from the browser
 - **Batch commands**: select multiple devices and run shell commands in parallel
 - **Device hot-plug**: a persistent `host:track-devices` connection pushes device connect/disconnect events in real time
-- **Single-file delivery**: the frontend and scrcpy-server are both embedded in the binary — deployment = copying one file (~10MB)
+- **Single-file delivery**: the frontend and scrcpy-server are both embedded in the binary — deployment = copying one file
 - **adb server self-healing**: automatically restarts the adb server if it disappears
 - **Public internet access (optional)**: enable Cloudflare Tunnel with one click in Settings and the service instantly gets a public HTTPS address — no public IP, no router port forwarding; cloudflared is not bundled (one-click install in Settings keeps the package size unchanged)
 
@@ -71,6 +72,8 @@ go build -o bin/adbreeze.exe ./cmd/adbreeze
 **On Windows, double-click `adbreeze-windows-amd64.exe` and it just runs**: launching with no arguments = default config; once the service is up, the default browser opens the admin UI automatically, and the console window keeps running logs (closing the window stops the service). Running from a console, or with arguments, is also supported — launching with arguments counts as a "console / service scenario" and won't auto-open the browser (add `-open-browser` explicitly if you want it).
 
 > If SmartScreen blocks the first launch ("Windows protected your PC"), click "More info → Run anyway"; every unsigned open-source app gets this prompt. If startup fails, the window stays open with the reason and exits on Enter — it never flashes and vanishes.
+
+> **Prerequisite**: this project controls devices over ADB, so the target Android device must have **Developer options** enabled with **USB debugging** turned on (also enable **Wireless debugging** when connecting via network `adb connect`); otherwise the device cannot be discovered or controlled.
 
 Open `http://localhost:9080` in your browser (HTTPS at `https://localhost:9443`) and enter the admin password in the login box.
 
