@@ -281,8 +281,67 @@ export function initController(canvas: HTMLCanvasElement, audio: HTMLAudioElemen
   if (!visibleBound) {
     visibleBound = true
     document.addEventListener('visibilitychange', () => {
-      renderer?.setPaused(document.visibilityState === 'hidden')
+      if (document.visibilityState === 'hidden') {
+        renderer?.setPaused(true)
+        return
+      }
+      renderer?.setPaused(false)
+      void resumeAfterVisible()
     })
+  }
+}
+
+/**
+ * 返回前台自动恢复：后台期间浏览器会节流/冻结页面，WebSocket 可能被断开、
+ * 音频通道可能掉线，画面表现为「切回来卡死不动」。这里检查各通道健康度：
+ *   - 观看通道已断 → 重建（设备端流还在时只重开 WS/PeerConnection，秒级恢复）；
+ *   - 设备端流已不存在（后台期间被停止/自愈失败）→ 整体重启投屏；
+ *   - 音频上下文被自动播放策略挂起 → resume。
+ * 已显式失败（phase=failed）的会话不动，保留失败原因交给用户重试。
+ */
+async function resumeAfterVisible() {
+  const serial = mirrorSerial
+  if (!serial || mirrorRestarting) return
+  if (lastStatus.phase === 'failed') return
+  // 音频上下文可能被浏览器挂起：恢复播放（不阻塞后续通道检查）
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {})
+  audioEl?.play().catch(() => {})
+
+  mirrorRestarting = true
+  try {
+    // 设备端流是否还活着（不存在时 viewers=0）：决定是重建通道还是整体重启
+    let viewers = 0
+    try {
+      viewers = (await api<{ viewers?: number }>('GET', `/api/devices/${encodeURIComponent(serial)}/mirror`)).viewers ?? 0
+    } catch { viewers = 0 }
+    if (mirrorSerial !== serial) return // 等待期间用户已停止/切换设备
+
+    if (viewers === 0) {
+      await startMirror(serial)
+      return
+    }
+
+    const mode = effectiveMode()
+    const broken = webrtcMode
+      ? !webrtcPC || !mirrorWS
+        || webrtcPC.connectionState === 'failed'
+        || webrtcPC.connectionState === 'closed'
+        || webrtcPC.connectionState === 'disconnected'
+      : !mirrorWS || mirrorWS.readyState !== WebSocket.OPEN
+    if (broken) {
+      waitKeyframe()
+      closeViewers()
+      openViewer(serial, mode)
+      return
+    }
+
+    // 视频通道健在：仅补开可能掉线的音频通道（音频 WS 断开后重试计时器耗尽即放弃）
+    if (!webrtcMode && (audioDup || deviceAudio) && !audioWS && !audioRetryTimer) {
+      openAudioWS(serial)
+    }
+  } catch { /* 恢复失败保留现状：首帧超时兜底会转 failed，用户可手动重试 */ }
+  finally {
+    mirrorRestarting = false
   }
 }
 export function controllerSerial() { return mirrorSerial }
@@ -1159,13 +1218,22 @@ function closeWebrtcViewer() {
   if (audioEl) { audioEl.pause(); audioEl.srcObject = null }
 }
 
+/** 上一次停止投屏的 DELETE 请求（fire-and-forget，但重启前必须等它落地） */
+let pendingStop: Promise<unknown> | null = null
+
 export function stopMirror(callApi: boolean) {
   disarmFirstFrameTimeout()
   if (mirrorWS) { mirrorWS.onclose = null; mirrorWS.close(); mirrorWS = null }
   resetPipeline()
   closeWebrtcViewer()
   closeAudio()
-  if (callApi && mirrorSerial) api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {})
+  if (callApi && mirrorSerial) {
+    // DELETE 不阻塞 UI，但要留存在途句柄：立刻重新投屏时 startMirror 会先
+    // 等它完成，避免「删除旧流」与「新建流」在后端竞态导致启动失败
+    const p = api('DELETE', `/api/devices/${encodeURIComponent(mirrorSerial)}/mirror`).catch(() => {})
+    pendingStop = p
+    void p.then(() => { if (pendingStop === p) pendingStop = null })
+  }
   mirrorSerial = null
   deviceAudio = false
   audioDup = false
@@ -1257,6 +1325,7 @@ export async function startMirror(serial: string) {
   resetPipeline()
   canvasEl?.focus()
   try {
+    if (pendingStop) await pendingStop // 上一次 DELETE 未落地前不能 POST，避免后端竞态
     await api('POST', `/api/devices/${encodeURIComponent(serial)}/mirror`, {
       audioMode: s.audioMode, bitrateMbps: s.bitrateMbps, shortSize: s.shortSize, maxFps: s.maxFps,
       softwareEncoder: needsSoftwareEncoder(s.mode),

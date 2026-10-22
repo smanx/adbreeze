@@ -144,6 +144,14 @@ export class H264Decoder {
       return
     }
 
+    // error 回调触发后浏览器会关闭解码器，但此前的状态仍标记为 decoding：
+    // 不纠正的话后续帧会一直走进 rawDecode 被「state !== configured」无声吞掉，
+    // 表现为画面永久冻结（后台标签页闲置回收/解码出错后必现）。
+    // 转为 reclaimed 后，下一个关键帧会重建解码器并重放缓冲立即接上。
+    if (this.state.type === 'decoding' && this.state.decoder.state === 'closed') {
+      this.state = { type: 'reclaimed', config: this.config }
+    }
+
     if (chunk.key) this.buffered.length = 0
     this.remember(chunk)
 
@@ -246,6 +254,11 @@ export class H264Decoder {
       const pending = this.buffered
       void VideoDecoder.isConfigSupported(swConfig).then(support => {
         if (!support.supported || this.closed) {
+          // 解码器已被浏览器关闭且无法降级：转 reclaimed 等下一个关键帧重建，
+          // 而不是让后续帧被无声吞掉
+          if ('decoder' in this.state && this.state.decoder === decoder) {
+            this.state = { type: 'reclaimed', config: this.config! }
+          }
           this.opts.onError(t('dec.error', { msg: e.message }))
           return
         }
@@ -260,8 +273,17 @@ export class H264Decoder {
           for (const f of pending.slice(firstKey)) this.rawDecode(d, f)
         }
         this.opts.onStats?.()
-      }).catch(() => this.opts.onError(t('dec.error', { msg: e.message })))
+      }).catch(() => {
+        if ('decoder' in this.state && this.state.decoder === decoder) {
+          this.state = { type: 'reclaimed', config: this.config! }
+        }
+        this.opts.onError(t('dec.error', { msg: e.message }))
+      })
       return
+    }
+    // 其余错误：解码器已被浏览器关闭，转 reclaimed 等下一个关键帧重建
+    if ('decoder' in this.state && this.state.decoder === decoder) {
+      this.state = { type: 'reclaimed', config: this.config! }
     }
     this.opts.onError(t('dec.error', { msg: e.message }))
   }

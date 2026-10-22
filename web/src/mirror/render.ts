@@ -543,10 +543,17 @@ export class FrameRenderer {
     }
   }
 
-  /** 后台标签页节流：暂停期间不上屏（解码统计仍由上层负责） */
+  /**
+   * 后台标签页节流：暂停期间不上屏（解码统计仍由上层负责）。
+   * 恢复（p=false）时立即用保留的最新帧重绘：不重绘的话，画面要等
+   * 下一个解码帧才刷新（静止画面下设备端可能长时间不出帧，表现为
+   * 「切回来画面卡死」）。
+   */
   setPaused(p: boolean) {
+    if (this.paused === p) return
     this.paused = p
     if (p) this.clearPending()
+    else this.repaint()
   }
 
   private clearPending() {
@@ -560,7 +567,13 @@ export class FrameRenderer {
   render(frame: VideoFrame) {
     if (this.closed) { frame.close(); return }
     this.setCodedSize(frame.displayWidth, frame.displayHeight)
-    if (this.paused) { frame.close(); return }
+    if (this.paused) {
+      // 后台暂停期间不上屏，但保留最新帧句柄：返回前台时 repaint 立即
+      // 恢复到当前画面（而不是切走前的旧帧）
+      this.lastRGBA?.close()
+      this.lastRGBA = frame
+      return
+    }
 
     this.lastRGBA?.close()
     this.lastRGBA = frame.clone()
@@ -600,7 +613,7 @@ export class FrameRenderer {
    * 返回后可安全丢弃 WASM 堆视图），再按 rAF 节流上屏。
    */
   renderYUV(f: YUVFrame) {
-    if (this.closed || this.paused) return
+    if (this.closed) return
     const x = Math.max(0, Math.min(f.lumaWidth - 1, f.cropLeft | 0))
     const y = Math.max(0, Math.min(f.lumaHeight - 1, f.cropTop | 0))
     const cw = Math.max(2, Math.min(f.lumaWidth - x, f.cropWidth | 0))
@@ -608,6 +621,7 @@ export class FrameRenderer {
     this.setCodedSize(cw, ch)
 
     if (this.kind !== 'webgl') {
+      if (this.paused) return // 2D 转换吃 CPU，后台不做：恢复后由下一帧接上
       this.yuvToRGBA2D(f, x, y, cw, ch)
       return
     }
@@ -633,8 +647,10 @@ export class FrameRenderer {
       f.v.subarray((y >> 1) * f.chromaStride + (x >> 1)))
     gl.pixelStorei(rowLength, 0)
 
-    this.pending = { kind: 'yuv', width: cw, height: ch, limitedRange: f.limitedRange, bt709: f.bt709 }
     this.lastYUV = { width: cw, height: ch, limitedRange: f.limitedRange, bt709: f.bt709 }
+    // 后台暂停：纹理已更新即可，返回前台由 repaint 上屏（不排 rAF，rAF 也不会跑）
+    if (this.paused) return
+    this.pending = { kind: 'yuv', width: cw, height: ch, limitedRange: f.limitedRange, bt709: f.bt709 }
     this.kick()
   }
 
