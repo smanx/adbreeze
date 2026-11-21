@@ -23,8 +23,11 @@ import (
 	"adbreeze/internal/auth"
 	"adbreeze/internal/config"
 	"adbreeze/internal/logbuf"
+	"adbreeze/internal/opencode"
+	"adbreeze/internal/scheduler"
 	"adbreeze/internal/scrcpy"
 	"adbreeze/internal/settings"
+	"adbreeze/internal/taskstore"
 	"adbreeze/internal/tlsutil"
 	"adbreeze/internal/tunnel"
 )
@@ -170,6 +173,22 @@ func main() {
 	// 从 Google 官方仓库下载到 <DataDir>/platform-tools/，装完自动切换生效。
 	adbInst := adb.NewAdbInstaller(cfg.DataDir)
 
+	// 定时任务 / Agent：opencode 安装器 + 任务存储 + cron 调度器。
+	// 安装完全由用户在设置页手动触发；调度器随进程生命周期启停。
+	_ = os.Setenv("ADBREEZE_DATA_DIR", cfg.DataDir) // 供 opencode.Detect 定位安装落点
+	ocInst := opencode.NewInstaller(cfg.DataDir)
+	taskStore := taskstore.New(
+		filepath.Join(cfg.DataDir, "tasks.json"),
+		filepath.Join(cfg.DataDir, "task-runs.jsonl"),
+	)
+	agentBinary := st.Get().Agent.Binary
+	runner := opencode.NewRunner(agentBinary, filepath.Join(cfg.DataDir, "agent-work"), 0)
+	sched := scheduler.New(ctx, taskStore, runner)
+	if err := sched.Start(); err != nil {
+		log.Printf("[scheduler] 启动失败: %v", err)
+	}
+	defer sched.Stop()
+
 	handler := api.New(api.Deps{
 		Auth:        auth.New(cfg.Password),
 		Version:     version,
@@ -183,6 +202,9 @@ func main() {
 		TLS:         tlsInfo,
 		Tunnel:      tun,
 		WebRTCSTUN:  cfg.WebRTCSTUN,
+		OCInst:      ocInst,
+		Tasks:       taskStore,
+		Sched:       sched,
 	})
 
 	// HTTP 始终开启：它是保底入口——自签名证书在浏览器信任之前只能靠它进界面，

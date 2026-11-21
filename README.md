@@ -25,6 +25,8 @@
 - **Logcat 日志**：浏览器内实时查看设备日志
 - **截图 / APK 安装**：一键 screencap 下载 PNG；浏览器拖入 APK 直接安装
 - **批量命令**：勾选多台设备并行执行 shell
+- **定时任务（Agent）**：按 5 段 cron 让 opencode Agent 经 mobile-mcp 自动操作设备；目标设备必选，每次执行都留记录
+- **Agent / MCP 管理**：设置页检测并一键安装 opencode 与 mobile-mcp，模型可搜索选择或直接编辑 opencode 配置文件（写入前自动备份）
 - **设备热插拔**：`host:track-devices` 长连接监听，设备上下线实时推送
 - **单文件交付**：前端与 scrcpy-server 全部嵌入二进制，部署 = 拷贝一个文件
 - **adb server 自愈**：检测到 adb server 消失时自动拉起
@@ -266,6 +268,29 @@ Named 模式：设置页填入 CF 后台的 tunnel token 即可。**建议给固
 
 无头场景（Docker / Termux，没有浏览器 UI）用启动参数：`-tunnel` 开启、`-tunnel-token <token>` 指定 Named 模式；其余配置（cloudflared 路径、协议、自动重启）仍走设置页存档，存档优先、token 缺省时回退到命令行值。`-tunnel` 开启同样会记住状态（下次无 flag 也恢复）。
 
+### 定时任务（Agent + mobile-mcp）
+
+让 Agent 按 cron 自动帮你操作设备：左侧栏「自动化 → 定时任务」（或顶栏时钟图标）进入，可新建、启停、立即执行并查看每次的执行记录。
+
+**前置准备**（都在「设置」页）：
+
+- **Agent (OpenCode)**：自动检测本机 `opencode`，找不到可点「安装 OpenCode」；该卡片还会显示可执行文件路径、版本与配置文件位置
+- **MCP (Mobile MCP)**：把 [`mobile-next/mobile-mcp`](https://github.com/mobile-next/mobile-mcp) 注册进 opencode（需要 Node.js 20+），注册后 Agent 就能通过它操作 Android/iOS 设备
+- **模型**：模型输入框可从 `opencode models` 的列表里按 provider 分组搜索点选，也可手输 `providerID/modelID`，点「保存模型」写入 opencode 配置；「编辑配置文件」可直接改 `opencode.json`（JSONC 容错校验、写入前生成时间戳 `.bak` 备份）
+
+**新建任务**字段：名称、cron（标准 5 段：分 时 日 月 周）、指令 prompt、目标设备、是否启用。
+
+- cron 在弹框内**实时校验**并用自然语言解释，例如 `*/5 * * * *` →「每 5 分钟」、`0 9 * * 1-5` →「工作日 09:00」；写错时错误信息也显示在弹框内
+- **目标设备必须从当前设备列表中选择**，不能手输；执行时 Agent 会被明确告知只操作这台设备
+
+**执行与记录**：
+
+- 到点或点「立即执行」后，每次启动独立 `opencode run --auto` 进程（prompt 经 stdin 传入），同一任务不会重叠执行，超时 10 分钟
+- 「执行记录」里可看每次的触发方式（定时 / 手动）、状态、耗时、完整输出与错误，支持删除单条或清空；任务定义与记录分别存在数据目录的 `tasks.json` 和 `task-runs.jsonl`（最多保留 1000 条）
+- 截图 / UI 自动化类任务可能耗时较久，期间记录显示「执行中」，完成后自动刷新
+
+> Agent 拥有操作设备的完整权限，指令请写清楚要做什么、做到什么程度；默认使用当前 opencode 配置里的模型。
+
 ### 安装为应用（PWA）
 
 前端带 Web App Manifest 与 Service Worker，可作为独立应用安装：
@@ -428,6 +453,19 @@ HTTP 接口通过会话认证：先 `POST /api/session`（body `{"password": "..
 | POST / GET | `/api/settings/tunnel/install` | 一键安装 cloudflared（触发 / 查进度） |
 | GET | `/api/tunnel` | 隧道状态（连接态 / 外网 URL / 日志） |
 | POST | `/api/tunnel/start`、`/api/tunnel/stop` | 隧道开启 / 关闭 |
+| GET | `/api/settings/agent` | Agent 检测信息（路径 / 版本 / 配置路径 / 当前模型） |
+| GET | `/api/settings/agent/models` | 可用模型列表（来自 `opencode models`） |
+| PUT | `/api/settings/agent/model` | 切换默认模型（写入 opencode 配置） |
+| GET / PUT | `/api/settings/agent/config` | 读取 / 编辑 opencode 配置（写入前自动备份） |
+| POST / GET | `/api/settings/agent/install` | 安装 opencode / 查询安装进度 |
+| GET | `/api/settings/mcp` | mobile-mcp 注册状态 |
+| POST | `/api/settings/mcp/install` | 注册 mobile-mcp |
+| GET / POST | `/api/tasks` | 定时任务列表 / 新建 |
+| PUT / DELETE | `/api/tasks/{id}` | 更新 / 删除任务 |
+| POST | `/api/tasks/{id}/run` | 立即执行一次 |
+| GET | `/api/tasks/{id}/runs` | 执行记录列表 |
+| DELETE | `/api/tasks/{id}/runs/{runId}` | 删除单条执行记录 |
+| DELETE | `/api/tasks/{id}/runs` | 清空该任务的执行记录 |
 
 ## 安全提示
 
@@ -448,6 +486,9 @@ adbreeze/
 │   ├── settings/          # 用户偏好持久化（adb 路径 / 隧道配置，0600 落盘）
 │   ├── tlsutil/           # 自签名证书生成 / 复用（HTTPS）
 │   ├── tunnel/            # 外网访问：托管 cloudflared 子进程（CF-TUNNEL-DESIGN.md）
+│   ├── opencode/          # Agent 检测/安装、opencode 配置读写、模型列表、执行器
+│   ├── scheduler/         # 定时任务：5 段 cron 解析与调度
+│   ├── taskstore/         # 任务定义与执行记录持久化（tasks.json / task-runs.jsonl）
 │   └── config/            # 命令行配置
 ├── web/                   # 前端源码（React + Vite）
 │   └── dist/              # 前端构建产物（embed 进二进制，不随仓库分发；

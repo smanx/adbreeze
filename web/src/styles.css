@@ -173,6 +173,16 @@ input, select {
   display: flex; flex-direction: column; padding: 12px; gap: 8px; overflow-y: auto;
 }
 .side-title { margin: 0 0 4px; font-size: 13px; color: var(--muted); }
+/* 侧栏「自动化」入口（定时任务） */
+.side-section { padding-bottom: 10px; border-bottom: 1px solid var(--border); margin-bottom: 2px; }
+.side-link {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text); cursor: pointer; font-size: 13px; text-align: left;
+}
+.side-link:hover { border-color: var(--primary); }
+.side-link.active { border-color: var(--primary); background: #eaf6ef; color: var(--primary); }
+.side-hint { margin: 6px 2px 0; font-size: 11px; color: var(--muted); line-height: 1.45; }
 .content { flex: 1; overflow: auto; padding: 16px; }
 
 /* ---------- 设备列表 ---------- */
@@ -1274,3 +1284,105 @@ body.mirror-max .mirror-body { border-radius: 0; padding: 0; }
   .about-flow-arrow.vert svg { transform: none; }
   .about-android { padding: 18px; }
 }
+
+/* ---------- Agent / MCP 设置 + 定时任务 ---------- */
+.ok-text { color: var(--primary); }
+/* ghost + danger：必须显式恢复透明背景，否则 .btn.danger（同为 2 个类、写在后面）会把背景染红，
+   与这里的红字叠加导致文字几乎看不见 */
+.btn.ghost.danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+.btn.ghost.danger:hover { background: #fdecea; }
+.settings-kv {
+  display: grid; grid-template-columns: auto 1fr; gap: 6px 14px;
+  margin: 10px 0; font-size: 13px;
+}
+.settings-kv dt { color: var(--muted); }
+.settings-kv dd { margin: 0; word-break: break-all; }
+
+/* 定时任务面板 */
+.tasks-panel { display: flex; flex-direction: column; gap: 12px; height: 100%; overflow: hidden; }
+.tasks-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tasks-empty { padding: 24px; text-align: center; }
+.tasks-list { overflow: auto; display: flex; flex-direction: column; gap: 10px; padding-bottom: 12px; }
+.task-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 14px;
+}
+.task-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.task-card-title { font-weight: 600; font-size: 15px; word-break: break-all; }
+.task-switch { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.task-card-meta { margin-top: 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.task-cron { background: #eef1f4; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+.task-card-prompt {
+  margin-top: 8px; font-size: 13px; color: var(--muted); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.task-card-actions { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+.task-modal { max-width: 560px; width: 92vw; }
+/* 弹框内的 cron 校验结果与自然语言说明 */
+.modal-error {
+  margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--danger);
+  border-radius: 6px; background: #fdecea; font-size: 13px;
+}
+.cron-desc {
+  margin: 0; padding: 7px 10px; border: 1px solid #b7e1c4; border-radius: 6px;
+  background: #eaf6ef; color: var(--primary); font-size: 13px;
+}
+.task-form { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow: auto; }
+.task-form label { font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+.task-form label.task-form-chk { flex-direction: row; align-items: center; gap: 8px; }
+.task-form textarea, .task-form input, .task-form select { width: 100%; box-sizing: border-box; }
+.runs-modal { max-width: 720px; width: 94vw; max-height: 82vh; overflow: auto; }
+.runs-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.runs-head h3 { margin: 0; }
+.runs-list { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow: auto; }
+.run-row {
+  display: flex; align-items: center; gap: 12px; padding: 6px 8px; border-radius: 5px;
+  cursor: pointer; font-size: 12px; border: 1px solid transparent;
+}
+.run-row:hover { background: var(--bg); border-color: var(--border); }
+.run-del { margin-left: auto; padding: 2px 8px; }
+.run-status, .run-success, .run-failed, .run-timeout, .run-running {
+  font-size: 11px; padding: 1px 7px; border-radius: 10px; white-space: nowrap;
+}
+.run-success { background: #e3f2e3; color: #2c6e2c; }
+.run-failed { background: #fdeaea; color: #b22222; }
+.run-timeout { background: #fff3cd; color: #8a6d1f; }
+.run-running { background: #e3effd; color: #2c5fa8; }
+.run-detail { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.run-detail h4 { margin: 0 0 6px; font-size: 13px; }
+.run-output {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
+  padding: 10px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all;
+  max-height: 30vh; overflow: auto; margin: 0;
+}
+
+/* opencode 配置文件编辑器弹窗 */
+.config-modal { max-width: 760px; width: 94vw; max-height: 86vh; display: flex; flex-direction: column; }
+.config-modal h3 { margin: 0 0 6px; }
+.config-editor {
+  flex: 1; min-height: 45vh; width: 100%; box-sizing: border-box; resize: vertical;
+  background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 5px;
+  padding: 10px; font-size: 12.5px; line-height: 1.55; tab-size: 2;
+  white-space: pre; overflow: auto; margin: 8px 0;
+}
+
+/* 模型选择器：输入过滤 + 按 provider 分组的可点选列表 */
+.model-picker { position: relative; flex: 1; min-width: 240px; }
+.model-picker > input { width: 100%; box-sizing: border-box; }
+.model-list {
+  position: absolute; z-index: 60; left: 0; right: 0; top: calc(100% + 4px);
+  max-height: 280px; overflow: auto; padding: 4px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.14);
+}
+.model-group + .model-group { margin-top: 4px; }
+.model-group-head {
+  position: sticky; top: -4px; padding: 4px 6px; font-size: 11px; color: var(--muted);
+  background: var(--panel); text-transform: none;
+}
+.model-item {
+  display: block; width: 100%; text-align: left; border: 0; background: transparent;
+  padding: 5px 8px; font-size: 12px; border-radius: 4px; cursor: pointer; color: var(--text);
+}
+.model-item:hover, .model-item.active { background: var(--bg); color: var(--primary); }
+.model-empty { padding: 10px; font-size: 12px; color: var(--muted); }

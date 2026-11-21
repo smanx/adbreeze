@@ -287,14 +287,14 @@ function Shot({ shot, title, icon, onZoom }: {
   )
 }
 
-/** 灯箱：fixed 全屏遮罩 + 原图 contain 完整显示，点击任意处或 Esc 关闭 */
+/** 灯箱：fixed 全屏遮罩 + 原图 contain 完整显示，点关闭按钮或 Esc 关闭（点空白处不关） */
 function ZoomOverlay({ shot, title, onClose }: { shot: string; title: string; onClose: () => void }) {
   const t = useT()
   return (
     <div className="about-zoom" role="dialog" aria-modal="true" aria-label={title}
-      onClick={onClose} onKeyDown={e => { if (e.key === 'Escape') onClose() }}
+      onKeyDown={e => { if (e.key === 'Escape') onClose() }}
       tabIndex={-1} ref={el => el?.focus()}>
-      <button type="button" className="about-zoom-close">{t('about.shotZoomClose')} ✕</button>
+      <button type="button" className="about-zoom-close" onClick={onClose}>{t('about.shotZoomClose')} ✕</button>
       <img src={`./screenshots/${shot}.png`} alt={title} />
     </div>
   )

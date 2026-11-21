@@ -394,3 +394,118 @@ export function startTunnelInstall(): Promise<TunnelInstallStatus> {
 export function getTunnelInstall(): Promise<TunnelInstallStatus> {
   return api('GET', '/api/settings/tunnel/install')
 }
+
+// ---------- Agent（opencode）与 MCP（mobile-mcp） ----------
+
+export interface AgentSettings {
+  detected: boolean
+  path: string
+  version: string
+  binary: string
+  configPath: string
+  model: string
+}
+
+export interface OCInstallStatus {
+  state: string // idle / detected / downloading / verifying / done / failed
+  progress: number
+  downloaded: number
+  total: number
+  path: string
+  version: string
+  sha256: string
+  error: string
+  message: string
+  startedAt: string
+  finishedAt: string
+}
+
+export interface MCPSettings {
+  installed: boolean
+  nodeOk: boolean
+  nodeVersion: string
+  npxPath: string
+  configPath: string
+  message: string
+}
+
+export function getAgentSettings(): Promise<AgentSettings> {
+  return api('GET', '/api/settings/agent')
+}
+export function getAgentModels(): Promise<{ models: string[] }> {
+  return api('GET', '/api/settings/agent/models')
+}
+export function getAgentConfig(): Promise<{ content: string; path: string }> {
+  return api('GET', '/api/settings/agent/config')
+}
+export function putAgentConfig(content: string): Promise<{ message: string }> {
+  return api('PUT', '/api/settings/agent/config', { content })
+}
+export function putAgentModel(model: string): Promise<{ message: string; model: string }> {
+  return api('PUT', '/api/settings/agent/model', { model })
+}
+export function startAgentInstall(): Promise<OCInstallStatus> {
+  return api('POST', '/api/settings/agent/install')
+}
+export function getAgentInstall(): Promise<OCInstallStatus> {
+  return api('GET', '/api/settings/agent/install')
+}
+export function getMCPSettings(): Promise<MCPSettings> {
+  return api('GET', '/api/settings/mcp')
+}
+export function installMCP(): Promise<{ message: string }> {
+  return api('POST', '/api/settings/mcp/install')
+}
+
+// ---------- 定时任务 ----------
+
+export interface ScheduledTask {
+  id: string
+  name: string
+  cron: string
+  prompt: string
+  device: string
+  model: string
+  enabled: boolean
+}
+
+export interface RunRecord {
+  id: string
+  taskId: string
+  taskName: string
+  trigger: string // cron / manual
+  startedAt: string
+  finishedAt: string
+  status: string // running / success / failed / timeout
+  model: string
+  prompt: string
+  output: string
+  error: string
+  exitCode: number
+  durationMs: number
+}
+
+export function listTasks(): Promise<ScheduledTask[]> {
+  return api('GET', '/api/tasks')
+}
+export function createTask(t: ScheduledTask): Promise<ScheduledTask> {
+  return api('POST', '/api/tasks', t)
+}
+export function updateTask(id: string, t: ScheduledTask): Promise<ScheduledTask> {
+  return api('PUT', `/api/tasks/${encodeURIComponent(id)}`, t)
+}
+export function deleteTask(id: string): Promise<{ message: string }> {
+  return api('DELETE', `/api/tasks/${encodeURIComponent(id)}`)
+}
+export function runTask(id: string): Promise<RunRecord> {
+  return api('POST', `/api/tasks/${encodeURIComponent(id)}/run`)
+}
+export function listTaskRuns(id: string, limit = 100): Promise<RunRecord[]> {
+  return api('GET', `/api/tasks/${encodeURIComponent(id)}/runs?limit=${limit}`)
+}
+export function deleteTaskRun(taskId: string, runId: string): Promise<{ message: string }> {
+  return api('DELETE', `/api/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(runId)}`)
+}
+export function clearTaskRuns(id: string): Promise<{ message: string; count: number }> {
+  return api('DELETE', `/api/tasks/${encodeURIComponent(id)}/runs`)
+}

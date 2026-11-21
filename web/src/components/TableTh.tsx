@@ -111,7 +111,7 @@ export function PreviewModal(props: {
     a.click()
   }
   return (
-    <div className="modal-mask" onClick={onClose}>
+    <div className="modal-mask">
       <div className="preview-modal" onClick={e => e.stopPropagation()}>
         <div className="preview-head">
           <h3>{title}</h3>

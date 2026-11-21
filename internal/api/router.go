@@ -12,7 +12,10 @@ import (
 	"adbreeze/internal/adb"
 	"adbreeze/internal/auth"
 	"adbreeze/internal/scrcpy"
+	"adbreeze/internal/opencode"
+	"adbreeze/internal/scheduler"
 	"adbreeze/internal/settings"
+	"adbreeze/internal/taskstore"
 	"adbreeze/internal/tlsutil"
 	"adbreeze/internal/tunnel"
 	"adbreeze/internal/webrtc"
@@ -39,6 +42,11 @@ type Server struct {
 	dataDir string
 	tls     tlsutil.Info // HTTPS 证书元信息（设置页证书安装功能用）
 	tun     *tunnel.Manager
+
+	// 定时任务 / Agent
+	ocInst   *opencode.Installer // opencode 一键安装器
+	tasks    *taskstore.Store    // 任务与执行记录存储
+	sched    *scheduler.Manager  // 定时调度器
 }
 
 // Deps 是 New 的依赖集合。位置参数已多到容易传错位，收拢成结构体：
@@ -56,6 +64,11 @@ type Deps struct {
 	TLS         tlsutil.Info // HTTPS 证书元信息（设置页证书安装功能用）
 	Tunnel      *tunnel.Manager
 	WebRTCSTUN  string // 投屏 WebRTC 的 STUN/TURN 服务器（逗号分隔），见 webrtc.ParseICEServers
+
+	// 定时任务 / Agent（可选；为 nil 时相关接口不可用）
+	OCInst   *opencode.Installer
+	Tasks    *taskstore.Store
+	Sched    *scheduler.Manager
 }
 
 // New 组装路由，返回可直接交给 http.Server 的 Handler。
@@ -64,6 +77,7 @@ func New(d Deps) http.Handler {
 		auth: d.Auth, version: d.Version, mgr: d.Adb, mirror: d.Mirror,
 		webrtc: webrtc.NewManager(d.WebRTCSTUN), settings: d.Settings,
 		adbInst: d.AdbInst, dataDir: d.DataDir, tls: d.TLS, tun: d.Tunnel,
+		ocInst: d.OCInst, tasks: d.Tasks, sched: d.Sched,
 	}
 	mux := http.NewServeMux()
 
@@ -113,6 +127,25 @@ func New(d Deps) http.Handler {
 	authed.HandleFunc("GET /api/devices/{serial}/apps/apk", s.handleAppApk)
 	authed.HandleFunc("GET /api/devices/{serial}/processes", s.handleProcList)
 	authed.HandleFunc("POST /api/devices/{serial}/processes/kill", s.handleProcKill)
+	// Agent（opencode）与 MCP（mobile-mcp）设置
+	authed.HandleFunc("GET /api/settings/agent", s.getAgentSettings)
+	authed.HandleFunc("GET /api/settings/agent/models", s.getAgentModels)
+	authed.HandleFunc("PUT /api/settings/agent/model", s.putAgentModel)
+	authed.HandleFunc("GET /api/settings/agent/config", s.getAgentConfig)
+	authed.HandleFunc("PUT /api/settings/agent/config", s.putAgentConfig)
+	authed.HandleFunc("POST /api/settings/agent/install", s.startAgentInstall)
+	authed.HandleFunc("GET /api/settings/agent/install", s.agentInstallStatus)
+	authed.HandleFunc("GET /api/settings/mcp", s.getMCPSettings)
+	authed.HandleFunc("POST /api/settings/mcp/install", s.installMCP)
+	// 定时任务与执行记录
+	authed.HandleFunc("GET /api/tasks", s.listTasks)
+	authed.HandleFunc("POST /api/tasks", s.createTask)
+	authed.HandleFunc("PUT /api/tasks/{id}", s.updateTask)
+	authed.HandleFunc("DELETE /api/tasks/{id}", s.deleteTask)
+	authed.HandleFunc("POST /api/tasks/{id}/run", s.runTask)
+	authed.HandleFunc("GET /api/tasks/{id}/runs", s.listTaskRuns)
+	authed.HandleFunc("DELETE /api/tasks/{id}/runs/{runId}", s.deleteTaskRun)
+	authed.HandleFunc("DELETE /api/tasks/{id}/runs", s.clearTaskRuns)
 	// 运行时设置（adb 可执行文件路径可随时切换）
 	authed.HandleFunc("GET /api/settings/adb", s.getAdbSettings)
 	authed.HandleFunc("POST /api/settings/adb", s.putAdbSettings)

@@ -25,6 +25,16 @@ type Settings struct {
 	// Tunnel 为外网访问（Cloudflare Tunnel）配置。见 internal/tunnel。
 	// token 是敏感凭证，故整个存档写盘权限收紧到 0600（见 Set）。
 	Tunnel TunnelConfig `json:"tunnel"`
+
+	// Agent 为定时任务所用 Agent（opencode）的偏好。
+	// 模型与 MCP 注册直接写在 opencode 自己的配置文件里，这里只存可执行文件路径。
+	Agent AgentConfig `json:"agent"`
+}
+
+// AgentConfig 是设置页「Agent」卡片可改、重启后仍生效的配置。
+type AgentConfig struct {
+	// Binary 为 opencode 可执行文件路径；空 = 自动探测（PATH / 安装落点）。
+	Binary string `json:"binary"`
 }
 
 // TunnelConfig 是设置页「外网访问」卡片可改、重启进程仍生效的隧道配置。

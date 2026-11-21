@@ -13,6 +13,7 @@ export const TABS = [
   { id: 'logcat', labelKey: 'tab.logcat', phase: '' },
   { id: 'term', labelKey: 'tab.term', phase: '' },
   { id: 'tools', labelKey: 'tab.tools', phase: '' },
+  { id: 'tasks', labelKey: 'tab.tasks', phase: '' },
   { id: 'settings', labelKey: 'tab.settings', phase: '' },
 ] as const
 

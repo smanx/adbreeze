@@ -25,6 +25,8 @@ Project intro page (online overview): <https://smanx.github.io/adbreeze/#/about>
 - **Logcat**: view device logs in real time from the browser
 - **Screenshot / APK install**: one-click screencap PNG download; drag-and-drop APK install from the browser
 - **Batch commands**: select multiple devices and run shell commands in parallel
+- **Scheduled tasks (Agent)**: run an opencode Agent on a 5-field cron through mobile-mcp to operate devices automatically; the target device is mandatory and every run is recorded
+- **Agent / MCP management**: detect and one-click install opencode and mobile-mcp in Settings; pick a model from a searchable list or edit the opencode config file directly (auto-backup before each write)
 - **Device hot-plug**: a persistent `host:track-devices` connection pushes device connect/disconnect events in real time
 - **Single-file delivery**: the frontend and scrcpy-server are both embedded in the binary — deployment = copying one file
 - **adb server self-healing**: automatically restarts the adb server if it disappears
@@ -266,6 +268,29 @@ Security constraints (advisory, not blocking — consistent with the LAN policy 
 
 For headless scenarios (Docker / Termux, no browser UI), use launch flags: `-tunnel` to enable, `-tunnel-token <token>` for Named mode; the rest of the config (cloudflared path, protocol, auto-restart) still comes from the Settings page archive, which takes precedence, with the CLI token as fallback when absent. `-tunnel` also remembers its state (restored next launch even without the flag).
 
+### Scheduled tasks (Agent + mobile-mcp)
+
+Let an Agent operate your devices on a cron schedule: open the **sidebar → Automation → Scheduler** tab (or the clock icon in the top bar) to create tasks, enable/disable them, run them now, and review every run.
+
+**Setup** (all in the Settings page):
+
+- **Agent (OpenCode)**: detects the local `opencode` automatically; if missing, click "Install OpenCode". The card also shows the executable path, version, and config file location
+- **MCP (Mobile MCP)**: registers [`mobile-next/mobile-mcp`](https://github.com/mobile-next/mobile-mcp) with opencode (Node.js 20+ required), so the Agent can control Android/iOS devices through it
+- **Model**: the model field offers a searchable, provider-grouped list from `opencode models`, or you can type a custom `providerID/modelID` and click "Save model" to write it into the opencode config. "Edit config file" opens the raw `opencode.json` editor (JSONC-tolerant validation, timestamped `.bak` backup before every write)
+
+**New task fields**: name, cron (standard 5 fields: minute hour day month week), instruction prompt, target device, enabled.
+
+- The cron expression is **validated and explained in the dialog itself**: `*/5 * * * *` → "Every 5 minutes", `0 9 * * 1-5` → "Every weekday at 09:00"; errors are shown there too, never in the list behind it
+- **The target device must be selected from the current device list** — free text is not accepted. At run time the Agent is explicitly told to operate only that device
+
+**Runs and history**:
+
+- On schedule or when you click "Run now", each run spawns a separate `opencode run --auto` process (prompt passed via stdin); a task never overlaps itself and times out after 10 minutes
+- "Run history" shows each run's trigger (scheduled / manual), status, duration, full output, and errors; individual runs or the whole history can be deleted. Tasks and runs live in the data directory as `tasks.json` and `task-runs.jsonl` (last 1000 runs kept)
+- Screenshot / UI automation jobs can take a while; the record shows "running" until completion, then refreshes automatically
+
+> The Agent has full control of the selected device — write clear, specific instructions. It uses the model currently configured in opencode.
+
 ### Install as an app (PWA)
 
 The frontend ships a Web App Manifest and Service Worker, so it can be installed as a standalone app:
@@ -428,6 +453,19 @@ HTTP endpoints authenticate via sessions: first `POST /api/session` (body `{"pas
 | POST / GET | `/api/settings/tunnel/install` | One-click cloudflared install (trigger / check progress) |
 | GET | `/api/tunnel` | Tunnel status (connectivity / public URL / logs) |
 | POST | `/api/tunnel/start`, `/api/tunnel/stop` | Tunnel enable / disable |
+| GET | `/api/settings/agent` | Agent detection info (path / version / config path / current model) |
+| GET | `/api/settings/agent/models` | Available models (from `opencode models`) |
+| PUT | `/api/settings/agent/model` | Switch the default model (writes the opencode config) |
+| GET / PUT | `/api/settings/agent/config` | Read / edit the opencode config (auto-backup before writing) |
+| POST / GET | `/api/settings/agent/install` | Install opencode / query install progress |
+| GET | `/api/settings/mcp` | mobile-mcp registration status |
+| POST | `/api/settings/mcp/install` | Register mobile-mcp |
+| GET / POST | `/api/tasks` | Scheduled task list / create |
+| PUT / DELETE | `/api/tasks/{id}` | Update / delete a task |
+| POST | `/api/tasks/{id}/run` | Trigger one run immediately |
+| GET | `/api/tasks/{id}/runs` | Run history |
+| DELETE | `/api/tasks/{id}/runs/{runId}` | Delete one run record |
+| DELETE | `/api/tasks/{id}/runs` | Clear all run records for the task |
 
 ## Security Notes
 
@@ -448,6 +486,9 @@ adbreeze/
 │   ├── settings/          # user preference persistence (adb path / tunnel config, written 0600)
 │   ├── tlsutil/           # self-signed certificate generation / reuse (HTTPS)
 │   ├── tunnel/            # public access: managed cloudflared subprocess (CF-TUNNEL-DESIGN.md)
+│   ├── opencode/          # Agent detect/install, opencode config I/O, model list, runner
+│   ├── scheduler/         # scheduled tasks: 5-field cron parsing and scheduling
+│   ├── taskstore/         # tasks and run records (tasks.json / task-runs.jsonl)
 │   └── config/            # command-line configuration
 ├── web/                   # frontend source (React + Vite)
 │   └── dist/              # frontend build output (embedded into the binary, not distributed with the repo;

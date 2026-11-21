@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { clearReconnectTimer, useStore } from '../store'
-import { api, apiUrl, authHeaders, clearSession, isCrossOrigin, loadBackendConfig, login, normalizeBackendBase, probeBackend, backendBase, getTunnelStatus, getTunnelSettings, saveTunnelSettings, startTunnel, stopTunnel, getTunnelInstall, startTunnelInstall, getAdbInstall, startAdbInstall, getAdbCandidates, getTunnelCandidates, getServiceLogs, type AdbSettings, type AdbSettingsSaveResult, type AdbInstallStatus, type BinaryCandidate, type TunnelSettings, type TunnelSettingsSave, type TunnelStatus, type TunnelInstallStatus, type ServiceLogLine } from '../api'
+import { api, apiUrl, authHeaders, clearSession, isCrossOrigin, loadBackendConfig, login, normalizeBackendBase, probeBackend, backendBase, getTunnelStatus, getTunnelSettings, saveTunnelSettings, startTunnel, stopTunnel, getTunnelInstall, startTunnelInstall, getAdbInstall, startAdbInstall, getAdbCandidates, getTunnelCandidates, getServiceLogs, getAgentSettings, getAgentModels, putAgentModel, getAgentConfig, putAgentConfig, startAgentInstall, getAgentInstall, getMCPSettings, installMCP,
+  type AdbSettings, type AdbSettingsSaveResult, type AdbInstallStatus, type BinaryCandidate, type TunnelSettings, type TunnelSettingsSave, type TunnelStatus, type TunnelInstallStatus, type ServiceLogLine,
+  type AgentSettings, type OCInstallStatus, type MCPSettings } from '../api'
 import { Placeholder, TABS } from '../panels'
 import DeviceList from './DeviceList'
 import MirrorPanel from '../panels/MirrorPanel'
@@ -13,6 +15,8 @@ import AppsPanel from '../panels/AppsPanel'
 import ProcessPanel from '../panels/ProcessPanel'
 import PerfPanel from '../panels/PerfPanel'
 import LayoutPanel from '../panels/LayoutPanel'
+import TasksPanel from '../panels/TasksPanel'
+import ModelPicker from './ModelPicker'
 import QrCode from './QrCode'
 import { Icon } from './Icon'
 import { toggleLang, useT, type MsgKey } from '../i18n'
@@ -143,6 +147,7 @@ export default function Shell() {
 
       <div className="app-body">
         <aside className="sidebar">
+          <SideAutomation active={panel === 'tasks'} onOpen={() => setPanel('tasks')} />
           <h3 className="side-title">{t('topbar.devices')}</h3>
           <DeviceList />
         </aside>
@@ -158,6 +163,7 @@ export default function Shell() {
             : panel === 'term' ? <TermPanel />
             : panel === 'tools' ? <ToolsPanel />
             : panel === 'logcat' ? <LogcatPanel />
+            : panel === 'tasks' ? <TasksPanel />
             : panel === 'settings' ? <SettingsPanel />
             : <Placeholder title={t(TABS.find(tab => tab.id === panel)!.labelKey)}
                 phase={TABS.find(tab => tab.id === panel)!.phase || t('placeholder.laterPhase')} selected={selected} />}
@@ -168,6 +174,7 @@ export default function Shell() {
         <>
           <div className="drawer-mask" onClick={() => setDrawerOpen(false)} />
           <aside className="drawer">
+            <SideAutomation active={panel === 'tasks'} onOpen={() => { setPanel('tasks'); setDrawerOpen(false) }} />
             <h3 className="side-title">{t('topbar.devices')}</h3>
             <DeviceList />
           </aside>
@@ -187,6 +194,225 @@ export default function Shell() {
           </button>
         ))}
       </nav>
+    </div>
+  )
+}
+
+// 侧栏「自动化」入口：顶部标签栏只有图标，新用户容易找不到定时任务，
+// 这里给一个带文字的固定入口。
+function SideAutomation({ active, onOpen }: { active: boolean; onOpen: () => void }) {
+  const t = useT()
+  return (
+    <div className="side-section">
+      <h3 className="side-title">{t('side.automation')}</h3>
+      <button className={'side-link' + (active ? ' active' : '')} onClick={onOpen}>
+        <Icon name="tasks" />
+        <span>{t('tab.tasks')}</span>
+      </button>
+      <p className="side-hint">{t('side.tasksHint')}</p>
+    </div>
+  )
+}
+
+// Agent（opencode）设置卡片：检测 / 一键安装 / 模型切换（改 opencode 配置）。
+function AgentSettings() {
+  const t = useT()
+  const [info, setInfo] = useState<AgentSettings | null>(null)
+  const [inst, setInst] = useState<OCInstallStatus | null>(null)
+  const [model, setModel] = useState('')
+  const [models, setModels] = useState<string[]>([])
+  const [modelsLoading, setModelsLoading] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [err, setErr] = useState('')
+  const [loaded, setLoaded] = useState(false)
+  const [configOpen, setConfigOpen] = useState(false)
+  const [configText, setConfigText] = useState('')
+  const [configPath, setConfigPath] = useState('')
+  const instRef = useRef('')
+
+  const load = async () => {
+    try {
+      const r = await getAgentSettings()
+      setInfo(r); setModel(r.model)
+    } catch (e) { setErr((e as Error).message) }
+    finally { setLoaded(true) }
+  }
+  const loadModels = async () => {
+    setModelsLoading(true)
+    try { setModels((await getAgentModels()).models) }
+    catch { /* 模型列表失败不阻断其它操作 */ }
+    finally { setModelsLoading(false) }
+  }
+  const loadInstall = async () => {
+    try {
+      const st = await getAgentInstall()
+      setInst(st)
+      if (instRef.current === 'downloading' && st.state === 'done') {
+        setMsg(t('settings.agent.installDone'))
+        await load()
+        await loadModels()
+      }
+      if (st.state === 'failed') setErr(t('settings.agent.installFailed') + ': ' + st.error)
+      instRef.current = st.state
+    } catch { /* 静默 */ }
+  }
+  useEffect(() => { void load(); void loadInstall(); void loadModels() }, [])
+  const installing = inst?.state === 'downloading' || inst?.state === 'verifying'
+  useEffect(() => {
+    if (!installing) return
+    const timer = setInterval(() => void loadInstall(), 1000)
+    return () => clearInterval(timer)
+  }, [installing])
+
+  const install = async () => {
+    setBusy(true); setErr(''); setMsg('')
+    try { setInst(await startAgentInstall()) }
+    catch (e) { setErr((e as Error).message) }
+    finally { setBusy(false) }
+  }
+  const saveModel = async () => {
+    setBusy(true); setErr(''); setMsg('')
+    try {
+      const r = await putAgentModel(model.trim())
+      setMsg(t('settings.agent.modelSaved') + ': ' + r.model)
+      await load()
+    } catch (e) { setErr((e as Error).message) }
+    finally { setBusy(false) }
+  }
+  const openConfig = async () => {
+    setErr(''); setMsg('')
+    try {
+      const r = await getAgentConfig()
+      setConfigText(r.content); setConfigPath(r.path); setConfigOpen(true)
+    } catch (e) { setErr((e as Error).message) }
+  }
+  const saveConfig = async () => {
+    setBusy(true); setErr(''); setMsg('')
+    try {
+      const r = await putAgentConfig(configText)
+      setMsg(r.message || t('settings.agent.configSaved'))
+      setConfigOpen(false)
+      await load(); await loadModels()
+    } catch (e) { setErr((e as Error).message) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div className="settings-block">
+      <h3>{t('settings.agent')}</h3>
+      <p className="hint">{t('settings.agent.hint')}</p>
+      <dl className="settings-kv">
+        <dt>{t('settings.agent.status')}</dt>
+        <dd>{!loaded
+          ? <span className="hint">{t('common.loading')}</span>
+          : info?.detected
+            ? <span className="ok-text">{t('settings.agent.installed')}</span>
+            : <span className="error-text">{t('settings.agent.notInstalled')}</span>}</dd>
+        {info?.path && <><dt>{t('settings.agent.path')}</dt><dd className="mono">{info.path}</dd></>}
+        {info?.version && <><dt>{t('settings.agent.version')}</dt><dd className="mono">{info.version}</dd></>}
+        <dt>{t('settings.agent.configPath')}</dt><dd className="mono">{info?.configPath || (loaded ? '—' : '…')}</dd>
+      </dl>
+      <div className="adb-path-row">
+        <button className="btn ghost" disabled={busy || installing} onClick={() => void install()}>
+          {installing ? t('settings.agent.installing') : inst?.state === 'detected' ? t('settings.agent.detected') : t('settings.agent.install')}
+        </button>
+      </div>
+      {inst?.state === 'done' && <p className="ok-text">{t('settings.agent.installDone')} · {inst.version}</p>}
+
+      {/* 模型：可搜索下拉（按 provider 分组）+ 手输；另外提供编辑配置文件入口 */}
+      <div className="adb-path-row" style={{ marginTop: 12 }}>
+        <ModelPicker
+          value={model}
+          models={models}
+          placeholder={t('settings.agent.modelPlaceholder')}
+          onChange={v => { setModel(v); setErr(''); setMsg('') }}
+        />
+        <button className="btn ghost" disabled={busy || !model.trim()} onClick={() => void saveModel()}>{t('settings.agent.modelSave')}</button>
+        <button className="btn ghost" disabled={modelsLoading} onClick={() => void loadModels()} title={t('settings.agent.modelRefresh')}>
+          {modelsLoading ? t('settings.agent.modelLoading') : '↻'}
+        </button>
+      </div>
+      <p className="hint">
+        {modelsLoading ? t('settings.agent.modelLoading')
+          : models.length ? t('settings.agent.modelHint') + ` (${models.length})`
+          : t('settings.agent.modelEmpty')}
+      </p>
+      <div className="adb-path-row">
+        <button className="btn ghost" onClick={() => void openConfig()}>{t('settings.agent.editConfig')}</button>
+        <button className="btn ghost" onClick={() => useStore.getState().setPanel('tasks')}>{t('settings.agent.gotoTasks')}</button>
+      </div>
+      <p className="hint">{t('settings.agent.gotoTasksHint')}</p>
+
+      {msg && <p className="ok-text">{msg}</p>}
+      {err && <p className="error-text">{err}</p>}
+
+      {/* 配置文件编辑弹窗 */}
+      {configOpen && (
+        <div className="apps-modal-mask">
+          <div className="apps-modal config-modal" onClick={e => e.stopPropagation()}>
+            <h3>{t('settings.agent.editConfigTitle')}</h3>
+            <p className="hint mono">{configPath}</p>
+            <p className="hint">{t('settings.agent.editConfigHint')}</p>
+            <textarea className="config-editor mono" value={configText} spellCheck={false}
+              onChange={e => setConfigText(e.target.value)} />
+            {err && <p className="error-text">{err}</p>}
+            <div className="apps-modal-foot">
+              <button className="btn" disabled={busy} onClick={() => void saveConfig()}>{t('settings.agent.configSave')}</button>
+              <button className="btn ghost" onClick={() => setConfigOpen(false)}>{t('common.close')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// MCP（mobile-mcp）设置卡片：检测 Node.js / npx / 注册 mobile-mcp 到 opencode。
+function MCPSettings() {
+  const t = useT()
+  const [info, setInfo] = useState<MCPSettings | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [err, setErr] = useState('')
+
+  const load = async () => {
+    try { setInfo(await getMCPSettings()) }
+    catch (e) { setErr((e as Error).message) }
+  }
+  useEffect(() => { void load() }, [])
+
+  const install = async () => {
+    setBusy(true); setErr(''); setMsg('')
+    try {
+      const r = await installMCP()
+      setMsg(r.message || t('settings.mcp.installDone'))
+      await load()
+    } catch (e) { setErr(t('settings.mcp.installFailed') + ': ' + (e as Error).message) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div className="settings-block">
+      <h3>{t('settings.mcp')}</h3>
+      <p className="hint">{t('settings.mcp.hint')}</p>
+      <dl className="settings-kv">
+        <dt>{t('settings.agent.status')}</dt>
+        <dd>{info?.installed
+          ? <span className="ok-text">{t('settings.mcp.installed')}</span>
+          : <span className="error-text">{t('settings.mcp.notInstalled')}</span>}</dd>
+        <dt>{t('settings.mcp.node')}</dt>
+        <dd className="mono">{info?.nodeVersion || '—'}{info?.npxPath ? ` · ${info.npxPath}` : ''}</dd>
+      </dl>
+      {info && !info.nodeOk && <p className="error-text">{t('settings.mcp.npxMissing')}</p>}
+      <div className="adb-path-row">
+        <button className="btn ghost" disabled={busy} onClick={() => void install()}>
+          {busy ? t('settings.mcp.installing') : t('settings.mcp.install')}
+        </button>
+      </div>
+      {info?.message && <p className="hint">{info.message}</p>}
+      {msg && <p className="ok-text">{msg}</p>}
+      {err && <p className="error-text">{err}</p>}
     </div>
   )
 }
@@ -264,6 +490,10 @@ function SettingsPanel() {
       <h2>{t('settings.title')}</h2>
 
       <BackendSettings />
+
+      <AgentSettings />
+
+      <MCPSettings />
 
       <div className="settings-block">
         <h3>{t('settings.adbPath')}</h3>

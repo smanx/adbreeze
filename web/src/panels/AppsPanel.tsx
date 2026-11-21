@@ -235,7 +235,7 @@ export default function AppsPanel() {
 
       {/* 详情弹窗（对齐 AYA PackageInfoModal 字段） */}
       {info && (
-        <div className="apps-modal-mask" onClick={() => setInfo(null)}>
+        <div className="apps-modal-mask">
           <div className="apps-modal" onClick={e => e.stopPropagation()}>
             <h3>{info.label || info.package}</h3>
             <dl>
