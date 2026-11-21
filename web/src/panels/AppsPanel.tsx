@@ -140,20 +140,20 @@ export default function AppsPanel() {
     } catch (e) { setHint((e as Error).message) } finally { setBusyPkg('') }
   }
 
-  const exportApk = async (app: AppEntry) => {
+  const exportApk = async (pkg: string, versionName?: string) => {
     setMenu(null)
-    setBusyPkg(app.package); setHint(t('apps.exporting'))
+    setBusyPkg(pkg); setHint(t('apps.exporting'))
     try {
-      const blob = await fetch(apiUrl(`/api/devices/${encodeURIComponent(selected!)}/apps/apk?package=${encodeURIComponent(app.package)}`), { headers: authHeaders() })
+      const blob = await fetch(apiUrl(`/api/devices/${encodeURIComponent(selected!)}/apps/apk?package=${encodeURIComponent(pkg)}`), { headers: authHeaders() })
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob() })
       const a = document.createElement('a')
       a.href = URL.createObjectURL(blob)
       // AYA 同款命名：包名-版本.apk
-      a.download = app.versionName ? `${app.package}-${app.versionName}.apk` : `${app.package}.apk`
+      a.download = versionName ? `${pkg}-${versionName}.apk` : `${pkg}.apk`
       a.click()
       URL.revokeObjectURL(a.href)
-      setHint(t('apps.exportSaved', { pkg: app.package }))
-    } catch (e) { setHint(t('apps.exportFailed', { pkg: app.package, msg: (e as Error).message })) } finally { setBusyPkg('') }
+      setHint(t('apps.exportSaved', { pkg }))
+    } catch (e) { setHint(t('apps.exportFailed', { pkg, msg: (e as Error).message })) } finally { setBusyPkg('') }
   }
 
   const confirmPrefix = (a: AppEntry) => a.system ? t('apps.sysPrefix') : ''
@@ -161,7 +161,7 @@ export default function AppsPanel() {
 
   const menuItems = (a: AppEntry) => ([
     { label: t('apps.menuInfo'), act: () => openInfo(a.package) },
-    { label: t('apps.menuExport'), act: () => exportApk(a) },
+    { label: t('apps.menuExport'), act: () => exportApk(a.package, a.versionName) },
     { sep: true },
     { label: t('apps.menuOpen'), act: () => doAction(a.package, 'open') },
     { label: t('apps.menuStop'), act: () => doAction(a.package, 'stop', t('apps.confirmStop', { prefix: confirmPrefix(a), name: showName(a) })) },
@@ -251,6 +251,7 @@ export default function AppsPanel() {
               <dt>{t('apps.dApkPath')}</dt><dd className="mono">{info.apkPath || '—'}</dd>
             </dl>
             <div className="apps-modal-foot">
+              <button className="btn" disabled={busyPkg === info.package} onClick={() => exportApk(info.package, info.versionName)}>{t('apps.menuExport')}</button>
               <button className="btn" onClick={() => { doAction(info.package, 'open'); setInfo(null) }}>{t('apps.dLaunch')}</button>
               <button className="btn ghost" onClick={() => setInfo(null)}>{t('common.close')}</button>
             </div>
